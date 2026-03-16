@@ -1,0 +1,14 @@
+# Datasets y modelos
+data/
+*.pkl
+*.h5
+*.parquet
+
+# Entornos virtuales
+venv/
+.env
+proyecto-jupiter/
+
+# Credenciales y secretos
+.secrets
+credentials.json
