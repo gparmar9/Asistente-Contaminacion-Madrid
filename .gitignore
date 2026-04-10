@@ -7,7 +7,6 @@ data/
 # Entornos virtuales
 venv/
 .env
-proyecto-jupiter/
 
 # Credenciales y secretos
 .secrets
@@ -18,3 +17,7 @@ powerbi/
 
 # BBDD
 db/
+
+# Caches
+__pycache__/
+*.cache
