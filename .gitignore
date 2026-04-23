@@ -21,3 +21,4 @@ db/
 # Caches
 __pycache__/
 *.cache
+.ipynb_checkpoints/
