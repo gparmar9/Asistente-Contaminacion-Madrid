@@ -1,10 +1,10 @@
-# 🌍 TFM – Sistema Inteligente de Monitorización de Calidad del Aire (Madrid)
+# TFM – Sistema Inteligente de Monitorización de Calidad del Aire (Madrid)
 
 Este proyecto desarrolla un sistema basado en Machine Learning para analizar datos de calidad del aire en Madrid, detectar anomalías automáticamente y proporcionar información accesible mediante informes y un asistente conversacional.
 
 ---
 
-## 📌 Descripción
+## Descripción
 
 La ciudad de Madrid dispone de una red de estaciones que miden la calidad del aire de forma continua. Sin embargo, estos datos suelen consumirse en bruto (CSV), lo que dificulta:
 
@@ -14,14 +14,14 @@ La ciudad de Madrid dispone de una red de estaciones que miden la calidad del ai
 
 Este proyecto propone una solución integral con dos componentes principales:
 
-### 🧠 Parte 1 — Detección de anomalías
+### Parte 1 — Detección de anomalías
 Modelos de ML aprenden el comportamiento normal de cada estación y contaminante para detectar:
 
 - Fallos de sensores (datos congelados, incoherentes, etc.)
 - Valores anómalos respecto al patrón histórico
 - Episodios ambientales inusuales
 
-### 💬 Parte 2 — Informes y asistente conversacional
+### Parte 2 — Informes y asistente conversacional
 - Generación automática de informes diarios
 - Chatbot (ej. WhatsApp) para consultas en lenguaje natural:
   - “¿Dónde está el aire más limpio hoy?”
@@ -29,22 +29,22 @@ Modelos de ML aprenden el comportamiento normal de cada estación y contaminante
 
 ---
 
-## 🏗️ Arquitectura del sistema
+## Arquitectura del sistema
 
 El sistema está diseñado en capas desacopladas:
 ![Arquitectura del sistema](docs/images/esquema_flujo_consulta.png)
 
 ---
 
-## 📊 Datos
+## Datos
 
-### 📁 Fuentes utilizadas
+### Fuentes utilizadas
 
 - Datos históricos de calidad del aire (Madrid)
 - Datos en tiempo real (actualización cada ~20 minutos)
 - Información de estaciones de control
 
-### 📐 Estructura de los datos
+### Estructura de los datos
 
 Cada registro contiene:
 
@@ -56,30 +56,30 @@ Cada registro contiene:
 
 ---
 
-## 🧪 Modelado de anomalías
+## Modelado de anomalías
 
 Se plantean dos tipos de anomalías:
 
-### 1. 🔧 Anomalías operativas (sensor)
+### 1. Anomalías operativas (sensor)
 - valores constantes prolongados
 - datos faltantes
 - incoherencias bruscas
 
-### 2. 🌫️ Anomalías ambientales
+### 2. Anomalías ambientales
 - niveles inusuales respecto al histórico
 - desviaciones respecto al comportamiento esperado
 
-### 📈 Enfoques utilizados
+### Enfoques utilizados
 
 Por definir
 
 ---
 
-## 🗄️ Modelo de datos
+## Modelo de datos
 
 ### Tablas principales
 
-#### `CalidadAireHoras`
+#### CalidadAireHoras
 Datos crudos normalizados (formato largo)
 
 | Campo          | Tipo        | Descripción                                      |
@@ -101,7 +101,7 @@ Por definir las demás, depende de la estructura de la BBDD
 
 ---
 
-## 🤖 Chatbot y LLM
+## Chatbot y LLM
 
 El sistema integra un modelo de lenguaje para consultas en lenguaje natural:
 
@@ -125,7 +125,7 @@ El sistema integra un modelo de lenguaje para consultas en lenguaje natural:
 
 ---
 
-## ⚙️ Tecnologías
+## Tecnologías
 
 - Python
 - Pandas / NumPy
@@ -138,7 +138,7 @@ El sistema integra un modelo de lenguaje para consultas en lenguaje natural:
 
 ---
 
-## 🔄 Pipeline del sistema
+## Pipeline del sistema
 
 1. Ingesta de datos (históricos + tiempo real)
 2. Limpieza y validación
