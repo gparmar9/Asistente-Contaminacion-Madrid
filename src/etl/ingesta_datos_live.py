@@ -15,7 +15,7 @@ archivo_estaciones = '././data/raw/estaciones-de-control.csv'
 
 DB_URL = os.environ["DATABASE_URL"]
 
-def insertar_sin_duplicados(df, engine, tabla="mediciones_live"):
+def insertar_sin_duplicados(df, engine, tabla="calidad_aire_horas_live"):
     # Crear tabla si no existe, con constraint única sobre estacion+magnitud+fecha
     with engine.connect() as conn:
         conn.execute(text(f"""
