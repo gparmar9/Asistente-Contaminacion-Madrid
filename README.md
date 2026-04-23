@@ -79,7 +79,7 @@ Por definir
 
 ### Tablas principales
 
-#### `CalidadAireHoras`
+#### CalidadAireHoras
 Datos crudos normalizados (formato largo)
 
 | Campo          | Tipo        | Descripción                                      |
