@@ -1,0 +1,66 @@
+## Condiciones actuales
+- ¿En qué zona de Madrid está el aire más seguro ahora mismo para una persona con asma?
+- ¿Qué estación de Madrid tiene la peor calidad del aire ahora mismo?
+- ¿Está Madrid en aviso / preaviso / alerta por contaminación en este momento?
+- ¿Es seguro que un niño con alergias pase dos horas al aire libre esta tarde?
+- ¿Qué distrito tiene ahora mismo el aire más limpio para pasear con una persona mayor?
+- ¿Es seguro salir a correr al Retiro en las próximas 2 horas?
+- ¿Qué estaciones tienen ahora mismo la peor contaminación relacionada con el tráfico?
+- ¿Dónde se respira mejor en Madrid ahora mismo?
+- ¿Qué zona debería evitar ahora mismo si tengo bronquitis?
+- ¿El nivel de ozono es peligroso para trabajadores al aire libre esta tarde?
+- ¿Qué barrio tiene ahora mismo la mejor puntuación combinada de calidad del aire?
+- ¿Conviene ventilar mi piso ahora o el aire exterior está peor que el interior?
+
+## Planificación para el mismo día y el día siguiente
+- ¿Habrá pico de ozono este fin de semana?
+- Probabilidad de que se declare un episodio de contaminación en las próximas 48 h.
+- ¿Mejorará la contaminación relacionada con el tráfico después de la hora punta esta noche?
+- Mejor ventana de 3 horas para salir en bici mañana en la zona de la M-30.
+- ¿Mañana será un mal día para las personas con rinitis alérgica?
+- ¿A qué hora de mañana será más seguro que los niños jueguen al aire libre?
+- ¿Debería planear una actividad en interior mañana por culpa de la contaminación?
+- ¿Qué partes de Madrid serán probablemente las peores esta semana para personas que trabajan al aire libre?
+
+## Planificación estacional y de eventos
+- ¿Qué zona de Madrid suele tener las mejores condiciones para una boda al aire libre en junio?
+- ¿Qué distritos suelen tener las tardes de verano con el aire más limpio?
+- En julio, ¿dónde suele ser menos problemático el ozono?
+- Para una jornada deportiva escolar en mayo, ¿qué zonas suelen estar menos expuestas a la contaminación?
+- ¿Qué zonas resisten mejor los fines de semana festivos con mucho tráfico?
+- Si quiero planificar fotos al aire libre al atardecer en junio, ¿qué distritos suelen tener el aire más limpio a esa hora?
+
+# Análisis histórico
+- ¿Qué distrito tuvo la mejor calidad del aire el mes pasado?
+- ¿Ha empeorado el ozono en Madrid durante los últimos cinco veranos?
+- ¿Qué estaciones muestran el patrón más fuerte de NO2 en hora punta?
+- ¿Qué zonas tienen la calidad del aire más estable a lo largo del año?
+- ¿Qué barrios tienen picos cortos de contaminación frecuentes aunque sus medias anuales parezcan aceptables?
+- ¿Cuántos días del año pasado habrían sido poco adecuados para hacer ejercicio al aire libre para una persona con asma?
+- ¿Qué distrito tuvo menos tardes con alta contaminación la primavera pasada?
+- ¿Qué estaciones son las más afectadas por episodios de polvo?
+- ¿Cuánto cambian los patrones de contaminación entre días laborables y fines de semana según el distrito?
+- ¿Qué zonas mejoraron más tras restricciones de tráfico o cambios en la movilidad?
+- ¿Qué barrios obtienen buenos resultados de forma constante en todas las estaciones y no solo en la media anual?
+
+
+## Decisiones residenciales y de estilo de vida
+- ¿Qué zona de Madrid me recomendarías para vivir si tengo alergias?
+- ¿Qué distrito es mejor para una familia con un niño que tiene asma?
+- Si quiero minimizar mi exposición a largo plazo al NO2, ¿dónde debería buscar vivienda?
+- ¿Qué zonas parecen buenas en la media anual pero siguen teniendo muchos picos de corta duración?
+- ¿Qué zonas debería evitar una persona con EPOC al elegir dónde vivir?
+- Si trabajo al aire libre, ¿en qué parte de Madrid reduciría mi exposición media?
+- ¿Qué zonas son más vulnerables a la contaminación del tráfico?
+
+
+## Preguntas específicas por contaminante
+- ¿Qué significa una lectura alta de NO para una persona que está junto al tráfico?
+- ¿Qué síntomas puede empeorar el ozono?
+- ¿Por qué el ozono puede ser peor por la tarde aunque haya menos tráfico?
+- ¿En qué se diferencia el PM10 del PM2.5 en términos de riesgo para la salud?
+- ¿Qué contaminante es el más preocupante para el riesgo cardiovascular a largo plazo?
+- ¿Qué contaminante importa más en un día con polvo tras una intrusión sahariana?
+- ¿Qué contaminante es más relevante en corredores de tráfico?
+- ¿Qué contaminante debería vigilar primero si tengo asma inducida por el ejercicio?
+
