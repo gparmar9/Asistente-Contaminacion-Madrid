@@ -3,6 +3,9 @@ data/*
 !data/raw/
 data/raw/*
 !data/raw/estaciones-de-control.csv
+!data/processed/
+data/processed/*
+!data/processed/calidad_aire_live.csv
 *.pkl
 *.h5
 *.parquet
