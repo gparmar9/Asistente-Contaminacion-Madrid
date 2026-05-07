@@ -1,0 +1,43 @@
+asistente-contaminacion-madrid/
+├── ApiUsuario/
+│   ├── .gitignore
+│   ├── .env.example
+│   ├── README.md
+│   ├── requirements.txt
+│   ├── requirements-dev.txt
+│   ├── src/
+│   │   └── api_usuario/
+│   │       ├── main.py
+│   │       ├── config/
+│   │       │   └── settings.py
+│   │       ├── api/
+│   │       │   ├── dependencies.py
+│   │       │   └── routers/
+│   │       │       ├── health.py
+│   │       │       ├── usuarios.py
+│   │       │       └── conversaciones.py
+│   │       ├── entities/
+│   │       │   ├── usuario.py
+│   │       │   ├── mensaje.py
+│   │       │   └── respuesta.py
+│   │       ├── business/
+│   │       │   ├── usuario_service.py
+│   │       │   ├── conversacion_service.py
+│   │       │   └── validations.py
+│   │       ├── data_access/
+│   │       │   ├── sql_connection.py
+│   │       │   ├── stored_procedures.py
+│   │       │   ├── usuario_repository.py
+│   │       │   └── conversacion_repository.py
+│   │       ├── integrations/
+│   │       │   ├── llm_client.py
+│   │       │   └── ml_client.py
+│   │       └── shared/
+│   │           ├── logging.py
+│   │           └── exceptions.py
+│   └── tests/
+│       ├── unit/
+│       └── integration/
+├── ModelosML/
+├── LLMOrchestrator/
+└── requirements-dev.txt
