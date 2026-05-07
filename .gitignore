@@ -28,3 +28,6 @@ db/
 __pycache__/
 *.cache
 .ipynb_checkpoints/
+
+#APiusuario
+/ApiUsuario/.venv/

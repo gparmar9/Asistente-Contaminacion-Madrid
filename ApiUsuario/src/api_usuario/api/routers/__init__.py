@@ -1,0 +1,2 @@
+"""Route definitions for ApiUsuario."""
+
