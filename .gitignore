@@ -1,5 +1,8 @@
 # Datasets y modelos
-data/
+data/*
+!data/raw/
+data/raw/*
+!data/raw/estaciones-de-control.csv
 *.pkl
 *.h5
 *.parquet
