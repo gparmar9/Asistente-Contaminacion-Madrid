@@ -1,0 +1,37 @@
+name: Ingesta diaria programada calidad aire Madrid
+
+on:
+  schedule:
+    - cron: '45 21 * * *' 
+  workflow_dispatch:
+
+jobs:
+  ingesta:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repositorio
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Configurar Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+
+      - name: Instalar dependencias
+        run: pip install pandas requests python-dotenv
+
+      - name: Ejecutar script de ingesta
+        working-directory: src/etl
+        run: python ingesta_datos_live_csv.py
+
+      - name: Guardar CSV actualizado en el repositorio
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add data/processed/calidad_aire_live.csv
+          git diff --cached --quiet || git commit -m "data: actualización automática calidad aire $(date +'%Y-%m-%d')"
+          git push
