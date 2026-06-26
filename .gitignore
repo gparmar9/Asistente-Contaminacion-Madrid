@@ -31,3 +31,6 @@ __pycache__/
 
 #APiusuario
 /ApiUsuario/.venv/
+
+#documentación
+docs/hoja_de_ruta.html
