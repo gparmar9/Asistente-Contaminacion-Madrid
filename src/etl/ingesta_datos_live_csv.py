@@ -1,4 +1,6 @@
 import os
+import sys
+import time
 import pandas as pd
 import requests
 from dotenv import load_dotenv
@@ -15,11 +17,27 @@ archivo_estaciones = os.path.join(PROJECT_ROOT, 'data', 'raw', 'estaciones-de-co
 output_dir = os.path.join(PROJECT_ROOT, 'data', 'processed')
 output_file = os.path.join(output_dir, 'calidad_aire_live.csv')
 
-response = requests.get(url)
-response.raise_for_status()
-print('Petición realizada con éxito. Código de estado:', response.status_code)
+MAX_INTENTOS = 3
+data = None
 
-data = response.json()
+for intento in range(1, MAX_INTENTOS + 1):
+    response = requests.get(url)
+    response.raise_for_status()
+    print('Petición realizada con éxito. Código de estado:', response.status_code)
+
+    data = response.json()
+    if 'records' in data:
+        break
+
+    print(f'Intento {intento}/{MAX_INTENTOS}: respuesta sin clave "records" (claves recibidas: {list(data.keys())})')
+    data = None
+    if intento < MAX_INTENTOS:
+        time.sleep(10)
+
+if data is None:
+    print('La API no devolvió datos válidos tras varios intentos. Se omite esta ejecución.')
+    sys.exit(0)
+
 df = pd.DataFrame(data['records'])
 
 df_limpio = limpiar_datos_live(df, archivo_estaciones)
