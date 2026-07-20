@@ -35,3 +35,5 @@ jobs:
           git add data/processed/calidad_aire_live.csv
           git diff --cached --quiet || git commit -m "data: actualización automática calidad aire $(date +'%Y-%m-%d')"
           git push
+
+
