@@ -1,0 +1,19 @@
+name: Proteger main
+
+# Se ejecuta en cada Pull Request cuyo destino sea main.
+# Falla (bloquea el merge) si el PR no viene de la rama development.
+on:
+  pull_request:
+    branches: [main]
+
+jobs:
+  solo-desde-development:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Verificar rama de origen
+        run: |
+          if [ "${{ github.head_ref }}" != "development" ]; then
+            echo "::error::Los PR a 'main' solo pueden venir de 'development'. Este viene de '${{ github.head_ref }}'."
+            exit 1
+          fi
+          echo "OK: el PR viene de development."
