@@ -5,8 +5,42 @@ on:
   pull_request:
 
 jobs:
-  tests:
+  # Tests unitarios: lógica pura, sin base de datos. Rápidos y deterministas.
+  unit:
     runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repositorio
+        uses: actions/checkout@v4
+
+      - name: Configurar Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+
+      - name: Instalar dependencias
+        run: pip install pandas numpy scikit-learn sqlalchemy requests python-dotenv pytest
+
+      - name: Ejecutar tests unitarios
+        run: pytest tests/ -v --ignore=tests/test_integracion_db.py
+
+  # Tests de integración: contra un PostgreSQL efímero levantado como servicio.
+  integracion:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
 
     steps:
       - name: Checkout repositorio
@@ -19,7 +53,10 @@ jobs:
           cache: 'pip'
 
       - name: Instalar dependencias
-        run: pip install pandas requests python-dotenv pytest
+        run: pip install pandas numpy scikit-learn sqlalchemy psycopg2-binary requests python-dotenv pytest
 
-      - name: Ejecutar tests
-        run: pytest tests/ -v
+      - name: Ejecutar tests de integración
+        env:
+          DATABASE_URL: postgresql://postgres:postgres@localhost:5432/postgres
+          RUN_DB_TESTS: "1"
+        run: pytest tests/test_integracion_db.py -v
