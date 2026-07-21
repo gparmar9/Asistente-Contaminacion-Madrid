@@ -55,8 +55,7 @@ Todo lo necesario para arrancar lo que hay hecho (Fase 1) en tu máquina.
 - **Docker Desktop** (para la base de datos)
 - **git**
 - El **dataset histórico** `data/raw/datos_completos_2018_2026.csv` — ⚠️ **no está en el repo**
-  (es grande y está en `.gitignore`). Pídeselo a un compañero o descárgalo del portal de datos
-  abiertos de Madrid. Colócalo en `data/raw/`.
+  (es grande y está en `.gitignore`). Hay que descargarlo del Drive que tenemos en común, cocnretamente en la carpeta Data. Colócalo en `data/raw/`.
 
 ### 1. Clonar y preparar el entorno
 
