@@ -113,7 +113,7 @@ Luego carga la tabla en Postgres:
 python src/etl/cargar_resumen_ml.py
 ```
 
-> Alternativa rápida: si un compañero te pasa el `resumen_datos_ml.parquet` (o un `pg_dump`), puedes
+> Alternativa rápida: si descargas el `resumen_datos_ml.parquet` de la carpeta Data/processed del Drive que tenemos en común, puedes
 > saltarte los notebooks e ir directo al `cargar_resumen_ml.py`.
 
 ### 5. Ejecutar el pipeline de tiempo real
