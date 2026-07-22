@@ -54,11 +54,16 @@ def cargar(ruta_parquet: Path = RUTA_PARQUET, tabla: str = TABLA) -> int:
     finally:
         raw.close()
 
-    # 3) Índice para las consultas típicas del chatbot
+    # 3) Índices: uno para consultas del chatbot y uno ÚNICO para permitir el
+    #    upsert de la inferencia en tiempo real (ON CONFLICT en pipeline_tiempo_real.py)
     with engine.begin() as conn:
         conn.execute(text(
             f"CREATE INDEX IF NOT EXISTS idx_{tabla}_est_mag_fecha "
             f"ON {tabla} (estacion, magnitud, fecha)"
+        ))
+        conn.execute(text(
+            f"CREATE UNIQUE INDEX IF NOT EXISTS uq_{tabla} "
+            f"ON {tabla} (estacion, magnitud, fecha, bloque)"
         ))
 
     return len(df)

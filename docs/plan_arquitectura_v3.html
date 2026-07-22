@@ -1,0 +1,457 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Plan de Arquitectura v3 — Asistente de Calidad del Aire de Madrid</title>
+    <style>
+        :root {
+            --primary: #1a5276; --primary-light: #2980b9; --accent: #27ae60;
+            --accent-warm: #e67e22; --danger: #e74c3c; --bg: #f8f9fa;
+            --card-bg: #ffffff; --text: #2c3e50; --text-light: #7f8c8d;
+            --border: #e0e0e0; --shadow: 0 2px 12px rgba(0,0,0,0.08);
+        }
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+            background: var(--bg); color: var(--text); line-height: 1.6; }
+        .hero { background: linear-gradient(135deg, var(--primary) 0%, var(--primary-light) 100%);
+            color: white; padding: 3rem 2rem; text-align: center; }
+        .hero h1 { font-size: 2.2rem; font-weight: 700; margin-bottom: 0.5rem; }
+        .hero .version { font-size: 0.9rem; opacity: 0.7; margin-bottom: 0.5rem; }
+        .hero p { font-size: 1.1rem; opacity: 0.9; max-width: 780px; margin: 0 auto; }
+        .container { max-width: 1100px; margin: 0 auto; padding: 2rem 1.5rem; }
+        .section { background: var(--card-bg); border-radius: 12px; box-shadow: var(--shadow);
+            padding: 2rem; margin-bottom: 2rem; }
+        .section h2 { font-size: 1.5rem; color: var(--primary); margin-bottom: 1rem;
+            padding-bottom: 0.5rem; border-bottom: 3px solid var(--primary-light); }
+        .section h3 { font-size: 1.15rem; color: var(--primary-light); margin: 1.2rem 0 0.6rem; }
+        .badge { display: inline-block; padding: 0.2rem 0.7rem; border-radius: 20px;
+            font-size: 0.8rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px; }
+        .badge-done { background: #d5f5e3; color: #1e8449; }
+        .badge-progress { background: #d6eaf8; color: #2471a3; }
+        .badge-pending { background: #fdebd0; color: #ca6f1e; }
+        .badge-todo { background: #fadbd8; color: #c0392b; }
+        .badge-new { background: #e8daef; color: #7d3c98; }
+        .architecture-diagram { background: #1e2a3a; color: #a8d8ea; border-radius: 10px;
+            padding: 1.5rem 2rem; font-family: 'Cascadia Code', 'Consolas', monospace;
+            font-size: 0.85rem; line-height: 2; overflow-x: auto; margin: 1rem 0; }
+        .architecture-diagram .db { color: #f8c471; }
+        .architecture-diagram .ml { color: #bb8fce; }
+        .architecture-diagram .llm { color: #82e0aa; font-weight: bold; }
+        .architecture-diagram .vdb { color: #85c1e9; font-weight: bold; }
+        .architecture-diagram .ui { color: #f1948a; }
+        .architecture-diagram .arrow { color: #7f8c8d; }
+        table { width: 100%; border-collapse: collapse; margin: 1rem 0; font-size: 0.95rem; }
+        thead th { background: var(--primary); color: white; padding: 0.75rem 1rem;
+            text-align: left; font-weight: 600; }
+        thead th:first-child { border-radius: 8px 0 0 0; }
+        thead th:last-child { border-radius: 0 8px 0 0; }
+        tbody td { padding: 0.7rem 1rem; border-bottom: 1px solid var(--border); }
+        tbody tr:hover { background: #f0f7ff; }
+        .verdict { font-weight: 700; color: var(--accent); }
+        .strategy-list { list-style: none; counter-reset: step; }
+        .strategy-list li { counter-increment: step; padding: 0.8rem 1rem 0.8rem 3.5rem;
+            position: relative; margin-bottom: 0.5rem; background: #f8f9fa; border-radius: 8px;
+            border-left: 4px solid var(--primary-light); }
+        .strategy-list li::before { content: counter(step); position: absolute; left: 1rem; top: 0.8rem;
+            width: 1.8rem; height: 1.8rem; background: var(--primary-light); color: white;
+            border-radius: 50%; display: flex; align-items: center; justify-content: center;
+            font-weight: 700; font-size: 0.85rem; }
+        .strategy-list li strong { color: var(--primary); }
+        .callout { background: linear-gradient(135deg, #eafaf1 0%, #d5f5e3 100%);
+            border-left: 4px solid var(--accent); padding: 1rem 1.5rem; border-radius: 0 10px 10px 0;
+            margin: 1rem 0; color: #1e8449; }
+        .callout-warn { background: linear-gradient(135deg, #fef9e7 0%, #fdebd0 100%);
+            border-left: 4px solid var(--accent-warm); padding: 1rem 1.5rem;
+            border-radius: 0 10px 10px 0; margin: 1rem 0; color: #935116; }
+        .callout-todo { background: linear-gradient(135deg, #fdedec 0%, #fadbd8 100%);
+            border-left: 4px solid var(--danger); padding: 1rem 1.5rem; border-radius: 0 10px 10px 0;
+            margin: 1rem 0; color: #922b21; }
+        .info-box { background: #eaf2f8; border: 1px solid #aed6f1; border-radius: 10px;
+            padding: 1rem 1.5rem; margin: 1rem 0; font-size: 0.95rem; }
+        .info-box strong { color: var(--primary); }
+        .tech-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+            gap: 1rem; margin: 1rem 0; }
+        .tech-card { background: #f8f9fa; border-radius: 10px; padding: 1rem 1.2rem;
+            border: 1px solid var(--border); }
+        .tech-card .label { font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.5px;
+            color: var(--text-light); margin-bottom: 0.3rem; }
+        .tech-card .value { font-weight: 600; color: var(--primary); font-size: 1rem; }
+        .phase { border-left: 4px solid var(--primary-light); padding-left: 1.5rem;
+            margin: 1.5rem 0; position: relative; }
+        .phase::before { content: ''; position: absolute; left: -9px; top: 0; width: 14px; height: 14px;
+            background: var(--primary-light); border-radius: 50%; border: 3px solid white;
+            box-shadow: 0 0 0 2px var(--primary-light); }
+        .phase.done::before { background: var(--accent); box-shadow: 0 0 0 2px var(--accent); }
+        .phase h3 { margin-top: 0; }
+        .phase ol { padding-left: 1.2rem; } .phase li { margin-bottom: 0.4rem; }
+        .decision { display: flex; gap: 1rem; padding: 0.8rem 0; border-bottom: 1px solid var(--border); }
+        .decision:last-child { border-bottom: none; }
+        .decision .q { font-weight: 600; color: var(--primary); min-width: 200px; }
+        .decision .a { flex: 1; }
+        .schema { background: #1e2a3a; color: #a8d8ea; border-radius: 10px; padding: 1.5rem;
+            font-family: 'Cascadia Code', 'Consolas', monospace; font-size: 0.82rem; line-height: 1.6;
+            overflow-x: auto; margin: 1rem 0; }
+        .schema .table-name { color: #82e0aa; font-weight: bold; }
+        .schema .col { color: #f8c471; } .schema .type { color: #85c1e9; }
+        .schema .comment { color: #7f8c8d; font-style: italic; }
+        code { background: #eef2f7; padding: 0.15rem 0.4rem; border-radius: 4px;
+            font-size: 0.9em; color: #c0392b; }
+        .check-list { list-style: none; padding: 0; }
+        .check-list li { padding: 0.5rem 0 0.5rem 2rem; position: relative; }
+        .check-list li::before { content: '\2713'; position: absolute; left: 0.3rem;
+            color: var(--accent); font-weight: 700; font-size: 1.1rem; }
+        .todo-list { list-style: none; padding: 0; }
+        .todo-list li { padding: 0.5rem 0 0.5rem 2rem; position: relative; }
+        .todo-list li::before { content: '\25A1'; position: absolute; left: 0.3rem;
+            color: var(--danger); font-weight: 700; font-size: 1.1rem; }
+        .embed-list { list-style: none; padding: 0; }
+        .embed-list li { padding: 0.6rem 1rem 0.6rem 2.5rem; position: relative; margin-bottom: 0.3rem; }
+        .embed-list li::before { content: ''; position: absolute; left: 1rem; top: 1rem;
+            width: 8px; height: 8px; background: var(--accent); border-radius: 50%; }
+        .flow { display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; margin: 1rem 0; }
+        .flow-step { background: var(--primary); color: white; padding: 0.5rem 1rem;
+            border-radius: 8px; font-size: 0.9rem; font-weight: 500; }
+        .flow-step.ml { background: #f39c12; } .flow-step.db { background: #8e44ad; }
+        .flow-step.api { background: #16a085; }
+        .flow-arrow { color: var(--primary-light); font-size: 1.4rem; font-weight: bold; }
+    </style>
+</head>
+<body>
+
+    <div class="hero">
+        <div class="version">v3 &mdash; Fase 1 implementada (PostgreSQL + detector en marcha en local)</div>
+        <h1>Asistente de Calidad del Aire de Madrid</h1>
+        <p>TFM &mdash; Detección de anomalías con ML, chatbot con LLM local + RAG sobre documentos de salud,
+        informes automáticos. Datos 100% privados. Despliegue final en Azure/AWS.</p>
+    </div>
+
+    <div class="container">
+
+        <!-- Estado del proyecto -->
+        <div class="section">
+            <h2>Estado del proyecto</h2>
+            <p>Resumen de qué hay hecho a día de hoy. La <strong>Fase 1 (datos + detección de anomalías)</strong>
+            está funcionando de punta a punta en local; las fases 2&ndash;4 (chatbot, informes, dashboard) están por empezar.</p>
+            <table>
+                <thead><tr><th>Bloque</th><th>Estado</th><th>Detalle</th></tr></thead>
+                <tbody>
+                    <tr><td>EDA del histórico</td><td><span class="badge badge-done">Hecho</span></td><td>Notebook 01</td></tr>
+                    <tr><td>Features por bloques del día</td><td><span class="badge badge-done">Hecho</span></td><td>Notebook 02 &rarr; tabla ResumenDatosML</td></tr>
+                    <tr><td>Detector de anomalías</td><td><span class="badge badge-done">Hecho</span></td><td>Notebook 03 &mdash; Isolation Forest + baseline z-score</td></tr>
+                    <tr><td>PostgreSQL en Docker</td><td><span class="badge badge-done">Hecho</span></td><td>docker-compose + volumen nombrado</td></tr>
+                    <tr><td>Pipeline de tiempo real</td><td><span class="badge badge-done">Hecho</span></td><td>API &rarr; Postgres &rarr; inferencia &rarr; anomalías (idempotente)</td></tr>
+                    <tr><td>CI/CD (tests)</td><td><span class="badge badge-done">Hecho</span></td><td>GitHub Actions: unit + integración con Postgres</td></tr>
+                    <tr><td>Tabla de Estaciones (zonas)</td><td><span class="badge badge-done">Hecho</span></td><td>24 estaciones con distrito, tipo y coordenadas (<code>cargar_estaciones.py</code>)</td></tr>
+                    <tr><td>Vector DB + documentos</td><td><span class="badge badge-todo">Fase 2</span></td><td>ChromaDB con estudios de salud / normativa</td></tr>
+                    <tr><td>LLM local + tool use</td><td><span class="badge badge-todo">Fase 3</span></td><td>Consulta SQL + búsqueda documental</td></tr>
+                    <tr><td>Informes + dashboard</td><td><span class="badge badge-todo">Fase 4</span></td><td>Web con chatbot integrado</td></tr>
+                </tbody>
+            </table>
+        </div>
+
+        <!-- MVP -->
+        <div class="section">
+            <h2>MVP &mdash; Producto mínimo viable</h2>
+            <p>El corte más pequeño que entrega valor real a un usuario: <strong>ver el estado de la calidad del aire
+            de Madrid, saber si hay algo anómalo y poder preguntarlo en lenguaje natural</strong>, combinando los datos
+            con conocimiento de salud.</p>
+            <h3>Incluye</h3>
+            <ul class="check-list">
+                <li>Ingesta histórico + tiempo real a PostgreSQL <span class="badge badge-done">Hecho</span></li>
+                <li>Detección de anomalías (Isolation Forest + baseline z-score) en <code>resumen_datos_ml</code> <span class="badge badge-done">Hecho</span></li>
+                <li>Vector DB (ChromaDB) con documentos de salud y normativa + pipeline de embeddings <span class="badge badge-pending">Pendiente</span></li>
+                <li>Chatbot con <em>tool use</em>: consulta SQL (<code>query_sql</code>) + búsqueda documental / RAG (<code>search_documents</code>) <span class="badge badge-pending">Pendiente</span></li>
+                <li>Interfaz mínima (Streamlit) para chatear, con disclaimer médico visible <span class="badge badge-pending">Pendiente</span></li>
+            </ul>
+            <h3>Fuera del MVP</h3>
+            <ul class="todo-list">
+                <li>Informes automáticos rotativos y dashboard completo con visualizaciones</li>
+                <li>LSTM Autoencoder y despliegue cloud 24/7 (ver "Extras / futuras mejoras")</li>
+            </ul>
+            <div class="callout">
+                Con la Fase 1 ya hecha, el camino al MVP es la <strong>Fase 2 (Vector DB con documentos)</strong> y la
+                <strong>Fase 3 (LLM con tool use)</strong>: un chatbot que combina los datos de contaminación (SQL) con
+                el contexto de salud (RAG), sobre una interfaz mínima.
+            </div>
+        </div>
+
+        <!-- Decisiones clave -->
+        <div class="section">
+            <h2>Decisiones clave (novedades vs v2)</h2>
+            <div class="decision">
+                <div class="q">Base de datos <span class="badge badge-new">Cambio</span></div>
+                <div class="a"><strong>PostgreSQL en Docker</strong> con volumen nombrado (antes se planteaba SQLite).
+                Mismo <code>docker-compose.yml</code> sirve en local ahora y en la nube después.</div>
+            </div>
+            <div class="decision">
+                <div class="q">Modelo de anomalías <span class="badge badge-new">Cambio</span></div>
+                <div class="a"><strong>Isolation Forest por contaminante + baseline z-score</strong> (implementado y en producción local).
+                El <strong>LSTM Autoencoder</strong> queda fuera del alcance, como mejora opcional (ver "Extras / futuras mejoras").</div>
+            </div>
+            <div class="decision">
+                <div class="q">Datos</div>
+                <div class="a">6 magnitudes objetivo (NO, NO2, NOx, O3, PM10, PM2.5). Histórico 2018&ndash;2026. API en tiempo real.</div>
+            </div>
+            <div class="decision">
+                <div class="q">Ingesta <span class="badge badge-new">Cambio</span></div>
+                <div class="a">Pipeline a Postgres (<code>pipeline_tiempo_real.py</code>). El GitHub Action de CSV se mantiene como
+                <strong>backup gratuito</strong> de datos crudos, separado del pipeline.</div>
+            </div>
+            <div class="decision">
+                <div class="q">Scheduler <span class="badge badge-new">Nuevo</span></div>
+                <div class="a">GitHub Actions <strong>no puede</strong> escribir en un Postgres de Docker local (redes distintas). El pipeline corre
+                en local (manual / tarea programada / servicio en compose) y en la nube cuando se despliegue.</div>
+            </div>
+            <div class="decision">
+                <div class="q">CI/CD <span class="badge badge-new">Nuevo</span></div>
+                <div class="a">GitHub Actions con dos jobs: tests unitarios (sin DB) y tests de integración contra un Postgres de servicio efímero.</div>
+            </div>
+            <div class="decision">
+                <div class="q">Protección de ramas <span class="badge badge-new">Nuevo</span></div>
+                <div class="a">Los merges a <code>main</code> solo pueden venir de <code>development</code> (workflow <code>proteger_main.yml</code> + branch protection).</div>
+            </div>
+            <div class="decision">
+                <div class="q">LLM / Vector DB / Interfaz</div>
+                <div class="a">Sin cambios respecto a v2: LLM local (Llama/Mistral) en Azure/AWS, ChromaDB solo para documentos externos, dashboard web con chatbot.</div>
+            </div>
+        </div>
+
+        <!-- Arquitectura -->
+        <div class="section">
+            <h2>Arquitectura general (v3)</h2>
+            <div class="architecture-diagram">
+<span class="db">[API Madrid tiempo real]</span> <span class="arrow">--&gt;</span> <span class="ml">[pipeline_tiempo_real.py]</span> <span class="arrow">--&gt;</span> <span class="db">[PostgreSQL: calidad_aire_horas_live]</span><br>
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; <span class="arrow">|</span> agrega a bloques + features<br>
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; <span class="arrow">v</span><br>
+<span class="db">[CSV histórico 2018-2026]</span> <span class="arrow">--&gt;</span> <span class="ml">[Notebooks 01/02/03]</span> <span class="arrow">--&gt;</span> <span class="ml">[Isolation Forest .joblib]</span> <span class="arrow">--&gt;</span> <span class="db">[PostgreSQL: resumen_datos_ml + flags]</span><br>
+<br>
+<span class="db">[Documentos: salud, normativa]</span> <span class="arrow">--&gt;</span> <span class="vdb">[Embeddings]</span> <span class="arrow">--&gt;</span> <span class="vdb">[Vector DB (ChromaDB)]</span> &nbsp;&nbsp;<span class="comment">(Fase 2)</span><br>
+<br>
+<span class="ui">[Usuario / Informes]</span> <span class="arrow">--&gt;</span> <span class="llm">[LLM Local]</span> <span class="arrow">&lt;--&gt;</span> <span class="db">[Tool: SQL query]</span> &nbsp;/&nbsp; <span class="vdb">[Tool: Vector DB]</span> <span class="arrow">--&gt;</span> <span class="ui">[Dashboard]</span> &nbsp;&nbsp;<span class="comment">(Fase 3-4)</span>
+            </div>
+            <div class="info-box">
+                <strong>Lo que ya funciona (verde en el diagrama):</strong> el flujo de datos y detección de anomalías completo,
+                sobre PostgreSQL. Los datos de contaminación viven <strong>estructurados en SQL</strong>; la Vector DB solo tendrá
+                documentos externos. El LLM (pendiente) usará <em>tool use</em> para consultar ambas fuentes.
+            </div>
+        </div>
+
+        <!-- Pipeline tiempo real -->
+        <div class="section">
+            <h2>Pipeline de datos y tiempo real</h2>
+            <p>El corazón de la Fase 1. Todo el flujo es <strong>idempotente</strong> (se puede reejecutar sin duplicar):</p>
+            <div class="flow">
+                <span class="flow-step api">API Madrid</span>
+                <span class="flow-arrow">&rarr;</span>
+                <span class="flow-step">limpiar_datos_live (formato largo)</span>
+                <span class="flow-arrow">&rarr;</span>
+                <span class="flow-step db">calidad_aire_horas_live</span>
+                <span class="flow-arrow">&rarr;</span>
+                <span class="flow-step">features por bloques</span>
+                <span class="flow-arrow">&rarr;</span>
+                <span class="flow-step ml">Isolation Forest</span>
+                <span class="flow-arrow">&rarr;</span>
+                <span class="flow-step db">resumen_datos_ml</span>
+            </div>
+            <table>
+                <thead><tr><th>Módulo</th><th>Responsabilidad</th></tr></thead>
+                <tbody>
+                    <tr><td><code>src/etl/limpiar_datos.py</code></td><td>Parser único ancho&rarr;largo (<code>wide_a_largo</code>), usado por notebooks e ingesta.</td></tr>
+                    <tr><td><code>src/etl/features_bloques.py</code></td><td>Agrega el horario a bloques del día y calcula features (z-score, cobertura, CV).</td></tr>
+                    <tr><td><code>src/etl/inferencia.py</code></td><td>Aplica el Isolation Forest y produce <code>anomaly_score</code> / <code>is_anomaly</code>.</td></tr>
+                    <tr><td><code>src/etl/pipeline_tiempo_real.py</code></td><td>Orquestador: API &rarr; horario crudo &rarr; inferencia &rarr; upsert en <code>resumen_datos_ml</code>.</td></tr>
+                    <tr><td><code>src/etl/cargar_resumen_ml.py</code></td><td>Carga inicial (masiva, vía COPY) de la tabla ResumenDatosML desde el parquet de los notebooks.</td></tr>
+                    <tr><td><code>src/etl/cargar_estaciones.py</code></td><td>Carga la tabla de estaciones (nombre, distrito, tipo, coordenadas).</td></tr>
+                    <tr><td><code>src/etl/ingesta_datos_live_csv.py</code></td><td>Backup diario a CSV (GitHub Action). Independiente del pipeline.</td></tr>
+                </tbody>
+            </table>
+        </div>
+
+        <!-- Componente 1: Anomalías -->
+        <div class="section">
+            <h2>Componente 1: Detección de anomalías (ML)</h2>
+            <h3>Dos familias de anomalías y su señal</h3>
+            <table>
+                <thead><tr><th>Familia</th><th>Ejemplo</th><th>Feature que la delata</th></tr></thead>
+                <tbody>
+                    <tr><td>Ambiental</td><td>nivel de O3 inusualmente alto para un julio</td><td><code>Z_SCORE</code> (lejos del valor esperado)</td></tr>
+                    <tr><td>Operativa &mdash; sensor caído</td><td>faltan horas del bloque</td><td><code>COBERTURA</code> baja</td></tr>
+                    <tr><td>Operativa &mdash; sensor congelado</td><td>valor plano toda la franja</td><td><code>CV</code> &asymp; 0 (variabilidad relativa)</td></tr>
+                </tbody>
+            </table>
+
+            <h3>Enfoques evaluados</h3>
+            <table>
+                <thead><tr><th>Opción</th><th>Rol</th><th>Estado</th></tr></thead>
+                <tbody>
+                    <tr><td>Estadístico (Z-score)</td><td>Baseline / feature del modelo</td><td><span class="badge badge-done">Implementado</span></td></tr>
+                    <tr><td><strong>Isolation Forest</strong> (por contaminante)</td><td>Detector principal actual</td><td><span class="badge badge-done">Implementado</span></td></tr>
+                    <tr><td><strong>LSTM Autoencoder</strong></td><td>Anomalías de forma (temporal)</td><td><span class="badge badge-todo">Fuera de alcance (extra)</span></td></tr>
+                    <tr><td>Prophet + residuos</td><td>Alternativa con estacionalidad</td><td><span class="badge badge-todo">Descartado por ahora</span></td></tr>
+                </tbody>
+            </table>
+
+            <h3>Estrategia implementada</h3>
+            <ol class="strategy-list">
+                <li><strong>Baseline:</strong> valor esperado por (estación, magnitud, bloque, mes) &rarr; <code>Z_SCORE</code>. Materializado en <code>baseline_historico</code>.</li>
+                <li><strong>Modelo principal:</strong> Isolation Forest <em>por contaminante</em> sobre features comparables entre estaciones (<code>Z_SCORE</code>, <code>COBERTURA</code>, <code>CV</code>). Un modelo por magnitud, guardados en <code>models/isolation_forest.joblib</code>.</li>
+                <li><strong>Resultados:</strong> escribe <code>anomaly_score</code>, <code>is_anomaly</code> y <code>expected_value</code> en <code>resumen_datos_ml</code>.</li>
+                <li><strong>Tiempo real:</strong> el pipeline aplica el modelo a los datos entrantes y actualiza la tabla (upsert idempotente).</li>
+            </ol>
+            <div class="callout">
+                Validado sobre datos reales: el detector marca picos conocidos (p. ej. el <strong>pico de PM10 en Nochevieja</strong> por
+                pirotecnia) y las caídas/congelaciones de sensor que el z-score por sí solo no ve.
+            </div>
+            <p style="margin-top:1rem; color: var(--text-light);">Herramientas: Python + scikit-learn (Isolation Forest).</p>
+        </div>
+
+        <!-- Modelo de datos -->
+        <div class="section">
+            <h2>Modelo de datos (PostgreSQL)</h2>
+
+            <h3>1. calidad_aire_horas_live &mdash; horario crudo</h3>
+            <p>Mediciones hora a hora en formato largo. Clave única <code>(estacion, magnitud, fecha)</code>, inserción con <code>ON CONFLICT DO NOTHING</code>.</p>
+
+            <h3>2. resumen_datos_ml &mdash; tabla principal (la que consulta el chatbot)</h3>
+            <p>Una fila por (estación, magnitud, día, bloque) con estadísticos, baseline y salida del modelo. ~1,27M filas para el histórico.</p>
+            <div class="schema">
+<span class="table-name">resumen_datos_ml</span>  <span class="comment">-- identificación</span><br>
+├── <span class="col">estacion, magnitud, contaminante, fecha, bloque, hora_inicio, hora_fin</span><br>
+│   <span class="comment">-- calendario</span><br>
+├── <span class="col">ano, mes, dia_semana, es_fin_semana</span><br>
+│   <span class="comment">-- estadísticos del bloque</span><br>
+├── <span class="col">n_horas, cobertura, media, maximo, hora_maximo, minimo, hora_minimo, std, rango</span><br>
+│   <span class="comment">-- baseline histórico</span><br>
+├── <span class="col">media_esperada, std_esperada, desviacion, z_score</span><br>
+│   <span class="comment">-- salida del modelo ML</span><br>
+└── <span class="col">expected_value</span> <span class="type">REAL</span>, <span class="col">anomaly_score</span> <span class="type">REAL</span>, <span class="col">is_anomaly</span> <span class="type">BOOLEAN</span>
+            </div>
+
+            <h3>3. baseline_historico &mdash; valor esperado</h3>
+            <p>Lookup de <code>media_esperada</code> / <code>std_esperada</code> por (estación, magnitud, bloque, mes). Lo usa la inferencia en tiempo real.</p>
+
+            <h3>4. estaciones &mdash; dimensión geográfica</h3>
+            <p>Las 24 estaciones con <code>nombre</code>, <code>distrito</code>, <code>tipo</code> (tráfico/fondo/suburbana),
+            coordenadas y qué contaminantes mide cada una. Se une a las mediciones por <code>estacion = codigo_corto</code>;
+            da el contexto geográfico que necesita el chatbot para preguntas por zona/distrito.</p>
+
+            <h3>Bloques del día</h3>
+            <table>
+                <thead><tr><th>Bloque</th><th>Horas</th><th>Relevancia</th></tr></thead>
+                <tbody>
+                    <tr><td>Madrugada</td><td>00:00 &ndash; 06:00</td><td>Baja actividad, nivel de fondo</td></tr>
+                    <tr><td>Mañana</td><td>07:00 &ndash; 12:00</td><td>Hora punta, picos de NO2</td></tr>
+                    <tr><td>Tarde</td><td>13:00 &ndash; 19:00</td><td>Picos de O3 (sol + calor)</td></tr>
+                    <tr><td>Noche</td><td>20:00 &ndash; 23:00</td><td>Tráfico vespertino, enfriamiento</td></tr>
+                </tbody>
+            </table>
+        </div>
+
+        <!-- Infra / CI -->
+        <div class="section">
+            <h2>Infraestructura y CI/CD</h2>
+            <h3>Base de datos</h3>
+            <ul class="embed-list">
+                <li><strong>PostgreSQL 18 en Docker</strong> (<code>docker-compose.yml</code>) con <strong>volumen nombrado</strong>: los datos persisten aunque se recree el contenedor.</li>
+                <li>En local ahora; el mismo compose se despliega en Azure/AWS del máster cuando toque (portable sin cambios).</li>
+            </ul>
+            <h3>GitHub Actions</h3>
+            <ul class="embed-list">
+                <li><strong>Tests</strong> (<code>tests.yml</code>): job <em>unit</em> (lógica pura, sin DB) + job <em>integración</em> (Postgres de servicio efímero).</li>
+                <li><strong>Backup CSV</strong> (<code>ingesta_diaria.yml</code>): cron que guarda los datos crudos diarios en un CSV versionado (red de seguridad gratuita).</li>
+                <li><strong>Protección de main</strong> (<code>proteger_main.yml</code>): bloquea cualquier PR a <code>main</code> que no venga de <code>development</code>.</li>
+            </ul>
+            <div class="callout-warn">
+                <strong>Nota de arquitectura:</strong> GitHub Actions corre en la nube y no llega a un Postgres de Docker local. Por eso la
+                ingesta a la base de datos se ejecuta donde vive la DB (local ahora, cloud después), no en el Action.
+            </div>
+        </div>
+
+        <!-- Componentes 2-5 (pendientes) -->
+        <div class="section">
+            <h2>Componente 2: LLM local con tool use <span class="badge badge-todo">Fase 3</span></h2>
+            <div class="info-box">
+                <strong>Modelo:</strong> LLM local en Azure/AWS (Llama 3, Mistral, etc., según GPU). <strong>Framework:</strong> Ollama o vLLM con function calling.
+            </div>
+            <h3>Tools previstas</h3>
+            <table>
+                <thead><tr><th>Tool</th><th>Qué hace</th></tr></thead>
+                <tbody>
+                    <tr><td><code>query_sql</code></td><td>SQL read-only sobre <code>resumen_datos_ml</code>, <code>calidad_aire_horas_live</code>, estaciones.</td></tr>
+                    <tr><td><code>search_documents</code></td><td>Búsqueda en ChromaDB de documentos de salud y normativa.</td></tr>
+                </tbody>
+            </table>
+            <div class="callout-warn"><strong>Pendiente:</strong> decidir SQL generado por el LLM (con validación read-only) vs queries predefinidas, según el tamaño de modelo que permita el hardware.</div>
+        </div>
+
+        <div class="section">
+            <h2>Componente 3: Vector DB &mdash; solo documentos externos <span class="badge badge-todo">Fase 2</span></h2>
+            <p>ChromaDB con embeddings locales (<code>all-MiniLM-L6-v2</code>). <strong>No</strong> almacena datos de contaminación &mdash; esos viven en SQL.</p>
+            <ul class="embed-list">
+                <li>Estudios de salud (poblaciones vulnerables), normativa (OMS / UE / BOE), guías clínicas, estudios de alergias, contexto local de Madrid.</li>
+            </ul>
+            <div class="callout-todo"><strong>TODO:</strong> recopilar los documentos que cubran las preguntas que los datos por sí solos no contestan.</div>
+        </div>
+
+        <div class="section">
+            <h2>Componentes 4 y 5: Informes + Dashboard <span class="badge badge-todo">Fase 4</span></h2>
+            <ul class="embed-list">
+                <li><strong>Informes:</strong> si hay anomalías del día (<code>is_anomaly = true</code>) &rarr; el LLM las explica; si no, prompt rotativo de preguntas predefinidas.</li>
+                <li><strong>Dashboard:</strong> web (FastAPI + Streamlit/HTML) con informes y chatbot integrado, con disclaimer médico visible.</li>
+            </ul>
+        </div>
+
+        <!-- Stack -->
+        <div class="section">
+            <h2>Stack tecnológico</h2>
+            <div class="tech-grid">
+                <div class="tech-card"><div class="label">Base de datos</div><div class="value">PostgreSQL 18 (Docker)</div></div>
+                <div class="tech-card"><div class="label">Datos / ETL</div><div class="value">pandas + pyarrow + SQLAlchemy</div></div>
+                <div class="tech-card"><div class="label">Detección de anomalías</div><div class="value">scikit-learn (Isolation Forest)</div></div>
+                <div class="tech-card"><div class="label">Vector DB</div><div class="value">ChromaDB</div></div>
+                <div class="tech-card"><div class="label">Embeddings</div><div class="value">sentence-transformers (local)</div></div>
+                <div class="tech-card"><div class="label">LLM</div><div class="value">Local (Llama 3 / Mistral)</div></div>
+                <div class="tech-card"><div class="label">Backend / Front</div><div class="value">FastAPI + Streamlit</div></div>
+                <div class="tech-card"><div class="label">CI/CD</div><div class="value">GitHub Actions + pytest</div></div>
+                <div class="tech-card"><div class="label">Infra</div><div class="value">Docker (local) &rarr; Azure/AWS</div></div>
+            </div>
+        </div>
+
+        <!-- Extras / futuras mejoras -->
+        <div class="section">
+            <h2>Extras / futuras mejoras</h2>
+            <p>Fuera del alcance actual; opcionales o para una segunda versión. El modelo de anomalías es una
+            <strong>pieza enchufable</strong>, así que añadir un detector nuevo no toca el resto del sistema.</p>
+            <table>
+                <thead><tr><th>Mejora</th><th>Qué aporta</th><th>Coste</th></tr></thead>
+                <tbody>
+                    <tr><td><strong>Autoencoder (PCA)</strong></td><td>Anomalías de <em>forma</em> del perfil horario, solo con scikit-learn (un autoencoder lineal equivale a PCA).</td><td>Bajo</td></tr>
+                    <tr><td><strong>LSTM Autoencoder</strong></td><td>Lo mismo con no-linealidades temporales; componente de <em>deep learning</em> para la memoria.</td><td>Alto (PyTorch)</td></tr>
+                    <tr><td>Baseline con recencia</td><td>Ponderar más los años recientes (la contaminación baja con los años).</td><td>Bajo</td></tr>
+                    <tr><td>Scheduler en la nube</td><td>Ingesta 24/7 sin depender de un PC encendido.</td><td>Medio</td></tr>
+                </tbody>
+            </table>
+            <div class="callout-warn">
+                <strong>Sobre el LSTM:</strong> se valoró como modelo principal en v2, pero el detector actual ya cubre las
+                familias de anomalías relevantes (nivel, sensor caído, sensor congelado) y, sin datos etiquetados, su mejora
+                no es medible. Queda como mejora opcional, no como bloqueo.
+            </div>
+        </div>
+
+        <!-- Preguntas abiertas -->
+        <div class="section">
+            <h2>Preguntas abiertas</h2>
+            <table>
+                <thead><tr><th>Pregunta</th><th>Depende de</th><th>Estado</th></tr></thead>
+                <tbody>
+                    <tr><td>¿Dónde corre el pipeline en producción 24/7?</td><td>Infra de Azure/AWS del máster</td><td><span class="badge badge-pending">Pendiente</span></td></tr>
+                    <tr><td>¿LLM genera SQL vs queries predefinidas?</td><td>Tamaño de modelo que permita el hardware</td><td><span class="badge badge-pending">Pendiente</span></td></tr>
+                    <tr><td>¿Qué documentos para la Vector DB?</td><td>Definir preguntas ejemplo</td><td><span class="badge badge-todo">TODO</span></td></tr>
+                </tbody>
+            </table>
+        </div>
+
+    </div>
+</body>
+</html>
