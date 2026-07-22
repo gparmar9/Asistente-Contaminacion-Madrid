@@ -142,13 +142,38 @@
                     <tr><td>PostgreSQL en Docker</td><td><span class="badge badge-done">Hecho</span></td><td>docker-compose + volumen nombrado</td></tr>
                     <tr><td>Pipeline de tiempo real</td><td><span class="badge badge-done">Hecho</span></td><td>API &rarr; Postgres &rarr; inferencia &rarr; anomalías (idempotente)</td></tr>
                     <tr><td>CI/CD (tests)</td><td><span class="badge badge-done">Hecho</span></td><td>GitHub Actions: unit + integración con Postgres</td></tr>
-                    <tr><td>LSTM Autoencoder</td><td><span class="badge badge-pending">Siguiente</span></td><td>Notebook 04 &mdash; comparativa con el Isolation Forest</td></tr>
                     <tr><td>Tabla de Estaciones (zonas)</td><td><span class="badge badge-pending">Pendiente</span></td><td>Necesaria para preguntas geográficas del chatbot</td></tr>
                     <tr><td>Vector DB + documentos</td><td><span class="badge badge-todo">Fase 2</span></td><td>ChromaDB con estudios de salud / normativa</td></tr>
                     <tr><td>LLM local + tool use</td><td><span class="badge badge-todo">Fase 3</span></td><td>Consulta SQL + búsqueda documental</td></tr>
                     <tr><td>Informes + dashboard</td><td><span class="badge badge-todo">Fase 4</span></td><td>Web con chatbot integrado</td></tr>
                 </tbody>
             </table>
+        </div>
+
+        <!-- MVP -->
+        <div class="section">
+            <h2>MVP &mdash; Producto mínimo viable</h2>
+            <p>El corte más pequeño que entrega valor real a un usuario: <strong>ver el estado de la calidad del aire
+            de Madrid, saber si hay algo anómalo y poder preguntarlo en lenguaje natural</strong>, combinando los datos
+            con conocimiento de salud.</p>
+            <h3>Incluye</h3>
+            <ul class="check-list">
+                <li>Ingesta histórico + tiempo real a PostgreSQL <span class="badge badge-done">Hecho</span></li>
+                <li>Detección de anomalías (Isolation Forest + baseline z-score) en <code>resumen_datos_ml</code> <span class="badge badge-done">Hecho</span></li>
+                <li>Vector DB (ChromaDB) con documentos de salud y normativa + pipeline de embeddings <span class="badge badge-pending">Pendiente</span></li>
+                <li>Chatbot con <em>tool use</em>: consulta SQL (<code>query_sql</code>) + búsqueda documental / RAG (<code>search_documents</code>) <span class="badge badge-pending">Pendiente</span></li>
+                <li>Interfaz mínima (Streamlit) para chatear, con disclaimer médico visible <span class="badge badge-pending">Pendiente</span></li>
+            </ul>
+            <h3>Fuera del MVP</h3>
+            <ul class="todo-list">
+                <li>Informes automáticos rotativos y dashboard completo con visualizaciones</li>
+                <li>LSTM Autoencoder y despliegue cloud 24/7 (ver "Extras / futuras mejoras")</li>
+            </ul>
+            <div class="callout">
+                Con la Fase 1 ya hecha, el camino al MVP es la <strong>Fase 2 (Vector DB con documentos)</strong> y la
+                <strong>Fase 3 (LLM con tool use)</strong>: un chatbot que combina los datos de contaminación (SQL) con
+                el contexto de salud (RAG), sobre una interfaz mínima.
+            </div>
         </div>
 
         <!-- Decisiones clave -->
@@ -162,7 +187,7 @@
             <div class="decision">
                 <div class="q">Modelo de anomalías <span class="badge badge-new">Cambio</span></div>
                 <div class="a"><strong>Isolation Forest por contaminante + baseline z-score</strong> (implementado y en producción local).
-                El <strong>LSTM Autoencoder</strong> pasa a ser el siguiente paso (comparativa), no el punto de partida.</div>
+                El <strong>LSTM Autoencoder</strong> queda fuera del alcance, como mejora opcional (ver "Extras / futuras mejoras").</div>
             </div>
             <div class="decision">
                 <div class="q">Datos</div>
@@ -261,7 +286,7 @@
                 <tbody>
                     <tr><td>Estadístico (Z-score)</td><td>Baseline / feature del modelo</td><td><span class="badge badge-done">Implementado</span></td></tr>
                     <tr><td><strong>Isolation Forest</strong> (por contaminante)</td><td>Detector principal actual</td><td><span class="badge badge-done">Implementado</span></td></tr>
-                    <tr><td><strong>LSTM Autoencoder</strong></td><td>Anomalías de forma (temporal)</td><td><span class="badge badge-pending">Siguiente (nb04)</span></td></tr>
+                    <tr><td><strong>LSTM Autoencoder</strong></td><td>Anomalías de forma (temporal)</td><td><span class="badge badge-todo">Fuera de alcance (extra)</span></td></tr>
                     <tr><td>Prophet + residuos</td><td>Alternativa con estacionalidad</td><td><span class="badge badge-todo">Descartado por ahora</span></td></tr>
                 </tbody>
             </table>
@@ -277,7 +302,7 @@
                 Validado sobre datos reales: el detector marca picos conocidos (p. ej. el <strong>pico de PM10 en Nochevieja</strong> por
                 pirotecnia) y las caídas/congelaciones de sensor que el z-score por sí solo no ve.
             </div>
-            <p style="margin-top:1rem; color: var(--text-light);">Herramientas: Python + scikit-learn (Isolation Forest). PyTorch para el LSTM (siguiente).</p>
+            <p style="margin-top:1rem; color: var(--text-light);">Herramientas: Python + scikit-learn (Isolation Forest).</p>
         </div>
 
         <!-- Modelo de datos -->
@@ -378,7 +403,6 @@
                 <div class="tech-card"><div class="label">Base de datos</div><div class="value">PostgreSQL 18 (Docker)</div></div>
                 <div class="tech-card"><div class="label">Datos / ETL</div><div class="value">pandas + pyarrow + SQLAlchemy</div></div>
                 <div class="tech-card"><div class="label">Detección de anomalías</div><div class="value">scikit-learn (Isolation Forest)</div></div>
-                <div class="tech-card"><div class="label">Modelo temporal (siguiente)</div><div class="value">PyTorch (LSTM Autoencoder)</div></div>
                 <div class="tech-card"><div class="label">Vector DB</div><div class="value">ChromaDB</div></div>
                 <div class="tech-card"><div class="label">Embeddings</div><div class="value">sentence-transformers (local)</div></div>
                 <div class="tech-card"><div class="label">LLM</div><div class="value">Local (Llama 3 / Mistral)</div></div>
@@ -388,22 +412,26 @@
             </div>
         </div>
 
-        <!-- Orden de implementación -->
+        <!-- Extras / futuras mejoras -->
         <div class="section">
-            <h2>Orden de implementación</h2>
-            <div class="phase done">
-                <h3>Fase 1: Datos y modelo ML <span class="badge badge-done">Casi completa</span></h3>
-                <ol>
-                    <li>✅ Notebooks EDA, features y entrenamiento (01/02/03)</li>
-                    <li>✅ ResumenDatosML por bloques + baseline z-score</li>
-                    <li>✅ Isolation Forest por contaminante (score/flag/expected en la tabla)</li>
-                    <li>✅ PostgreSQL en Docker + carga inicial + pipeline de tiempo real idempotente</li>
-                    <li>⏳ LSTM Autoencoder (nb04) y tabla de Estaciones con zonas</li>
-                </ol>
+            <h2>Extras / futuras mejoras</h2>
+            <p>Fuera del alcance actual; opcionales o para una segunda versión. El modelo de anomalías es una
+            <strong>pieza enchufable</strong>, así que añadir un detector nuevo no toca el resto del sistema.</p>
+            <table>
+                <thead><tr><th>Mejora</th><th>Qué aporta</th><th>Coste</th></tr></thead>
+                <tbody>
+                    <tr><td><strong>Autoencoder (PCA)</strong></td><td>Anomalías de <em>forma</em> del perfil horario, solo con scikit-learn (un autoencoder lineal equivale a PCA).</td><td>Bajo</td></tr>
+                    <tr><td><strong>LSTM Autoencoder</strong></td><td>Lo mismo con no-linealidades temporales; componente de <em>deep learning</em> para la memoria.</td><td>Alto (PyTorch)</td></tr>
+                    <tr><td>Tabla de estaciones con zonas/distritos</td><td>Preguntas geográficas del chatbot (&laquo;¿qué distrito&hellip;?&raquo;).</td><td>Bajo</td></tr>
+                    <tr><td>Baseline con recencia</td><td>Ponderar más los años recientes (la contaminación baja con los años).</td><td>Bajo</td></tr>
+                    <tr><td>Scheduler en la nube</td><td>Ingesta 24/7 sin depender de un PC encendido.</td><td>Medio</td></tr>
+                </tbody>
+            </table>
+            <div class="callout-warn">
+                <strong>Sobre el LSTM:</strong> se valoró como modelo principal en v2, pero el detector actual ya cubre las
+                familias de anomalías relevantes (nivel, sensor caído, sensor congelado) y, sin datos etiquetados, su mejora
+                no es medible. Queda como mejora opcional, no como bloqueo.
             </div>
-            <div class="phase"><h3>Fase 2: Vector DB + documentos</h3><ol><li>Recopilar documentos, pipeline de embeddings a ChromaDB, validar retrieval.</li></ol></div>
-            <div class="phase"><h3>Fase 3: LLM + tool use</h3><ol><li>Desplegar LLM local, implementar <code>query_sql</code> y <code>search_documents</code>, system prompt en español con disclaimer.</li></ol></div>
-            <div class="phase"><h3>Fase 4: Informes + dashboard</h3><ol><li>Lógica de informes, prompts rotativos, web con chatbot.</li></ol></div>
         </div>
 
         <!-- Preguntas abiertas -->
@@ -413,7 +441,6 @@
                 <thead><tr><th>Pregunta</th><th>Depende de</th><th>Estado</th></tr></thead>
                 <tbody>
                     <tr><td>¿Dónde corre el pipeline en producción 24/7?</td><td>Infra de Azure/AWS del máster</td><td><span class="badge badge-pending">Pendiente</span></td></tr>
-                    <tr><td>¿LSTM aporta sobre el Isolation Forest?</td><td>Notebook 04 (comparativa)</td><td><span class="badge badge-pending">Pendiente</span></td></tr>
                     <tr><td>¿LLM genera SQL vs queries predefinidas?</td><td>Tamaño de modelo que permita el hardware</td><td><span class="badge badge-pending">Pendiente</span></td></tr>
                     <tr><td>¿Qué documentos para la Vector DB?</td><td>Definir preguntas ejemplo</td><td><span class="badge badge-todo">TODO</span></td></tr>
                     <tr><td>Tabla de Estaciones con zonas/distritos</td><td>Datos de ubicación</td><td><span class="badge badge-todo">TODO</span></td></tr>
