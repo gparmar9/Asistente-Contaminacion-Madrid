@@ -22,9 +22,31 @@ PostgreSQL. Las fases 2–4 (Vector DB, chatbot LLM, dashboard) están por empez
 | PostgreSQL en Docker (volumen persistente) | ✅ Hecho |
 | Pipeline de tiempo real (API → Postgres → inferencia) | ✅ Hecho |
 | CI/CD (tests unitarios + integración) | ✅ Hecho |
-| LSTM Autoencoder (nb04) | ⏳ Siguiente |
 | Tabla de estaciones con zonas | ⏳ Pendiente |
 | Vector DB + LLM + dashboard | 🔜 Fases 2–4 |
+
+---
+
+## MVP — Producto mínimo viable
+
+El corte más pequeño que entrega valor real: **ver el estado de la calidad del aire de Madrid,
+saber si hay algo anómalo y poder preguntarlo en lenguaje natural**, combinando los datos con
+conocimiento de salud.
+
+**Incluye:**
+
+- ✅ Ingesta histórico + tiempo real a PostgreSQL *(hecho)*
+- ✅ Detección de anomalías (Isolation Forest + baseline z-score) en `resumen_datos_ml` *(hecho)*
+- ⏳ Vector DB (ChromaDB) con documentos de salud y normativa + pipeline de embeddings
+- ⏳ Chatbot con *tool use*: consulta SQL (`query_sql`) + búsqueda documental / RAG (`search_documents`)
+- ⏳ Interfaz mínima (Streamlit) para chatear, con disclaimer médico
+
+**Fuera del MVP** (mejoras posteriores): informes automáticos rotativos, dashboard completo, LSTM
+y despliegue cloud 24/7.
+
+> Con la Fase 1 ya hecha, el camino al MVP es la **Fase 2 (Vector DB con documentos)** + la
+> **Fase 3 (LLM con tool use)**: un chatbot que combina los datos de contaminación (SQL) con el
+> contexto de salud (RAG), sobre una interfaz mínima.
 
 ---
 
@@ -197,8 +219,8 @@ Dos familias de anomalías, cada una con su señal en las features:
 | **Operativa** — sensor congelado | `cv ≈ 0` — variabilidad relativa nula |
 
 **Modelo actual**: un **Isolation Forest por contaminante** (scikit-learn) sobre esas 3 features
-comparables entre estaciones, más el **baseline z-score** como referencia. El **LSTM Autoencoder**
-(nb04) es el siguiente paso para captar anomalías de forma temporal.
+comparables entre estaciones, más el **baseline z-score** como referencia. Un detector temporal
+(autoencoder) queda como mejora opcional — ver la sección **Extras / futuras mejoras** más abajo.
 
 ---
 
@@ -222,18 +244,26 @@ comparables entre estaciones, más el **baseline z-score** como referencia. El *
 
 ---
 
-## Roadmap
+## Extras / futuras mejoras
 
-- [ ] **nb04**: LSTM Autoencoder y comparativa con el Isolation Forest.
-- [ ] Tabla de **estaciones con zonas/distritos** (para preguntas geográficas del chatbot).
-- [ ] Scheduler del pipeline (servicio en `docker-compose` o cron en la nube al desplegar).
-- [ ] **Fase 2**: Vector DB (ChromaDB) con documentos de salud y normativa.
-- [ ] **Fase 3**: LLM local con tool use (`query_sql` + `search_documents`).
-- [ ] **Fase 4**: informes automáticos + dashboard web con chatbot.
+Fuera del alcance actual; opcionales o para una segunda versión. El modelo de anomalías es una pieza
+enchufable, así que añadir un detector nuevo no toca el resto del sistema.
+
+| Mejora | Qué aporta | Coste |
+|---|---|---|
+| **Autoencoder (PCA)** | Anomalías de *forma* del perfil horario, solo con scikit-learn (un autoencoder lineal equivale a PCA). | Bajo |
+| **LSTM Autoencoder** | Lo mismo con no-linealidades temporales; componente de *deep learning* para la memoria. | Alto (PyTorch) |
+| Tabla de estaciones con zonas/distritos | Preguntas geográficas del chatbot. | Bajo |
+| Baseline con recencia | Ponderar más los años recientes (la contaminación baja con los años). | Bajo |
+| Scheduler en la nube | Ingesta 24/7 sin depender de un PC encendido. | Medio |
+
+> **Sobre el LSTM**: se valoró como modelo principal en v2, pero el detector actual ya cubre las
+> familias de anomalías relevantes (nivel, sensor caído, sensor congelado) y, sin datos etiquetados,
+> su mejora no es medible. Queda como mejora opcional, no como bloqueo.
 
 ---
 
 ## Tecnologías
 
 Python · pandas / NumPy · scikit-learn · PostgreSQL 18 (Docker) · SQLAlchemy + psycopg2 ·
-pyarrow · pytest · GitHub Actions · (futuro: PyTorch, ChromaDB, FastAPI, LLM local)
+pyarrow · pytest · GitHub Actions · (futuro: ChromaDB, FastAPI, LLM local)
