@@ -22,7 +22,7 @@ PostgreSQL. Las fases 2–4 (Vector DB, chatbot LLM, dashboard) están por empez
 | PostgreSQL en Docker (volumen persistente) | ✅ Hecho |
 | Pipeline de tiempo real (API → Postgres → inferencia) | ✅ Hecho |
 | CI/CD (tests unitarios + integración) | ✅ Hecho |
-| Tabla de estaciones con zonas | ⏳ Pendiente |
+| Tabla de estaciones (distrito, tipo, coordenadas) | ✅ Hecho |
 | Vector DB + LLM + dashboard | 🔜 Fases 2–4 |
 
 ---
@@ -138,6 +138,12 @@ python src/etl/cargar_resumen_ml.py
 > Alternativa rápida: si descargas el `resumen_datos_ml.parquet` de la carpeta Data/processed del Drive que tenemos en común, puedes
 > saltarte los notebooks e ir directo al `cargar_resumen_ml.py`.
 
+Y carga el catálogo de estaciones (nombres, distritos, coordenadas, tipo):
+
+```bash
+python src/etl/cargar_estaciones.py
+```
+
 ### 5. Ejecutar el pipeline de tiempo real
 
 ```bash
@@ -180,6 +186,7 @@ pytest tests/ --ignore=tests/test_integracion_db.py -v
 │   ├── inferencia.py                       # aplica el Isolation Forest
 │   ├── pipeline_tiempo_real.py             # orquestador API → Postgres → anomalías
 │   ├── cargar_resumen_ml.py                # carga inicial masiva (COPY) de ResumenDatosML
+│   ├── cargar_estaciones.py                # carga la tabla de estaciones (con distrito)
 │   └── ingesta_datos_live_csv.py           # backup diario a CSV (GitHub Action)
 ├── tests/                                   # tests unitarios y de integración
 ├── docker-compose.yml                       # PostgreSQL 18 + volumen
@@ -196,6 +203,7 @@ pytest tests/ --ignore=tests/test_integracion_db.py -v
 | `calidad_aire_horas_live` | Horario crudo en formato largo (una fila por medición horaria). Clave única `(estacion, magnitud, fecha)`. |
 | `resumen_datos_ml` | **Tabla principal**: una fila por (estación, magnitud, día, bloque) con estadísticos, baseline y salida del modelo (`anomaly_score`, `is_anomaly`, `expected_value`). ~1,27M filas. |
 | `baseline_historico` | Valor esperado (`media_esperada`, `std_esperada`) por (estación, magnitud, bloque, mes). Lo usa la inferencia. |
+| `estaciones` | Dimensión de las 24 estaciones: `nombre`, `distrito`, `tipo` (tráfico/fondo/suburbana), coordenadas y qué contaminantes mide. Se une a las tablas de mediciones por `estacion = codigo_corto`; da el contexto geográfico al chatbot. |
 
 ### Bloques del día
 
@@ -253,7 +261,6 @@ enchufable, así que añadir un detector nuevo no toca el resto del sistema.
 |---|---|---|
 | **Autoencoder (PCA)** | Anomalías de *forma* del perfil horario, solo con scikit-learn (un autoencoder lineal equivale a PCA). | Bajo |
 | **LSTM Autoencoder** | Lo mismo con no-linealidades temporales; componente de *deep learning* para la memoria. | Alto (PyTorch) |
-| Tabla de estaciones con zonas/distritos | Preguntas geográficas del chatbot. | Bajo |
 | Baseline con recencia | Ponderar más los años recientes (la contaminación baja con los años). | Bajo |
 | Scheduler en la nube | Ingesta 24/7 sin depender de un PC encendido. | Medio |
 

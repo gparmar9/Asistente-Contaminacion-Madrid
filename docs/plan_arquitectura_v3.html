@@ -142,7 +142,7 @@
                     <tr><td>PostgreSQL en Docker</td><td><span class="badge badge-done">Hecho</span></td><td>docker-compose + volumen nombrado</td></tr>
                     <tr><td>Pipeline de tiempo real</td><td><span class="badge badge-done">Hecho</span></td><td>API &rarr; Postgres &rarr; inferencia &rarr; anomalías (idempotente)</td></tr>
                     <tr><td>CI/CD (tests)</td><td><span class="badge badge-done">Hecho</span></td><td>GitHub Actions: unit + integración con Postgres</td></tr>
-                    <tr><td>Tabla de Estaciones (zonas)</td><td><span class="badge badge-pending">Pendiente</span></td><td>Necesaria para preguntas geográficas del chatbot</td></tr>
+                    <tr><td>Tabla de Estaciones (zonas)</td><td><span class="badge badge-done">Hecho</span></td><td>24 estaciones con distrito, tipo y coordenadas (<code>cargar_estaciones.py</code>)</td></tr>
                     <tr><td>Vector DB + documentos</td><td><span class="badge badge-todo">Fase 2</span></td><td>ChromaDB con estudios de salud / normativa</td></tr>
                     <tr><td>LLM local + tool use</td><td><span class="badge badge-todo">Fase 3</span></td><td>Consulta SQL + búsqueda documental</td></tr>
                     <tr><td>Informes + dashboard</td><td><span class="badge badge-todo">Fase 4</span></td><td>Web con chatbot integrado</td></tr>
@@ -262,6 +262,7 @@
                     <tr><td><code>src/etl/inferencia.py</code></td><td>Aplica el Isolation Forest y produce <code>anomaly_score</code> / <code>is_anomaly</code>.</td></tr>
                     <tr><td><code>src/etl/pipeline_tiempo_real.py</code></td><td>Orquestador: API &rarr; horario crudo &rarr; inferencia &rarr; upsert en <code>resumen_datos_ml</code>.</td></tr>
                     <tr><td><code>src/etl/cargar_resumen_ml.py</code></td><td>Carga inicial (masiva, vía COPY) de la tabla ResumenDatosML desde el parquet de los notebooks.</td></tr>
+                    <tr><td><code>src/etl/cargar_estaciones.py</code></td><td>Carga la tabla de estaciones (nombre, distrito, tipo, coordenadas).</td></tr>
                     <tr><td><code>src/etl/ingesta_datos_live_csv.py</code></td><td>Backup diario a CSV (GitHub Action). Independiente del pipeline.</td></tr>
                 </tbody>
             </table>
@@ -329,6 +330,11 @@
 
             <h3>3. baseline_historico &mdash; valor esperado</h3>
             <p>Lookup de <code>media_esperada</code> / <code>std_esperada</code> por (estación, magnitud, bloque, mes). Lo usa la inferencia en tiempo real.</p>
+
+            <h3>4. estaciones &mdash; dimensión geográfica</h3>
+            <p>Las 24 estaciones con <code>nombre</code>, <code>distrito</code>, <code>tipo</code> (tráfico/fondo/suburbana),
+            coordenadas y qué contaminantes mide cada una. Se une a las mediciones por <code>estacion = codigo_corto</code>;
+            da el contexto geográfico que necesita el chatbot para preguntas por zona/distrito.</p>
 
             <h3>Bloques del día</h3>
             <table>
@@ -422,7 +428,6 @@
                 <tbody>
                     <tr><td><strong>Autoencoder (PCA)</strong></td><td>Anomalías de <em>forma</em> del perfil horario, solo con scikit-learn (un autoencoder lineal equivale a PCA).</td><td>Bajo</td></tr>
                     <tr><td><strong>LSTM Autoencoder</strong></td><td>Lo mismo con no-linealidades temporales; componente de <em>deep learning</em> para la memoria.</td><td>Alto (PyTorch)</td></tr>
-                    <tr><td>Tabla de estaciones con zonas/distritos</td><td>Preguntas geográficas del chatbot (&laquo;¿qué distrito&hellip;?&raquo;).</td><td>Bajo</td></tr>
                     <tr><td>Baseline con recencia</td><td>Ponderar más los años recientes (la contaminación baja con los años).</td><td>Bajo</td></tr>
                     <tr><td>Scheduler en la nube</td><td>Ingesta 24/7 sin depender de un PC encendido.</td><td>Medio</td></tr>
                 </tbody>
@@ -443,7 +448,6 @@
                     <tr><td>¿Dónde corre el pipeline en producción 24/7?</td><td>Infra de Azure/AWS del máster</td><td><span class="badge badge-pending">Pendiente</span></td></tr>
                     <tr><td>¿LLM genera SQL vs queries predefinidas?</td><td>Tamaño de modelo que permita el hardware</td><td><span class="badge badge-pending">Pendiente</span></td></tr>
                     <tr><td>¿Qué documentos para la Vector DB?</td><td>Definir preguntas ejemplo</td><td><span class="badge badge-todo">TODO</span></td></tr>
-                    <tr><td>Tabla de Estaciones con zonas/distritos</td><td>Datos de ubicación</td><td><span class="badge badge-todo">TODO</span></td></tr>
                 </tbody>
             </table>
         </div>
