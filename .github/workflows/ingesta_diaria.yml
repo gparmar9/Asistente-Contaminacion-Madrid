@@ -11,12 +11,13 @@ jobs:
 
     steps:
       - name: Checkout repositorio
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
+          ref: development
           token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Configurar Python 3.12
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: '3.12'
           cache: 'pip'
@@ -34,4 +35,4 @@ jobs:
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add data/processed/calidad_aire_live.csv
           git diff --cached --quiet || git commit -m "data: actualización automática calidad aire $(date +'%Y-%m-%d')"
-          git push
+          git push origin HEAD:development
