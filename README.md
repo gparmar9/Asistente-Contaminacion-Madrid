@@ -169,9 +169,10 @@ pytest tests/ --ignore=tests/test_integracion_db.py -v
 │   ├── raw/
 │   │   ├── datos_completos_2018_2026.csv   # histórico (NO en git — conseguir aparte)
 │   │   └── estaciones-de-control.csv       # catálogo de estaciones
-│   └── processed/
-│       ├── calidad_aire_live.csv           # backup diario (GitHub Action)
-│       └── *.parquet                        # artefactos de notebooks (NO en git)
+│   ├── processed/
+│   │   ├── calidad_aire_live.csv           # backup diario (GitHub Action)
+│   │   └── *.parquet                        # artefactos de notebooks (NO en git)
+│   └── rag/                                 # corpus fuente del RAG (Fase 2) — .md versionados
 ├── docs/
 │   └── plan_arquitectura_v3.html            # diseño y decisiones (referencia viva)
 ├── models/
@@ -204,6 +205,38 @@ pytest tests/ --ignore=tests/test_integracion_db.py -v
 | `resumen_datos_ml` | **Tabla principal**: una fila por (estación, magnitud, día, bloque) con estadísticos, baseline y salida del modelo (`anomaly_score`, `is_anomaly`, `expected_value`). ~1,27M filas. |
 | `baseline_historico` | Valor esperado (`media_esperada`, `std_esperada`) por (estación, magnitud, bloque, mes). Lo usa la inferencia. |
 | `estaciones` | Dimensión de las 24 estaciones: `nombre`, `distrito`, `tipo` (tráfico/fondo/suburbana), coordenadas y qué contaminantes mide. Se une a las tablas de mediciones por `estacion = codigo_corto`; da el contexto geográfico al chatbot. |
+
+---
+
+## Corpus documental para el RAG (Fase 2)
+
+Los datos de contaminación viven **estructurados en PostgreSQL**; el conocimiento externo
+(salud, normativa, protocolos) vive como **documentos** en [`data/rag/`](data/rag/). Es el
+corpus fuente que en la Fase 2 se trocea, se convierte en *embeddings* y se indexa en la Vector
+DB (ChromaDB).
+
+- **Formato**: Markdown (`.md`), un documento por tema. Se trocea por encabezados `##`.
+- **Se versionan en git**: son fuente escrita a mano y pequeños. Lo que **no** se versiona es el
+  índice generado (embeddings/ChromaDB), igual que los `.parquet`.
+- **Metadatos**: cada documento empieza con *frontmatter* YAML para poder filtrar en la búsqueda
+  y citar la fuente en la respuesta:
+
+  ```yaml
+  ---
+  titulo: Ozono troposférico (O3) y salud
+  tema: salud            # salud | normativa | referencia | estaciones | protocolo | disclaimer
+  contaminantes: [O3]    # códigos afectados; [] si no aplica
+  fuente: "OMS 2021; EEA; US EPA"
+  ---
+  ```
+
+  > Nota YAML: los códigos que YAML interpreta como booleanos (`NO`, `YES`, `ON`, `OFF`) deben ir
+  > entrecomillados en la lista `contaminantes` (p. ej. `["NO", NO2, NOx]`).
+
+- **Disclaimer médico**: [`data/rag/aviso_medico.md`](data/rag/aviso_medico.md) (`tema: disclaimer`)
+  está en el corpus para trazabilidad, pero su recordatorio debe aplicarse **desde el system
+  prompt** del chatbot, no dejarse a la recuperación semántica (podría no recuperarse justo en la
+  respuesta que lo necesita).
 
 ### Bloques del día
 

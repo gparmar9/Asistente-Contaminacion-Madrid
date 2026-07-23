@@ -10,6 +10,9 @@ data/processed/*
 *.h5
 *.parquet
 
+# Corpus RAG
+!data/rag/
+
 # Entornos virtuales
 venv/
 .env
