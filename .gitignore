@@ -10,8 +10,9 @@ data/processed/*
 *.h5
 *.parquet
 
-# Corpus RAG
+# Corpus RAG (los .md se versionan; el indice generado no)
 !data/rag/
+data/chroma/
 
 # Entornos virtuales
 venv/
@@ -30,6 +31,7 @@ db/
 # Caches
 __pycache__/
 *.cache
+.pytest_cache/
 .ipynb_checkpoints/
 
 #APiusuario
