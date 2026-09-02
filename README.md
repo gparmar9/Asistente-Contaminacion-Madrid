@@ -12,7 +12,8 @@ conversacional con LLM.
 ## Estado del proyecto
 
 La **Fase 1 (datos + detección de anomalías)** está funcionando de punta a punta en local sobre
-PostgreSQL. Las fases 2–4 (Vector DB, chatbot LLM, dashboard) están por empezar.
+PostgreSQL, y la **Fase 2 (Vector DB)** ya indexa y busca sobre el corpus documental. Las fases 3–4
+(chatbot LLM, dashboard) están por empezar.
 
 | Bloque | Estado |
 |---|---|
@@ -23,7 +24,9 @@ PostgreSQL. Las fases 2–4 (Vector DB, chatbot LLM, dashboard) están por empez
 | Pipeline de tiempo real (API → Postgres → inferencia) | ✅ Hecho |
 | CI/CD (tests unitarios + integración) | ✅ Hecho |
 | Tabla de estaciones (distrito, tipo, coordenadas) | ✅ Hecho |
-| Vector DB + LLM + dashboard | 🔜 Fases 2–4 |
+| Corpus documental RAG en Markdown (`data/rag/`) | ✅ Hecho |
+| Vector DB: troceado + embeddings + ChromaDB + búsqueda semántica | ✅ Fase 2 |
+| Chatbot LLM + dashboard | 🔜 Fases 3–4 |
 
 ---
 
@@ -37,16 +40,16 @@ conocimiento de salud.
 
 - ✅ Ingesta histórico + tiempo real a PostgreSQL *(hecho)*
 - ✅ Detección de anomalías (Isolation Forest + baseline z-score) en `resumen_datos_ml` *(hecho)*
-- ⏳ Vector DB (ChromaDB) con documentos de salud y normativa + pipeline de embeddings
+- ✅ Vector DB (ChromaDB) con documentos de salud y normativa + pipeline de embeddings *(hecho)*
 - ⏳ Chatbot con *tool use*: consulta SQL (`query_sql`) + búsqueda documental / RAG (`search_documents`)
 - ⏳ Interfaz mínima (Streamlit) para chatear, con disclaimer médico
 
 **Fuera del MVP** (mejoras posteriores): informes automáticos rotativos, dashboard completo, LSTM
 y despliegue cloud 24/7.
 
-> Con la Fase 1 ya hecha, el camino al MVP es la **Fase 2 (Vector DB con documentos)** + la
-> **Fase 3 (LLM con tool use)**: un chatbot que combina los datos de contaminación (SQL) con el
-> contexto de salud (RAG), sobre una interfaz mínima.
+> Con las Fases 1 y 2 ya hechas, lo que queda para el MVP es la **Fase 3 (LLM con tool use)**: un
+> chatbot que combina los datos de contaminación (SQL) con el contexto de salud (RAG, ya
+> consultable vía `buscar_documentos`), sobre una interfaz mínima.
 
 ---
 
@@ -58,12 +61,14 @@ API Madrid (tiempo real) ──▶ pipeline_tiempo_real.py ──▶ PostgreSQL:
                                         ▼  agrega a bloques + features
 CSV histórico 2018-2026 ──▶ Notebooks 01/02/03 ──▶ Isolation Forest (.joblib) ──▶ PostgreSQL: resumen_datos_ml (+ anomalías)
                                                                                           │
-                                                                                          ▼  (Fase 2-4)
-                                                                         Vector DB + LLM local + Dashboard
+                                                                                          ▼  (Fases 3-4)
+                                                                                LLM local + Dashboard
+                                                                                          ▲
+data/rag/*.md ──▶ trocear_corpus.py ──▶ embeddings locales ──▶ ChromaDB: corpus_rag ───────┘  (Fase 2)
 ```
 
-Los **datos de contaminación viven estructurados en PostgreSQL**. La Vector DB (futura) solo
-contendrá documentos externos (salud, normativa), no datos de estaciones.
+Los **datos de contaminación viven estructurados en PostgreSQL**. La Vector DB solo contiene
+documentos externos (salud, normativa), no datos de estaciones.
 
 ---
 
@@ -153,7 +158,26 @@ python src/etl/pipeline_tiempo_real.py
 Baja datos de la API, los guarda en `calidad_aire_horas_live`, corre la inferencia y hace *upsert*
 en `resumen_datos_ml`. Es **idempotente**: reejecutarlo no duplica nada.
 
-### 6. Comprobar los tests
+### 6. Indexar el corpus documental (RAG, Fase 2)
+
+Independiente de los pasos 3–5: no necesita Postgres ni el histórico.
+
+```bash
+pip install -r requirements-rag.txt   # ⚠️ arrastra PyTorch, descarga grande
+python src/rag/ingesta_vector.py      # trocea data/rag/*.md e indexa en data/chroma/
+```
+
+La primera ejecución también descarga el modelo de embeddings (~470 MB, se cachea en `~/.cache`).
+Comprueba que la búsqueda responde:
+
+```bash
+python src/rag/buscar.py "¿puedo correr hoy si soy asmático?"
+```
+
+El índice se reconstruye entero en cada ejecución, así que reejecutar la ingesta tras tocar el
+corpus es la forma normal de actualizarlo.
+
+### 7. Comprobar los tests
 
 ```bash
 # Tests unitarios (rápidos, sin base de datos):
@@ -172,7 +196,8 @@ pytest tests/ --ignore=tests/test_integracion_db.py -v
 │   ├── processed/
 │   │   ├── calidad_aire_live.csv           # backup diario (GitHub Action)
 │   │   └── *.parquet                        # artefactos de notebooks (NO en git)
-│   └── rag/                                 # corpus fuente del RAG (Fase 2) — .md versionados
+│   ├── rag/                                 # corpus fuente del RAG (Fase 2) — .md versionados
+│   └── chroma/                              # índice vectorial generado (NO en git)
 ├── docs/
 │   └── plan_arquitectura_v3.html            # diseño y decisiones (referencia viva)
 ├── models/
@@ -181,18 +206,25 @@ pytest tests/ --ignore=tests/test_integracion_db.py -v
 │   ├── 01_eda_calidad_aire.ipynb           # análisis exploratorio
 │   ├── 02_preprocesado_y_features.ipynb    # bloques del día + features → ResumenDatosML
 │   └── 03_entrenamiento_anomalias.ipynb    # Isolation Forest + baseline
-├── src/etl/
-│   ├── limpiar_datos.py                    # parser único ancho→largo (wide_a_largo)
-│   ├── features_bloques.py                 # agregación a bloques + features (z-score, cobertura, CV)
-│   ├── inferencia.py                       # aplica el Isolation Forest
-│   ├── pipeline_tiempo_real.py             # orquestador API → Postgres → anomalías
-│   ├── cargar_resumen_ml.py                # carga inicial masiva (COPY) de ResumenDatosML
-│   ├── cargar_estaciones.py                # carga la tabla de estaciones (con distrito)
-│   └── ingesta_datos_live_csv.py           # backup diario a CSV (GitHub Action)
+├── src/
+│   ├── etl/
+│   │   ├── limpiar_datos.py                    # parser único ancho→largo (wide_a_largo)
+│   │   ├── features_bloques.py             # agregación a bloques + features (z-score, cobertura, CV)
+│   │   ├── inferencia.py                   # aplica el Isolation Forest
+│   │   ├── pipeline_tiempo_real.py         # orquestador API → Postgres → anomalías
+│   │   ├── cargar_resumen_ml.py            # carga inicial masiva (COPY) de ResumenDatosML
+│   │   ├── cargar_estaciones.py            # carga la tabla de estaciones (con distrito)
+│   │   └── ingesta_datos_live_csv.py       # backup diario a CSV (GitHub Action)
+│   └── rag/
+│       ├── trocear_corpus.py               # .md → fragmentos con metadatos (lógica pura, testeada)
+│       ├── embeddings.py                   # modelo de embeddings + colección ChromaDB (config común)
+│       ├── ingesta_vector.py               # reconstruye el índice vectorial desde el corpus
+│       └── buscar.py                       # búsqueda semántica (base de la tool `search_documents`)
 ├── tests/                                   # tests unitarios y de integración
 ├── docker-compose.yml                       # PostgreSQL 18 + volumen
 ├── .env.example                             # plantilla de variables de entorno
-└── requirements.txt
+├── requirements.txt
+└── requirements-rag.txt                     # dependencias extra de la Fase 2 (RAG)
 ```
 
 ---
@@ -212,8 +244,8 @@ pytest tests/ --ignore=tests/test_integracion_db.py -v
 
 Los datos de contaminación viven **estructurados en PostgreSQL**; el conocimiento externo
 (salud, normativa, protocolos) vive como **documentos** en [`data/rag/`](data/rag/). Es el
-corpus fuente que en la Fase 2 se trocea, se convierte en *embeddings* y se indexa en la Vector
-DB (ChromaDB).
+corpus fuente que se trocea, se convierte en *embeddings* y se indexa en la Vector DB (ChromaDB)
+— ver [Pipeline RAG / Vector DB](#pipeline-rag--vector-db-fase-2).
 
 - **Formato**: Markdown (`.md`), un documento por tema. Se trocea por encabezados `##`.
 - **Se versionan en git**: son fuente escrita a mano y pequeños. Lo que **no** se versiona es el
@@ -237,6 +269,34 @@ DB (ChromaDB).
   está en el corpus para trazabilidad, pero su recordatorio debe aplicarse **desde el system
   prompt** del chatbot, no dejarse a la recuperación semántica (podría no recuperarse justo en la
   respuesta que lo necesita).
+
+## Pipeline RAG / Vector DB (Fase 2)
+
+Convierte el corpus de [`data/rag/`](data/rag/) en un índice vectorial consultable en lenguaje
+natural. Vive en [`src/rag/`](src/rag/) y **no depende de PostgreSQL**: se puede usar sin levantar
+Docker.
+
+```
+data/rag/*.md ──▶ trocear_corpus.py ──▶ embeddings.py ──▶ ChromaDB (data/chroma/, colección `corpus_rag`)
+                     (fragmentos)        (vectores)                    │
+                                                                       ▼
+                                                       buscar.py · buscar_documentos(consulta, k, tema)
+```
+
+| Módulo | Qué hace |
+|---|---|
+| [`trocear_corpus.py`](src/rag/trocear_corpus.py) | Separa el frontmatter, trocea por encabezados `##` y antepone `título — sección` a cada fragmento (da contexto al embedding y mejora el *recall*). Ignora la sección `Fuentes` (ya está en los metadatos) y aplana `contaminantes` a cadena, porque ChromaDB no admite listas. Es **lógica pura**, sin torch ni ChromaDB: por eso se puede testear en CI. |
+| [`embeddings.py`](src/rag/embeddings.py) | Config compartida por ingesta y búsqueda para que no se desincronicen: modelo `paraphrase-multilingual-MiniLM-L12-v2` (local, multilingüe, se cachea en memoria) y colección persistente con métrica **coseno**. |
+| [`ingesta_vector.py`](src/rag/ingesta_vector.py) | Reconstruye el índice de cero en cada ejecución, así que el índice siempre refleja el corpus actual (**idempotente**). |
+| [`buscar.py`](src/rag/buscar.py) | `buscar_documentos(consulta, k, tema)` — devuelve los *k* fragmentos más cercanos, con filtro opcional por metadatos. Es la base de la futura tool `search_documents` de la Fase 3. |
+
+**Dependencias**: van en [`requirements-rag.txt`](requirements-rag.txt) aparte, porque
+`sentence-transformers` arrastra PyTorch (descarga de cientos de MB) y no hace falta para la Fase 1.
+
+> El índice generado (`data/chroma/`) **no se versiona**, igual que los `.parquet`: se regenera con
+> `python src/rag/ingesta_vector.py`.
+
+---
 
 ### Bloques del día
 
@@ -306,4 +366,5 @@ enchufable, así que añadir un detector nuevo no toca el resto del sistema.
 ## Tecnologías
 
 Python · pandas / NumPy · scikit-learn · PostgreSQL 18 (Docker) · SQLAlchemy + psycopg2 ·
-pyarrow · pytest · GitHub Actions · (futuro: ChromaDB, FastAPI, LLM local)
+pyarrow · pytest · GitHub Actions · ChromaDB + sentence-transformers (RAG) ·
+(futuro: FastAPI, LLM local)
