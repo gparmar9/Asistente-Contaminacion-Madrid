@@ -262,7 +262,14 @@ una estación de tráfico y en una de fondo.
   la estación 18 la madrugada del **01-01-2019** (129,5 µg/m³ frente a 14,9 esperados), atribuible a
   la pirotecnia de Nochevieja.
 
-### 6.5 Limitaciones del detector
+### 6.5 Observación: bloques en curso y falsos positivos
+
+Al ejecutar el pipeline a media tarde se marcaron 41 anomalías y dos horas después, 15. La
+explicación probable es que los bloques del día **aún sin terminar** tienen `COBERTURA` baja y el
+detector los interpreta como caída de sensor. Es un argumento para ejecutar la ingesta al final
+del día, o para excluir el bloque en curso del cálculo. `[por confirmar con una consulta]`
+
+### 6.6 Limitaciones del detector
 
 - **Sin etiquetas:** no se pueden calcular precisión ni *recall*; la evaluación es cualitativa
   (casos extremos, solapamiento con el baseline y eventos conocidos).
@@ -362,7 +369,11 @@ para llamar a la API de Madrid.
 | B | Lambda en VPC + NAT Gateway | ~32 $/mes | Desproporcionada para datos públicos |
 | C | Lambda sin VPC descarga a S3; Lambda en VPC lee vía Gateway Endpoint y escribe en RDS privado | 0 $ | La más elegante; mejora futura |
 
-**Estado:** opción A recomendada, **pendiente de confirmar**.
+**Estado: opción A aplicada** (2026-09-16). El grupo de seguridad admite el puerto 5432 desde
+`0.0.0.0/0` porque una Lambda fuera de VPC no tiene IP fija que autorizar. Mitigaciones: TLS
+obligatorio (`rds.force_ssl`) `[pendiente de verificar el valor]`, contraseña larga y aleatoria
+cifrada en SSM, y datos públicos sin información personal. Es una decisión consciente y
+documentada, no una configuración por defecto; la opción C queda como mejora futura.
 
 ### 8.5 Seguridad
 
@@ -495,6 +506,7 @@ para llamar a la API de Madrid.
 | 2026-09-16 | Desactivada la ingesta diaria a CSV (`ingesta_diaria.yml`): se comenta el cron y se conserva el disparo manual |
 | 2026-09-16 | Imagen de Lambda construida y probada en local (1,26 GB, `x86_64`). Detectado y corregido un fallo de tipos en la limpieza (`provincia`/`municipio` como texto) con test de regresión |
 | 2026-09-16 | Pipeline validado de punta a punta dentro del entorno de Lambda contra RDS: 2.568 mediciones horarias nuevas, 313 bloques y 41 anomalías en datos reales; la segunda invocación devuelve 0 filas nuevas (idempotencia confirmada en la nube) |
+| 2026-09-16 | Imagen subida a ECR (304 MB) y función Lambda `jupiter-pipeline` creada (imagen, x86_64, 1024 MB, timeout 300 s, concurrencia reservada 1) con rol de ejecución de mínimo privilegio. Primera invocación en AWS correcta |
 
 ---
 
