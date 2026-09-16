@@ -1,8 +1,12 @@
 name: Ingesta diaria programada calidad aire Madrid
 
+# DESACTIVADA (2026-09-16): los datos en tiempo real se ingieren en RDS mediante la
+# Lambda del pipeline. Este workflow commiteaba ~13 MB diarios al repositorio y
+# provocaba conflictos de merge en todas las ramas. Se conserva el disparo manual
+# hasta que la Lambda lleve unos dias funcionando; luego se puede borrar el fichero.
 on:
-  schedule:
-    - cron: '45 21 * * *' 
+  # schedule:
+  #   - cron: '45 21 * * *'
   workflow_dispatch:
 
 jobs:
