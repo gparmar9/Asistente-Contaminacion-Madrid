@@ -262,26 +262,31 @@ una estación de tráfico y en una de fondo.
   la estación 18 la madrugada del **01-01-2019** (129,5 µg/m³ frente a 14,9 esperados), atribuible a
   la pirotecnia de Nochevieja.
 
-### 6.5 Observación: el recuento de anomalías depende del momento de la ejecución
+### 6.5 Qué detecta el modelo en un día real (2026-09-16)
 
-Ejecutando el pipeline sobre el día en curso, a media tarde se marcaron 41 anomalías y dos horas
-después, 15: cada pasada reevalúa los mismos bloques con más horas medidas y el resultado cambia.
-Reparto del día 2026-09-16 a las ~19:40 (103-107 bloques por franja):
+Primera ejecución del detector sobre datos en vivo en AWS. Desglose de los bloques del día,
+separando los marcados como anómalos de los normales:
 
-| Bloque | Anomalías | Cobertura media |
-|---|---|---|
-| madrugada (completa) | 0 | 1,00 |
-| mañana | 13 | 0,94 |
-| tarde (en curso) | 2 | 0,84 |
+| Bloque | Marcado | n | Cobertura media | Cobertura mín. | \|z\| medio | \|z\| máx |
+|---|---|---|---|---|---|---|
+| madrugada | no | 103 | 1,00 | 1,00 | 0,60 | 1,69 |
+| mañana | **sí** | 13 | 0,55 | 0,33 | 1,14 | 1,68 |
+| mañana | no | 90 | 1,00 | 0,67 | 0,98 | 2,21 |
+| tarde | **sí** | 2 | 0,50 | 0,29 | 0,98 | 1,61 |
+| tarde | no | 105 | 0,85 | 0,71 | 0,75 | 1,78 |
 
-La hipótesis inicial —que la baja cobertura del bloque en curso genera falsos positivos de
-«sensor caído»— **no queda respaldada**: el bloque con menos cobertura es el que menos anomalías
-tiene. Lo que sí se observa es que la franja ya cerrada no marca ninguna. Queda pendiente separar
-qué feature dispara las 13 de la mañana (`z_score` alto = anomalía ambiental real, frente a
-`cobertura` mínima baja = sensor caído en estaciones concretas). `[por confirmar]`
+**Resultado clave: las 15 anomalías del día son todas operativas, ninguna ambiental.** Los bloques
+marcados tienen la mitad de las horas sin medir (cobertura 0,29-0,55) mientras su nivel es normal.
 
-Implicación práctica, en cualquier caso: **la ingesta se programa al final del día** (23:45), con
-las cuatro franjas cerradas, para que el recuento sea estable y comparable entre días.
+**El baseline z-score no habría detectado nada:** el máximo del día es 2,21 y el umbral es 3. Es la
+comprobación empírica, sobre datos reales, de que el z-score es ciego a los fallos de sensor y de
+que el Isolation Forest aporta valor precisamente ahí. Sirve como caso de estudio en la memoria.
+
+**Efecto del momento de ejecución.** La misma jornada dio 41 anomalías a las 17:06 y 15 a las 19:40:
+el bloque de tarde en curso tenía entonces ~0,5 de cobertura y se marcaba; al completarse hasta 0,85
+dejó de marcarse. Es decir, ejecutar a media jornada genera falsos positivos transitorios en la
+franja abierta. De ahí que la ingesta se programe a las **23:45**, con las cuatro franjas cerradas:
+el recuento es estable y comparable entre días.
 
 ### 6.6 Limitaciones del detector
 
