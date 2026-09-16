@@ -421,6 +421,22 @@ documentada, no una configuración por defecto; la opción C queda como mejora f
 - **Arranques en frío medidos:** 3,6 s de inicialización; la ejecución completa tarda 9,5 s en frío
   y 3,0 s en caliente, muy lejos del timeout de 300 s. Irrelevante para una tarea por lotes.
 
+### 8.7 Observabilidad
+
+Dos alarmas de CloudWatch que avisan por correo (SNS), pensadas para dos fallos distintos:
+
+| Alarma | Métrica | Dispara cuando |
+|---|---|---|
+| `jupiter-pipeline-errores` | `Errors` (suma, 5 min) | La función lanza una excepción |
+| `jupiter-pipeline-sin-ejecuciones` | `Invocations` (suma, 24 h) | No ha habido ninguna ejecución |
+
+La segunda es la que más aporta y depende de un detalle de configuración: `treatMissingData:
+breaching`, es decir, **la ausencia de datos se interpreta como fallo**. Cubre el fallo silencioso
+de que el programador deje de disparar o alguien desactive la función: no hay errores que contar,
+no salta nada y el hueco en los datos se descubriría semanas después.
+
+La retención de los logs se baja a 14 días; por defecto no caducan nunca.
+
 ---
 
 ## 9. Metodología y calidad del software
@@ -527,6 +543,7 @@ documentada, no una configuración por defecto; la opción C queda como mejora f
 | 2026-09-16 | Imagen de Lambda construida y probada en local (1,26 GB, `x86_64`). Detectado y corregido un fallo de tipos en la limpieza (`provincia`/`municipio` como texto) con test de regresión |
 | 2026-09-16 | Pipeline validado de punta a punta dentro del entorno de Lambda contra RDS: 2.568 mediciones horarias nuevas, 313 bloques y 41 anomalías en datos reales; la segunda invocación devuelve 0 filas nuevas (idempotencia confirmada en la nube) |
 | 2026-09-16 | Imagen subida a ECR (304 MB) y función Lambda `jupiter-pipeline` creada (imagen, x86_64, 1024 MB, timeout 300 s, concurrencia reservada 1) con rol de ejecución de mínimo privilegio. Primera invocación en AWS correcta |
+| 2026-09-16 | Ejecución diaria programada a las 23:45 (`Europe/Madrid`) con EventBridge Scheduler y rol propio; verificado `rds.force_ssl = 1`; alarmas de CloudWatch de errores y de ausencia de ejecuciones con aviso por SNS |
 
 ---
 
