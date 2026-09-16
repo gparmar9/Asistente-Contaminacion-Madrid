@@ -86,7 +86,7 @@ Hilo conductor de la memoria: cómo y por qué cambió el diseño.
 | 2026-07-23 | RAG | Documentos por recopilar → **corpus propio de 11 documentos Markdown con metadatos** | Controlar calidad, fuentes y troceado del conocimiento |
 | 2026-09-02 | Embeddings | `all-MiniLM-L6-v2` (plan v2) → **`paraphrase-multilingual-MiniLM-L12-v2`** | El corpus y las preguntas están en español; el modelo original es solo inglés |
 | 2026-09-12 | Infraestructura | Todo en local → **AWS**: Lambda + S3 + RDS (en curso) | Requisito del TFM y ejecución 24/7 sin depender de un PC |
-| 2026-09-12 | BBDD (planificado) | PostgreSQL en Docker → **Amazon RDS for PostgreSQL** | Servicio gestionado: backups, parches y snapshots (ver §8) |
+| 2026-09-16 | Base de datos | PostgreSQL 18 en Docker → **Amazon RDS for PostgreSQL 18.3** (`db.t4g.micro`, Single-AZ, 20 GB gp2) | Servicio gestionado: backups, parches y snapshots automáticos. Migración sin cambios de código: solo cambia `DATABASE_URL` (ver §8) |
 
 **Decisiones abiertas que alimentarán esta tabla:** LLM local vs. servicio gestionado, SQL generado
 por el LLM vs. consultas predefinidas, y opción de red en AWS (§12).
@@ -314,8 +314,10 @@ una estación de tráfico y en una de fondo.
 | Pieza | Destino | Motivo |
 |---|---|---|
 | `pipeline_tiempo_real.py` | **Lambda** (imagen de contenedor) + **EventBridge Scheduler** cada 20 min | Ingesta 24/7 |
-| Modelo, histórico y parquet | **S3** con versionado | Fuente única para el equipo |
-| PostgreSQL en Docker | **RDS for PostgreSQL** `db.t4g.micro` | Servicio gestionado |
+| Modelo, histórico y parquet | **S3** con versionado | Fuente única para el equipo; sustituye a compartirlos por Drive |
+
+Los objetos se organizan con los mismos prefijos que el repositorio: `models/`, `data/raw/` y `data/processed/`.
+| PostgreSQL en Docker | **RDS for PostgreSQL** `db.t4g.micro` | Servicio gestionado. **Hecho** (2026-09-16) |
 
 **Fuera de alcance por ahora:** notebooks (siguen en local), Vector DB, LLM, API y dashboard.
 
@@ -333,7 +335,7 @@ una estación de tráfico y en una de fondo.
 
 | Servicio | Configuración | Con free tier | Sin free tier |
 |---|---|---|---|
-| RDS | `db.t4g.micro`, Single-AZ + 20 GB gp3 | 0 $ | ~15,4 $ |
+| RDS | `db.t4g.micro`, Single-AZ + 20 GB gp2 | 0 $ | ~15,6 $ |
 | Lambda | ~66.000 GB-s/mes | 0 $ | 0 $ |
 | EventBridge, SSM, CloudWatch, SNS | Volumen testimonial | 0 $ | 0 $ |
 | S3 + ECR | ~150 MB + imagen de ~700 MB | 0 $ | ~0,1 $ |
@@ -341,6 +343,12 @@ una estación de tráfico y en una de fondo.
 
 - **~95 % del coste es RDS.** Bajar la frecuencia del pipeline no ahorra nada.
 - Coste a evitar: un **NAT Gateway** (~32 $/mes) duplicaría la factura.
+- La instancia se creó con la **plantilla de capa gratuita** (750 h/mes de `db.t4g.micro` Single-AZ,
+  20 GB de SSD de uso general y 20 GB de backups). La configuración elegida cabe entera en esos
+  límites; se eligió **gp2** en lugar de gp3 precisamente porque es lo que cubre la capa gratuita.
+  `[por confirmar: si la cuenta del máster sigue dentro de los 12 meses de capa gratuita]`
+- Ahorro durante el desarrollo: la instancia puede pararse (máximo 7 días seguidos) y solo se paga
+  el disco. Deja de ser posible cuando la Lambda ingiera cada 20 minutos.
 
 ### 8.4 Decisión de red
 
@@ -362,7 +370,10 @@ para llamar a la API de Madrid.
 - **Mínimo privilegio:** la Lambda tendrá un rol que solo puede leer `models/*` del bucket, los
   parámetros `/jupiter/*` de SSM y escribir sus logs.
 - **S3:** acceso público bloqueado, ACL deshabilitadas, cifrado SSE-S3 y versionado.
-- **Secretos** en SSM Parameter Store (`SecureString`), no en ficheros desplegados.
+- **Secretos** en SSM Parameter Store (`SecureString`), no en ficheros desplegados: la cadena de
+  conexión vive en `/jupiter/database_url` y la Lambda la leerá en ejecución con su rol. Efecto
+  secundario útil: el equipo deja de compartirse la contraseña, cada persona la obtiene con sus
+  propias credenciales de AWS.
 - **Presupuesto con alertas** antes de crear recursos. Un Budget **avisa, no bloquea**.
 - **Roles previstos:** ejecución de la Lambda (obligatorio), EventBridge Scheduler (obligatorio) y
   OIDC para GitHub Actions (opcional). Un **usuario** tiene claves permanentes; un **rol** se asume
@@ -466,6 +477,10 @@ para llamar a la API de Madrid.
 | 2026-09-14 | Acceso a la cuenta AWS del máster (SSO, `eu-west-1`) y AWS CLI configurada |
 | 2026-09-15 | Presupuesto mensual `jupiter-mensual` (10 $) y bucket S3 `jupiter-calidad-aire-madrid` (sin acceso público, versionado, SSE-S3) |
 | 2026-09-15 | Verificado que el CSV histórico actual no tiene filas duplicadas |
+| 2026-09-16 | Artefactos subidos a S3 (Guillermo): modelo, histórico, catálogo de estaciones y los dos parquet — 5 objetos, 166 MiB |
+| 2026-09-16 | Instancia RDS `jupiter-postgres` creada (Guillermo): PostgreSQL 18.3, `db.t4g.micro`, Single-AZ, 20 GB gp2, acceso público restringido por grupo de seguridad y TLS obligatorio |
+| 2026-09-16 | Tablas cargadas en RDS desde local con los scripts existentes: `resumen_datos_ml` (1.274.644 filas) y `estaciones` (24). La Fase 1 deja de depender del PostgreSQL en Docker |
+| 2026-09-16 | Cadena de conexión guardada cifrada en SSM Parameter Store (`/jupiter/database_url`, SecureString) |
 
 ---
 
