@@ -262,12 +262,26 @@ una estación de tráfico y en una de fondo.
   la estación 18 la madrugada del **01-01-2019** (129,5 µg/m³ frente a 14,9 esperados), atribuible a
   la pirotecnia de Nochevieja.
 
-### 6.5 Observación: bloques en curso y falsos positivos
+### 6.5 Observación: el recuento de anomalías depende del momento de la ejecución
 
-Al ejecutar el pipeline a media tarde se marcaron 41 anomalías y dos horas después, 15. La
-explicación probable es que los bloques del día **aún sin terminar** tienen `COBERTURA` baja y el
-detector los interpreta como caída de sensor. Es un argumento para ejecutar la ingesta al final
-del día, o para excluir el bloque en curso del cálculo. `[por confirmar con una consulta]`
+Ejecutando el pipeline sobre el día en curso, a media tarde se marcaron 41 anomalías y dos horas
+después, 15: cada pasada reevalúa los mismos bloques con más horas medidas y el resultado cambia.
+Reparto del día 2026-09-16 a las ~19:40 (103-107 bloques por franja):
+
+| Bloque | Anomalías | Cobertura media |
+|---|---|---|
+| madrugada (completa) | 0 | 1,00 |
+| mañana | 13 | 0,94 |
+| tarde (en curso) | 2 | 0,84 |
+
+La hipótesis inicial —que la baja cobertura del bloque en curso genera falsos positivos de
+«sensor caído»— **no queda respaldada**: el bloque con menos cobertura es el que menos anomalías
+tiene. Lo que sí se observa es que la franja ya cerrada no marca ninguna. Queda pendiente separar
+qué feature dispara las 13 de la mañana (`z_score` alto = anomalía ambiental real, frente a
+`cobertura` mínima baja = sensor caído en estaciones concretas). `[por confirmar]`
+
+Implicación práctica, en cualquier caso: **la ingesta se programa al final del día** (23:45), con
+las cuatro franjas cerradas, para que el recuento sea estable y comparable entre días.
 
 ### 6.6 Limitaciones del detector
 
