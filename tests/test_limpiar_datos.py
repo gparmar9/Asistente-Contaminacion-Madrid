@@ -23,3 +23,22 @@ def test_solo_contaminantes_objetivo():
     resultado = limpiar_datos_live(df, RUTA_ESTACIONES)
 
     assert set(resultado['contaminante'].unique()) == CONTAMINANTES_OBJETIVO
+
+
+# Test de regresión: la API devuelve PROVINCIA y MUNICIPIO como texto, pero la tabla
+# calidad_aire_horas_live los declara INTEGER. Si la limpieza no los convierte, el
+# INSERT desde la tabla de staging falla con DatatypeMismatch.
+def test_provincia_y_municipio_son_enteros():
+    fila = {
+        'PROVINCIA': '28', 'MUNICIPIO': '79', 'ESTACION': '4', 'MAGNITUD': '8',
+        'PUNTO_MUESTREO': '28079004_8_8', 'ANO': '2026', 'MES': '5', 'DIA': '7',
+    }
+    for i in range(1, 25):
+        fila[f'H{i:02d}'] = 10.0
+        fila[f'V{i:02d}'] = 'V'
+
+    resultado = limpiar_datos_live(pd.DataFrame([fila]), RUTA_ESTACIONES)
+
+    assert pd.api.types.is_integer_dtype(resultado['provincia'])
+    assert pd.api.types.is_integer_dtype(resultado['municipio'])
+    assert resultado['provincia'].iloc[0] == 28

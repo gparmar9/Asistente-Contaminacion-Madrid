@@ -419,6 +419,12 @@ para llamar a la API de Madrid.
 - Compartir el código de features entre entrenamiento e inferencia evita divergencias silenciosas.
 - La idempotencia (`ON CONFLICT`) simplifica mucho programar el pipeline.
 - La carga fila a fila no escala a millones de filas; `COPY` sí.
+- **Un fallo de tipos que solo aparece con datos reales.** La API devuelve `PROVINCIA` y
+  `MUNICIPIO` como texto, pero `calidad_aire_horas_live` los declara `INTEGER`: como la tabla
+  de staging la crea pandas deduciendo tipos, el `INSERT` fallaba con `DatatypeMismatch`. Los
+  tests no lo detectaban porque construían los datos a mano ya como enteros. Salió a la luz al
+  ejecutar el pipeline dentro del entorno de Lambda contra RDS, y se corrigió en la limpieza
+  (que es quien debe entregar el esquema que espera la BBDD) con un test de regresión.
 - **GitHub Actions no puede escribir en un PostgreSQL local:** están en redes distintas. Por eso la
   ingesta en tiempo real no podía programarse ahí y hace falta la nube.
 - Commitear un CSV de ~13 MB cada día al repositorio (60 commits automáticos en la rama `main` local) infla el
@@ -486,6 +492,7 @@ para llamar a la API de Madrid.
 | 2026-09-16 | Tablas cargadas en RDS desde local con los scripts existentes: `resumen_datos_ml` (1.274.644 filas) y `estaciones` (24). La Fase 1 deja de depender del PostgreSQL en Docker |
 | 2026-09-16 | Cadena de conexión guardada cifrada en SSM Parameter Store (`/jupiter/database_url`, SecureString) |
 | 2026-09-16 | Desactivada la ingesta diaria a CSV (`ingesta_diaria.yml`): se comenta el cron y se conserva el disparo manual |
+| 2026-09-16 | Imagen de Lambda construida y probada en local (1,26 GB, `x86_64`). Detectado y corregido un fallo de tipos en la limpieza (`provincia`/`municipio` como texto) con test de regresión |
 
 ---
 
