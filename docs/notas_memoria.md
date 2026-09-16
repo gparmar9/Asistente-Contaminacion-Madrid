@@ -390,7 +390,8 @@ para llamar a la API de Madrid.
 
 **Estado: opción A aplicada** (2026-09-16). El grupo de seguridad admite el puerto 5432 desde
 `0.0.0.0/0` porque una Lambda fuera de VPC no tiene IP fija que autorizar. Mitigaciones: TLS
-obligatorio (`rds.force_ssl`) `[pendiente de verificar el valor]`, contraseña larga y aleatoria
+obligatorio (`rds.force_ssl = 1`, verificado el 2026-09-16: RDS rechaza cualquier conexión
+sin cifrar), contraseña larga y aleatoria
 cifrada en SSM, y datos públicos sin información personal. Es una decisión consciente y
 documentada, no una configuración por defecto; la opción C queda como mejora futura.
 
