@@ -387,7 +387,8 @@ para llamar a la API de Madrid.
 - **Cachear `baseline_historico`:** hoy se lee entera en cada ejecución.
 - **Concurrencia reservada = 1:** las tablas de *staging* usan `if_exists="replace"` y se pisarían.
 - **Crear el índice único antes de programar** el scheduler: sobre ~1,27 M filas tarda.
-- **Arranques en frío de 5–15 s:** irrelevantes para una tarea por lotes con timeout de 300 s.
+- **Arranques en frío medidos:** 3,6 s de inicialización; la ejecución completa tarda 9,5 s en frío
+  y 3,0 s en caliente, muy lejos del timeout de 300 s. Irrelevante para una tarea por lotes.
 
 ---
 
@@ -493,6 +494,7 @@ para llamar a la API de Madrid.
 | 2026-09-16 | Cadena de conexión guardada cifrada en SSM Parameter Store (`/jupiter/database_url`, SecureString) |
 | 2026-09-16 | Desactivada la ingesta diaria a CSV (`ingesta_diaria.yml`): se comenta el cron y se conserva el disparo manual |
 | 2026-09-16 | Imagen de Lambda construida y probada en local (1,26 GB, `x86_64`). Detectado y corregido un fallo de tipos en la limpieza (`provincia`/`municipio` como texto) con test de regresión |
+| 2026-09-16 | Pipeline validado de punta a punta dentro del entorno de Lambda contra RDS: 2.568 mediciones horarias nuevas, 313 bloques y 41 anomalías en datos reales; la segunda invocación devuelve 0 filas nuevas (idempotencia confirmada en la nube) |
 
 ---
 
