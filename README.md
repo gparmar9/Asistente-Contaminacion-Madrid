@@ -9,62 +9,47 @@ conversacional con LLM.
 
 ---
 
-## Estado del proyecto
-
-La **Fase 1 (datos + detección de anomalías)** está funcionando de punta a punta en local sobre
-PostgreSQL, y la **Fase 2 (Vector DB)** ya indexa y busca sobre el corpus documental. Las fases 3–4
-(chatbot LLM, dashboard) están por empezar.
-
-| Bloque | Estado |
-|---|---|
-| EDA del histórico (nb01) | ✅ Hecho |
-| Features por bloques del día → `ResumenDatosML` (nb02) | ✅ Hecho |
-| Detector de anomalías: Isolation Forest + baseline z-score (nb03) | ✅ Hecho |
-| PostgreSQL en Docker (volumen persistente) | ✅ Hecho |
-| Pipeline de tiempo real (API → Postgres → inferencia) | ✅ Hecho |
-| CI/CD (tests unitarios + integración) | ✅ Hecho |
-| Tabla de estaciones (distrito, tipo, coordenadas) | ✅ Hecho |
-| Corpus documental RAG en Markdown (`data/rag/`) | ✅ Hecho |
-| Vector DB: troceado + embeddings + ChromaDB + búsqueda semántica | ✅ Fase 2 |
-| Chatbot LLM + dashboard | 🔜 Fases 3–4 |
-
----
-
 ## MVP — Producto mínimo viable
 
-El corte más pequeño que entrega valor real: **ver el estado de la calidad del aire de Madrid,
-saber si hay algo anómalo y poder preguntarlo en lenguaje natural**, combinando los datos con
-conocimiento de salud.
+El corte más pequeño que entrega valor real a un usuario: **ver el estado de la calidad del aire de
+Madrid, saber si hay algo anómalo y poder preguntarlo en lenguaje natural**, combinando las
+mediciones con conocimiento de salud y normativa.
 
-**Incluye:**
+**Qué entra en el MVP**
 
-- ✅ Ingesta histórico + tiempo real a PostgreSQL *(hecho)*
-- ✅ Detección de anomalías (Isolation Forest + baseline z-score) en `resumen_datos_ml` *(hecho)*
-- ✅ Vector DB (ChromaDB) con documentos de salud y normativa + pipeline de embeddings *(hecho)*
-- ⏳ Chatbot con *tool use*: consulta SQL (`query_sql`) + búsqueda documental / RAG (`search_documents`)
-- ⏳ Interfaz mínima (Streamlit) para chatear, con disclaimer médico
+| Pieza | Qué aporta |
+|---|---|
+| Ingesta del histórico y del tiempo real a PostgreSQL | La base de datos sobre la que se responde |
+| Detección de anomalías: Isolation Forest + baseline z-score | Distingue lo inusual de lo normal, tanto episodios ambientales como fallos de sensor |
+| Vector DB con documentos de salud y normativa | Aporta el conocimiento que las mediciones por sí solas no contienen |
+| Chatbot con *tool use*: `query_sql` y `search_documents` | Traduce una pregunta en lenguaje natural a consultas sobre ambas fuentes |
+| Interfaz mínima para chatear, con aviso médico visible | Hace el sistema usable por alguien que no escribe SQL |
 
-**Fuera del MVP** (mejoras posteriores): informes automáticos rotativos, dashboard completo, LSTM
-y despliegue cloud 24/7.
+**Qué queda fuera**: informes automáticos rotativos, dashboard completo con visualizaciones y
+detectores de anomalías adicionales (LSTM Autoencoder). Son mejoras posteriores: el sistema tiene
+sentido sin ellas.
 
-> Con las Fases 1 y 2 ya hechas, lo que queda para el MVP es la **Fase 3 (LLM con tool use)**: un
-> chatbot que combina los datos de contaminación (SQL) con el contexto de salud (RAG, ya
-> consultable vía `buscar_documentos`), sobre una interfaz mínima.
+El criterio para aceptar o descartar una pieza es sencillo: si el usuario puede llegar a una
+respuesta útil sin ella, no es parte del MVP.
 
 ---
 
 ## Arquitectura (resumen)
 
 ```
-API Madrid (tiempo real) ──▶ pipeline_tiempo_real.py ──▶ PostgreSQL: calidad_aire_horas_live (horario crudo)
-                                        │
-                                        ▼  agrega a bloques + features
-CSV histórico 2018-2026 ──▶ Notebooks 01/02/03 ──▶ Isolation Forest (.joblib) ──▶ PostgreSQL: resumen_datos_ml (+ anomalías)
-                                                                                          │
-                                                                                          ▼  (Fases 3-4)
-                                                                                LLM local + Dashboard
-                                                                                          ▲
-data/rag/*.md ──▶ trocear_corpus.py ──▶ embeddings locales ──▶ ChromaDB: corpus_rag ───────┘  (Fase 2)
+                    EventBridge Scheduler — cada noche a las 23:45 (Europe/Madrid)
+                                    │ invoca
+API Madrid (tiempo real) ──▶ AWS Lambda: pipeline_tiempo_real ──▶ RDS PostgreSQL
+                                    │                             ├── calidad_aire_horas_live
+                       modelo .joblib descargado de S3            └── resumen_datos_ml (+ anomalías)
+                                    │
+                          CloudWatch: logs y alarmas por correo
+
+CSV histórico 2018-2026 ──▶ Notebooks 01/02/03 (en local) ──▶ modelo .joblib ──▶ S3
+
+data/rag/*.md ──▶ trocear_corpus.py ──▶ embeddings locales ──▶ ChromaDB: corpus_rag   (Fase 2)
+
+RDS + ChromaDB ──▶ LLM con tool use ──▶ Dashboard   (Fases 3-4)
 ```
 
 Los **datos de contaminación viven estructurados en PostgreSQL**. La Vector DB solo contiene
@@ -72,23 +57,26 @@ documentos externos (salud, normativa), no datos de estaciones.
 
 ---
 
-## 🚀 Puesta en marcha en local (para compañeros)
+## 🚀 Puesta en marcha
 
-Todo lo necesario para arrancar lo que hay hecho (Fase 1) en tu máquina.
+Hay **dos formas de trabajar**, y casi siempre querrás la primera:
+
+| | Cuándo usarla | Qué necesitas |
+|---|---|---|
+| **A · Conectarse a la nube** | Trabajo normal: consultar datos, desarrollar el chatbot | Acceso a la cuenta de AWS |
+| **B · Entorno local completo** | Reentrenar el modelo o experimentar sin tocar la base compartida | Docker, además de AWS para descargar los datos |
 
 ### Requisitos
 
-- **Python 3.12**
-- **Docker Desktop** (para la base de datos)
-- **git**
-- El **dataset histórico** `data/raw/datos_completos_2018_2026.csv` — ⚠️ **no está en el repo**
-  (es grande y está en `.gitignore`). Hay que descargarlo del Drive que tenemos en común, cocnretamente en la carpeta Data. Colócalo en `data/raw/`.
+- **Python 3.12** y **git**
+- **Acceso a la cuenta de AWS del máster** (por el portal del curso)
+- **Docker Desktop**, solo para la opción B
 
-### 1. Clonar y preparar el entorno
+### Preparar el entorno (común a las dos opciones)
 
 ```bash
-git clone git@github.com:gparmar9/Asistente-Contaminaci-n-Madrid.git
-cd Asistente-Contaminaci-n-Madrid
+git clone git@github.com:gparmar9/Asistente-Contaminacion-Madrid.git
+cd Asistente-Contaminacion-Madrid
 
 python -m venv venv
 # Windows:
@@ -99,7 +87,47 @@ source venv/bin/activate
 pip install -r requirements.txt
 ```
 
-### 2. Configurar variables de entorno
+---
+
+### Opción A · Conectarse a la base de datos en la nube
+
+La base de datos vive en **Amazon RDS**, ya tiene el histórico cargado (1,27 M de filas) y **se
+actualiza sola cada noche a las 23:45**. No hay que cargar nada ni levantar Docker.
+
+**1. Credenciales de AWS.** Entra en el portal del máster, copia el bloque de claves y pégalo en tu
+terminal. Son temporales: cuando un comando responda `ExpiredToken`, copia unas nuevas.
+
+**2. Autoriza tu IP** — solo la primera vez, y cada vez que cambies de red:
+
+```powershell
+$sg = aws rds describe-db-instances --db-instance-identifier jupiter-postgres --query "DBInstances[0].VpcSecurityGroups[0].VpcSecurityGroupId" --output text
+$mi_ip = (Invoke-RestMethod https://checkip.amazonaws.com).Trim()
+aws ec2 authorize-security-group-ingress --group-id $sg --protocol tcp --port 5432 --cidr "$mi_ip/32"
+```
+
+**3. Coge la cadena de conexión.** Está cifrada en AWS, así que no hay que pasarse contraseñas por
+chat ni guardarlas en ficheros:
+
+```powershell
+$Env:DATABASE_URL = aws ssm get-parameter --name "/jupiter/database_url" --with-decryption --query "Parameter.Value" --output text
+```
+
+**4. Comprueba que conectas:**
+
+```powershell
+python -c "import os; from sqlalchemy import create_engine, text; print(create_engine(os.environ['DATABASE_URL']).connect().execute(text('select count(*) from resumen_datos_ml')).scalar())"
+```
+
+Debería responder **1274644**.
+
+> ⚠️ Es la **base de datos compartida del equipo**. Consulta con toda libertad; antes de borrar o
+> recargar tablas, avisa por el grupo.
+
+---
+
+### Opción B · Entorno local completo
+
+**1. Variables de entorno**
 
 ```bash
 # Windows:
@@ -111,54 +139,57 @@ cp .env.example .env
 Edita `.env` y pon una contraseña. Las credenciales de `POSTGRES_*` deben **coincidir** con las de
 `DATABASE_URL`. El fichero `.env` está en `.gitignore` (no se sube nunca).
 
-### 3. Levantar PostgreSQL en Docker
+**2. Levantar PostgreSQL en Docker**
 
 ```bash
 docker compose up -d
 ```
 
-Esto arranca un contenedor `jupiter_postgres` (PostgreSQL 18) en `localhost:5432`, con los datos en
-un **volumen nombrado** (persisten aunque pares el contenedor).
+Arranca un contenedor `jupiter_postgres` (PostgreSQL 18) en `localhost:5432`, con los datos en un
+**volumen nombrado** (persisten aunque pares el contenedor).
 
-> ⚠️ **Si ya tienes un PostgreSQL nativo** ocupando el puerto 5432, tienes dos opciones: parar el
-> servicio nativo, o cambiar `POSTGRES_PORT` en `.env` (p. ej. a `5433`) y actualizar el puerto en
-> `DATABASE_URL`.
+> ⚠️ Si ya tienes un PostgreSQL nativo ocupando el puerto 5432: para el servicio, o cambia
+> `POSTGRES_PORT` en `.env` (p. ej. a `5433`) y actualiza el puerto en `DATABASE_URL`.
 
-Parar / arrancar: `docker compose down` / `docker compose up -d` (los datos siguen en el volumen).
-`docker compose down -v` **borra** los datos.
+Parar / arrancar: `docker compose down` / `docker compose up -d`. `docker compose down -v` **borra**
+los datos.
 
-### 4. Generar los artefactos y cargar la base de datos
+**3. Descargar el histórico y el modelo desde S3**
 
-Con el histórico ya en `data/raw/`, ejecuta los notebooks en orden (en Jupyter o VS Code):
-
-1. [`notebooks/02_preprocesado_y_features.ipynb`](notebooks/02_preprocesado_y_features.ipynb) → genera `data/processed/resumen_bloques.parquet`.
-2. [`notebooks/03_entrenamiento_anomalias.ipynb`](notebooks/03_entrenamiento_anomalias.ipynb) → genera `data/processed/resumen_datos_ml.parquet` y `models/isolation_forest.joblib`.
-
-Luego carga la tabla en Postgres:
+Ya no hace falta bajar nada del Drive: los ficheros grandes (que no están en git) viven en S3.
 
 ```bash
-python src/etl/cargar_resumen_ml.py
+aws s3 cp s3://jupiter-calidad-aire-madrid/data/raw/datos_completos_2018_2026.csv data/raw/
+aws s3 cp s3://jupiter-calidad-aire-madrid/models/isolation_forest.joblib models/
+aws s3 cp s3://jupiter-calidad-aire-madrid/data/processed/ data/processed/ --recursive --exclude "*" --include "*.parquet"
 ```
 
-> Alternativa rápida: si descargas el `resumen_datos_ml.parquet` de la carpeta Data/processed del Drive que tenemos en común, puedes
-> saltarte los notebooks e ir directo al `cargar_resumen_ml.py`.
+> Si prefieres **regenerar** los artefactos en vez de descargarlos, ejecuta en orden los notebooks
+> [`02_preprocesado_y_features.ipynb`](notebooks/02_preprocesado_y_features.ipynb) y
+> [`03_entrenamiento_anomalias.ipynb`](notebooks/03_entrenamiento_anomalias.ipynb).
 
-Y carga el catálogo de estaciones (nombres, distritos, coordenadas, tipo):
+**4. Cargar las tablas**
 
 ```bash
-python src/etl/cargar_estaciones.py
+python src/etl/cargar_resumen_ml.py     # ~1,27 M filas vía COPY
+python src/etl/cargar_estaciones.py     # catálogo de las 24 estaciones
 ```
 
-### 5. Ejecutar el pipeline de tiempo real
+**5. Ejecutar el pipeline a mano**
 
 ```bash
 python src/etl/pipeline_tiempo_real.py
 ```
 
 Baja datos de la API, los guarda en `calidad_aire_horas_live`, corre la inferencia y hace *upsert*
-en `resumen_datos_ml`. Es **idempotente**: reejecutarlo no duplica nada.
+en `resumen_datos_ml`. Es **idempotente**: reejecutarlo no duplica nada, y corrige las horas que
+todavía no estaban publicadas cuando se ejecutó antes.
 
-### 6. Indexar el corpus documental (RAG, Fase 2)
+> En la nube esto lo hace la Lambda cada noche; en local solo tiene sentido para probar.
+
+---
+
+### Indexar el corpus documental (RAG, Fase 2)
 
 Independiente de los pasos 3–5: no necesita Postgres ni el histórico.
 
@@ -177,7 +208,7 @@ python src/rag/buscar.py "¿puedo correr hoy si soy asmático?"
 El índice se reconstruye entero en cada ejecución, así que reejecutar la ingesta tras tocar el
 corpus es la forma normal de actualizarlo.
 
-### 7. Comprobar los tests
+### Comprobar los tests
 
 ```bash
 # Tests unitarios (rápidos, sin base de datos):
@@ -186,19 +217,43 @@ pytest tests/ --ignore=tests/test_integracion_db.py -v
 
 ---
 
+## Infraestructura en AWS
+
+La Fase 1 ya no depende de ningún ordenador: **se ejecuta sola en AWS todas las noches a las 23:45**.
+
+| Servicio | Para qué |
+|---|---|
+| **S3** | Modelo entrenado, histórico y parquet |
+| **RDS PostgreSQL** | La base de datos del proyecto |
+| **Lambda + EventBridge Scheduler** | Ejecuta el pipeline cada noche |
+| **SSM Parameter Store** | La cadena de conexión, cifrada |
+| **CloudWatch + SNS** | Logs y aviso por correo si algo falla |
+
+Comprobar que se ejecutó anoche:
+
+```powershell
+aws logs tail /aws/lambda/jupiter-pipeline --since 1d --format short
+```
+
+> 📦 **Detalle completo** (imagen, roles IAM, cómo desplegar un cambio y qué se rompe si te lo
+> saltas): [`deploy/README.md`](deploy/README.md).
+
+---
+
 ## Estructura del repositorio
 
 ```
 ├── data/
 │   ├── raw/
-│   │   ├── datos_completos_2018_2026.csv   # histórico (NO en git — conseguir aparte)
+│   │   ├── datos_completos_2018_2026.csv   # histórico (NO en git — se descarga de S3)
 │   │   └── estaciones-de-control.csv       # catálogo de estaciones
 │   ├── processed/
-│   │   ├── calidad_aire_live.csv           # backup diario (GitHub Action)
+│   │   ├── calidad_aire_live.csv           # backup del workflow ya desactivado (ver CI/CD)
 │   │   └── *.parquet                        # artefactos de notebooks (NO en git)
 │   ├── rag/                                 # corpus fuente del RAG (Fase 2) — .md versionados
 │   └── chroma/                              # índice vectorial generado (NO en git)
 ├── docs/
+│   ├── notas_memoria.md                     # decisiones, resultados y bitácora para la memoria
 │   └── plan_arquitectura_v3.html            # diseño y decisiones (referencia viva)
 ├── models/
 │   └── isolation_forest.joblib             # modelos entrenados (6, uno por contaminante)
@@ -220,11 +275,13 @@ pytest tests/ --ignore=tests/test_integracion_db.py -v
 │       ├── embeddings.py                   # modelo de embeddings + colección ChromaDB (config común)
 │       ├── ingesta_vector.py               # reconstruye el índice vectorial desde el corpus
 │       └── buscar.py                       # búsqueda semántica (base de la tool `search_documents`)
+├── deploy/                                  # infraestructura AWS (imagen Lambda + roles IAM)
 ├── tests/                                   # tests unitarios y de integración
 ├── docker-compose.yml                       # PostgreSQL 18 + volumen
 ├── .env.example                             # plantilla de variables de entorno
 ├── requirements.txt
-└── requirements-rag.txt                     # dependencias extra de la Fase 2 (RAG)
+├── requirements-rag.txt                     # dependencias extra de la Fase 2 (RAG)
+└── AGENTS.md / CLAUDE.md                    # instrucciones para asistentes de IA (Claude, Codex)
 ```
 
 ---
@@ -338,7 +395,9 @@ comparables entre estaciones, más el **baseline z-score** como referencia. Un d
 
 - **`tests.yml`**: dos jobs — *unit* (lógica pura, sin DB) e *integración* (Postgres de servicio efímero).
   Los tests de integración solo corren con `RUN_DB_TESTS=1` (lo pone el CI), nunca contra tu DB local por accidente.
-- **`ingesta_diaria.yml`**: cron que guarda los datos crudos diarios en un CSV versionado (backup gratuito, independiente del pipeline).
+- **`ingesta_diaria.yml`**: **desactivado**. Guardaba un CSV diario en el repositorio como backup
+  gratuito; con los datos en RDS (y sus backups automáticos) dejó de tener sentido, inflaba el
+  historial de git y provocaba conflictos de merge en todas las ramas. Se conserva el disparo manual.
 - **`proteger_main.yml`**: los PR a `main` solo pueden venir de `development`.
 
 **Flujo de ramas**: trabaja en ramas `feature/...` → PR a `development` → PR de `development` a `main`.
@@ -355,7 +414,9 @@ enchufable, así que añadir un detector nuevo no toca el resto del sistema.
 | **Autoencoder (PCA)** | Anomalías de *forma* del perfil horario, solo con scikit-learn (un autoencoder lineal equivale a PCA). | Bajo |
 | **LSTM Autoencoder** | Lo mismo con no-linealidades temporales; componente de *deep learning* para la memoria. | Alto (PyTorch) |
 | Baseline con recencia | Ponderar más los años recientes (la contaminación baja con los años). | Bajo |
-| Scheduler en la nube | Ingesta 24/7 sin depender de un PC encendido. | Medio |
+| **No puntuar el bloque del día aún abierto** | Evita falsos positivos de «sensor caído» mientras la franja está a medias: el mismo día da ~97 anomalías a media tarde y ~15 por la noche. Imprescindible antes de subir la frecuencia de ingesta. | Bajo |
+| Distinguir el tipo de anomalía (ambiental / operativa) | El chatbot necesita separar «el ozono está alto» de «a esta estación le faltan horas». | Bajo |
+| Despliegue automático a AWS desde GitHub Actions (OIDC) | Publicar la imagen sin claves estáticas ni pasos manuales. | Medio |
 
 > **Sobre el LSTM**: se valoró como modelo principal en v2, pero el detector actual ya cubre las
 > familias de anomalías relevantes (nivel, sensor caído, sensor congelado) y, sin datos etiquetados,
@@ -365,6 +426,7 @@ enchufable, así que añadir un detector nuevo no toca el resto del sistema.
 
 ## Tecnologías
 
-Python · pandas / NumPy · scikit-learn · PostgreSQL 18 (Docker) · SQLAlchemy + psycopg2 ·
-pyarrow · pytest · GitHub Actions · ChromaDB + sentence-transformers (RAG) ·
-(futuro: FastAPI, LLM local)
+Python · pandas / NumPy · scikit-learn · PostgreSQL 18 (RDS en AWS, Docker en local) ·
+SQLAlchemy + psycopg2 · pyarrow · pytest · GitHub Actions · ChromaDB + sentence-transformers (RAG) ·
+**AWS**: Lambda, ECR, S3, RDS, EventBridge Scheduler, SSM Parameter Store, CloudWatch y SNS ·
+(futuro: FastAPI, LLM)
