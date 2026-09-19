@@ -465,7 +465,13 @@ La retención de los logs se baja a 14 días; por defecto no caducan nunca.
 
 **Ingeniería**
 - Compartir el código de features entre entrenamiento e inferencia evita divergencias silenciosas.
-- La idempotencia (`ON CONFLICT`) simplifica mucho programar el pipeline.
+- La idempotencia (`ON CONFLICT`) simplifica mucho programar el pipeline, pero **`DO NOTHING` no
+  es lo mismo que idempotencia**. La API entrega siempre las 24 horas del día y las aún no
+  medidas llegan como ceros con flag `N`: al ignorar los conflictos, la primera ejecución del día
+  fijaba esos ceros y ninguna posterior los corregía. El 2026-09-16, con varias ejecuciones
+  manuales durante la tarde, las horas 18 a 23 quedaron guardadas como inválidas de forma
+  permanente (740 filas `N` frente a 135-153 en los días de ejecución única). Corregido pasando a
+  `DO UPDATE` condicionado a que la medición entrante sea válida y la guardada no.
 - La carga fila a fila no escala a millones de filas; `COPY` sí.
 - **Un fallo de tipos que solo aparece con datos reales.** La API devuelve `PROVINCIA` y
   `MUNICIPIO` como texto, pero `calidad_aire_horas_live` los declara `INTEGER`: como la tabla
@@ -503,6 +509,11 @@ La retención de los logs se baja a 14 días; por defecto no caducan nunca.
 - Evaluación del detector sin etiquetas y baseline con fuga de información (§6.5).
 - Distritos asignados manualmente; 4 estaciones fronterizas por revisar.
 - Sin datos meteorológicos, de polen ni de aire interior.
+- **La hora 23 nunca se captura.** El endpoint en tiempo real solo sirve el día en curso y publica
+  con ~1 hora de retraso (comprobado: a las 14:51 la última hora válida era la 13). A las 23:45 lo
+  último disponible es la hora 22, y pasada la medianoche la API ya solo devuelve el día nuevo.
+  Consecuencia sistemática: el bloque de noche (20-23) tiene cobertura 0,75 todos los días. Para
+  cerrarlo haría falta una segunda fuente (el fichero diario del Ayuntamiento), no otro horario.
 
 **Trabajo futuro**
 - LSTM Autoencoder o PCA para anomalías de forma del perfil horario.
@@ -544,6 +555,8 @@ La retención de los logs se baja a 14 días; por defecto no caducan nunca.
 | 2026-09-16 | Pipeline validado de punta a punta dentro del entorno de Lambda contra RDS: 2.568 mediciones horarias nuevas, 313 bloques y 41 anomalías en datos reales; la segunda invocación devuelve 0 filas nuevas (idempotencia confirmada en la nube) |
 | 2026-09-16 | Imagen subida a ECR (304 MB) y función Lambda `jupiter-pipeline` creada (imagen, x86_64, 1024 MB, timeout 300 s, concurrencia reservada 1) con rol de ejecución de mínimo privilegio. Primera invocación en AWS correcta |
 | 2026-09-16 | Ejecución diaria programada a las 23:45 (`Europe/Madrid`) con EventBridge Scheduler y rol propio; verificado `rds.force_ssl = 1`; alarmas de CloudWatch de errores y de ausencia de ejecuciones con aviso por SNS |
+| 2026-09-17 a 09-19 | **El pipeline se ejecuta solo**: tres noches consecutivas a las 23:45 sin intervención, 2.568 mediciones por día y 23 estaciones, sin errores ni alarmas. Queda respondida la pregunta abierta del plan v3 sobre dónde corre el pipeline en producción |
+| 2026-09-19 | Revisando esos datos se detectan dos problemas: el `DO NOTHING` congelaba las horas aún no medidas (corregido) y la hora 23 es inalcanzable con el endpoint en tiempo real (limitación documentada) |
 
 ---
 
