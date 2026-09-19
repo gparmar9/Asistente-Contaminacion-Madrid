@@ -1,0 +1,17 @@
+# Dependencias de la imagen de Lambda (Fase 1 en AWS).
+#
+# Solo lo que importa `pipeline_tiempo_real.py` y sus módulos. Deliberadamente
+# NO lleva pyarrow, matplotlib ni Jupyter (eso es cosa de los notebooks): la
+# imagen baja de ~2 GB a ~700 MB.
+#
+# scikit-learn DEBE ser la misma versión que entrenó models/isolation_forest.joblib.
+# Con otra versión el modelo puede no cargar, o cargar mal sin avisar.
+
+pandas==3.0.1
+numpy==2.4.3
+scikit-learn==1.9.0
+joblib==1.5.3
+SQLAlchemy==2.0.49
+psycopg2-binary==2.9.12
+requests==2.33.0
+python-dotenv==1.2.2

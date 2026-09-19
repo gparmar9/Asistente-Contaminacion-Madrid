@@ -1,0 +1,26 @@
+# Imagen de AWS Lambda con el pipeline de tiempo real (Fase 1 en AWS).
+#
+# Se empaqueta como imagen de contenedor y no como .zip porque pandas +
+# scikit-learn superan el límite de 250 MB de las capas de Lambda.
+#
+# OJO: se construye desde la RAÍZ del repositorio (el contexto incluye src/ y
+# data/), indicando este fichero con -f:
+#
+#   docker build -f deploy/Dockerfile.lambda -t jupiter-pipeline .
+FROM public.ecr.aws/lambda/python:3.12
+
+COPY deploy/requirements-lambda.txt .
+RUN pip install --no-cache-dir -r requirements-lambda.txt
+
+# Los módulos del ETL se importan de forma plana (`from limpiar_datos import ...`),
+# así que van todos al directorio raíz de la función, no en subcarpetas.
+COPY src/etl/*.py                       ${LAMBDA_TASK_ROOT}/
+
+# El catálogo de estaciones son 5 KB: viaja dentro de la imagen en vez de
+# descargarse de S3 en cada arranque en frío.
+COPY data/raw/estaciones-de-control.csv ${LAMBDA_TASK_ROOT}/
+
+COPY deploy/lambda_handler.py           ${LAMBDA_TASK_ROOT}/
+
+# <fichero>.<función> que Lambda invoca en cada ejecución.
+CMD ["lambda_handler.handler"]

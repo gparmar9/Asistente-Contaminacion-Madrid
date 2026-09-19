@@ -32,6 +32,7 @@ db/
 __pycache__/
 *.cache
 .pytest_cache/
+.ruff_cache/
 .ipynb_checkpoints/
 
 #APiusuario
