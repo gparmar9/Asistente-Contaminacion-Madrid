@@ -564,8 +564,17 @@ La retención de los logs se baja a 14 días; por defecto no caducan nunca.
 
 - [ ] ¿Qué límite de gasto o créditos tiene la cuenta AWS del máster?
 - [ ] Confirmar la opción de red en AWS (A recomendada).
-- [ ] ¿Permite la organización crear roles IAM? (necesario para la Lambda)
+- [ ] ¿Permite la organización crear roles IAM? (necesario para la Lambda y para el despliegue
+  automático, ver más abajo)
 - [ ] LLM de la Fase 3: ¿local con GPU o servicio gestionado? ¿SQL generado o consultas predefinidas?
 - [ ] ¿Se valoró Azure Functions para la ingesta programada? (§2)
 - [ ] Pasar la Fase 2 (RAG) de `development` a `main`.
 - [ ] Contrastar la atribución del pico de PM10 del 15-03-2022 a polvo sahariano.
+- [ ] **Despliegue automático desde GitHub Actions (CI/CD).** Evaluado: `workflow_dispatch`
+  con selector de rama, build de la imagen, tag por SHA del commit (en vez de `latest`, para
+  poder saber qué código corre en producción y volver atrás), push a ECR y
+  `update-function-code`. Requiere autenticación **OIDC** (las credenciales de la cuenta son
+  de SSO, temporales, así que no hay claves que meter en GitHub Secrets), lo que implica crear
+  un proveedor de identidad OIDC y un rol IAM en la cuenta compartida. El fichero del workflow
+  solo se puede lanzar desde la interfaz una vez viva en `main`. Pendiente: 1) cerrar el PR de
+  la migración hasta `main`, 2) comprobar el permiso de crear roles IAM, 3) escribir el YAML.
