@@ -4,7 +4,7 @@ Sistema basado en Machine Learning que analiza los datos de calidad del aire de 
 anomalías automáticamente** y (fase futura) permite consultarlos mediante informes y un asistente
 conversacional con LLM.
 
-> 📐 **Diseño completo y decisiones**: [`docs/plan_arquitectura_v3.html`](docs/plan_arquitectura_v3.html)
+> **Diseño completo y decisiones**: [`docs/plan_arquitectura_v3.html`](docs/plan_arquitectura_v3.html)
 > (ábrelo en el navegador). Es la referencia viva de la arquitectura.
 
 ---
@@ -57,7 +57,7 @@ documentos externos (salud, normativa), no datos de estaciones.
 
 ---
 
-## 🚀 Puesta en marcha
+## Puesta en marcha
 
 Hay **dos formas de trabajar**, y casi siempre querrás la primera:
 
@@ -70,7 +70,17 @@ Hay **dos formas de trabajar**, y casi siempre querrás la primera:
 
 - **Python 3.12** y **git**
 - **Acceso a la cuenta de AWS del máster** (por el portal del curso)
+- **AWS CLI v2** instalada (`winget install -e --id Amazon.AWSCLI` en Windows)
 - **Docker Desktop**, solo para la opción B
+
+La primera vez, fija la región una sola vez (no hace falta repetirlo en cada sesión):
+
+```powershell
+aws configure set region eu-west-1
+```
+
+Las credenciales en sí son distintas: son temporales y hay que pegarlas de nuevo en la terminal
+cada vez que empieces a trabajar (ver Opción A, paso 1).
 
 ### Preparar el entorno (común a las dos opciones)
 
@@ -120,7 +130,7 @@ python -c "import os; from sqlalchemy import create_engine, text; print(create_e
 
 Debería responder **1274644**.
 
-> ⚠️ Es la **base de datos compartida del equipo**. Consulta con toda libertad; antes de borrar o
+> Es la **base de datos compartida del equipo**. Consulta con toda libertad; antes de borrar o
 > recargar tablas, avisa por el grupo.
 
 ---
@@ -148,7 +158,7 @@ docker compose up -d
 Arranca un contenedor `jupiter_postgres` (PostgreSQL 18) en `localhost:5432`, con los datos en un
 **volumen nombrado** (persisten aunque pares el contenedor).
 
-> ⚠️ Si ya tienes un PostgreSQL nativo ocupando el puerto 5432: para el servicio, o cambia
+> Si ya tienes un PostgreSQL nativo ocupando el puerto 5432: para el servicio, o cambia
 > `POSTGRES_PORT` en `.env` (p. ej. a `5433`) y actualiza el puerto en `DATABASE_URL`.
 
 Parar / arrancar: `docker compose down` / `docker compose up -d`. `docker compose down -v` **borra**
@@ -191,10 +201,10 @@ todavía no estaban publicadas cuando se ejecutó antes.
 
 ### Indexar el corpus documental (RAG, Fase 2)
 
-Independiente de los pasos 3–5: no necesita Postgres ni el histórico.
+No depende de Postgres ni del histórico: funciona igual elijas la opción A o la B.
 
 ```bash
-pip install -r requirements-rag.txt   # ⚠️ arrastra PyTorch, descarga grande
+pip install -r requirements-rag.txt   # arrastra PyTorch, descarga grande
 python src/rag/ingesta_vector.py      # trocea data/rag/*.md e indexa en data/chroma/
 ```
 
@@ -235,7 +245,7 @@ Comprobar que se ejecutó anoche:
 aws logs tail /aws/lambda/jupiter-pipeline --since 1d --format short
 ```
 
-> 📦 **Detalle completo** (imagen, roles IAM, cómo desplegar un cambio y qué se rompe si te lo
+> **Detalle completo** (imagen, roles IAM, cómo desplegar un cambio y qué se rompe si te lo
 > saltas): [`deploy/README.md`](deploy/README.md).
 
 ---
