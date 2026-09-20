@@ -86,7 +86,8 @@ Hilo conductor de la memoria: cómo y por qué cambió el diseño.
 | 2026-07-23 | RAG | Documentos por recopilar → **corpus propio de 11 documentos Markdown con metadatos** | Controlar calidad, fuentes y troceado del conocimiento |
 | 2026-09-02 | Embeddings | `all-MiniLM-L6-v2` (plan v2) → **`paraphrase-multilingual-MiniLM-L12-v2`** | El corpus y las preguntas están en español; el modelo original es solo inglés |
 | 2026-09-12 | Infraestructura | Todo en local → **AWS**: Lambda + S3 + RDS (en curso) | Requisito del TFM y ejecución 24/7 sin depender de un PC |
-| 2026-09-12 | BBDD (planificado) | PostgreSQL en Docker → **Amazon RDS for PostgreSQL** | Servicio gestionado: backups, parches y snapshots (ver §8) |
+| 2026-09-16 | Backup de datos | GitHub Action que commitea `calidad_aire_live.csv` al repositorio (~13 MB/dia) → **desactivada** | Los datos ya viven en RDS con backups automaticos; el workflow inflaba el historial de git y provocaba conflictos de merge en todas las ramas |
+| 2026-09-16 | Base de datos | PostgreSQL 18 en Docker → **Amazon RDS for PostgreSQL 18.3** (`db.t4g.micro`, Single-AZ, 20 GB gp2) | Servicio gestionado: backups, parches y snapshots automáticos. Migración sin cambios de código: solo cambia `DATABASE_URL` (ver §8) |
 
 **Decisiones abiertas que alimentarán esta tabla:** LLM local vs. servicio gestionado, SQL generado
 por el LLM vs. consultas predefinidas, y opción de red en AWS (§12).
@@ -261,7 +262,39 @@ una estación de tráfico y en una de fondo.
   la estación 18 la madrugada del **01-01-2019** (129,5 µg/m³ frente a 14,9 esperados), atribuible a
   la pirotecnia de Nochevieja.
 
-### 6.5 Limitaciones del detector
+### 6.5 Qué detecta el modelo en un día real (2026-09-16)
+
+Primera ejecución del detector sobre datos en vivo en AWS. Desglose de los bloques del día,
+separando los marcados como anómalos de los normales:
+
+| Bloque | Marcado | n | Cobertura media | Cobertura mín. | \|z\| medio | \|z\| máx |
+|---|---|---|---|---|---|---|
+| madrugada | no | 103 | 1,00 | 1,00 | 0,60 | 1,69 |
+| mañana | **sí** | 13 | 0,55 | 0,33 | 1,14 | 1,68 |
+| mañana | no | 90 | 1,00 | 0,67 | 0,98 | 2,21 |
+| tarde | **sí** | 2 | 0,50 | 0,29 | 0,98 | 1,61 |
+| tarde | no | 105 | 0,85 | 0,71 | 0,75 | 1,78 |
+
+**Resultado clave: las 15 anomalías del día son todas operativas, ninguna ambiental.** Los bloques
+marcados tienen la mitad de las horas sin medir (cobertura 0,29-0,55) mientras su nivel es normal.
+
+**El baseline z-score no habría detectado nada:** el máximo del día es 2,21 y el umbral es 3. Es la
+comprobación empírica, sobre datos reales, de que el z-score es ciego a los fallos de sensor y de
+que el Isolation Forest aporta valor precisamente ahí. Sirve como caso de estudio en la memoria.
+
+**Efecto del momento de ejecución.** La misma jornada dio 41 anomalías a las 17:06 y 15 a las 19:40:
+el bloque de tarde en curso tenía entonces ~0,5 de cobertura y se marcaba; al completarse hasta 0,85
+dejó de marcarse. Es decir, ejecutar a media jornada genera falsos positivos transitorios en la
+franja abierta. De ahí que la ingesta se programe a las **23:45**, con las cuatro franjas cerradas:
+el recuento es estable y comparable entre días.
+
+**Confirmado en producción, no solo en el test.** Tras desplegar el arreglo, la ejecución del
+2026-09-19 corrigió 742 horas que habían quedado como placeholder, y las anomalías del día
+volvieron al rango normal (13, frente a las 97 falsas registradas a media tarde antes del arreglo).
+Las 126 filas `N` que quedan son íntegramente la hora 23 (una por cada serie activa), la
+limitación permanente ya documentada — no un resto del bug.
+
+### 6.6 Limitaciones del detector
 
 - **Sin etiquetas:** no se pueden calcular precisión ni *recall*; la evaluación es cualitativa
   (casos extremos, solapamiento con el baseline y eventos conocidos).
@@ -314,8 +347,10 @@ una estación de tráfico y en una de fondo.
 | Pieza | Destino | Motivo |
 |---|---|---|
 | `pipeline_tiempo_real.py` | **Lambda** (imagen de contenedor) + **EventBridge Scheduler** cada 20 min | Ingesta 24/7 |
-| Modelo, histórico y parquet | **S3** con versionado | Fuente única para el equipo |
-| PostgreSQL en Docker | **RDS for PostgreSQL** `db.t4g.micro` | Servicio gestionado |
+| Modelo, histórico y parquet | **S3** con versionado | Fuente única para el equipo; sustituye a compartirlos por Drive |
+
+Los objetos se organizan con los mismos prefijos que el repositorio: `models/`, `data/raw/` y `data/processed/`.
+| PostgreSQL en Docker | **RDS for PostgreSQL** `db.t4g.micro` | Servicio gestionado. **Hecho** (2026-09-16) |
 
 **Fuera de alcance por ahora:** notebooks (siguen en local), Vector DB, LLM, API y dashboard.
 
@@ -333,7 +368,7 @@ una estación de tráfico y en una de fondo.
 
 | Servicio | Configuración | Con free tier | Sin free tier |
 |---|---|---|---|
-| RDS | `db.t4g.micro`, Single-AZ + 20 GB gp3 | 0 $ | ~15,4 $ |
+| RDS | `db.t4g.micro`, Single-AZ + 20 GB gp2 | 0 $ | ~15,6 $ |
 | Lambda | ~66.000 GB-s/mes | 0 $ | 0 $ |
 | EventBridge, SSM, CloudWatch, SNS | Volumen testimonial | 0 $ | 0 $ |
 | S3 + ECR | ~150 MB + imagen de ~700 MB | 0 $ | ~0,1 $ |
@@ -341,6 +376,12 @@ una estación de tráfico y en una de fondo.
 
 - **~95 % del coste es RDS.** Bajar la frecuencia del pipeline no ahorra nada.
 - Coste a evitar: un **NAT Gateway** (~32 $/mes) duplicaría la factura.
+- La instancia se creó con la **plantilla de capa gratuita** (750 h/mes de `db.t4g.micro` Single-AZ,
+  20 GB de SSD de uso general y 20 GB de backups). La configuración elegida cabe entera en esos
+  límites; se eligió **gp2** en lugar de gp3 precisamente porque es lo que cubre la capa gratuita.
+  `[por confirmar: si la cuenta del máster sigue dentro de los 12 meses de capa gratuita]`
+- Ahorro durante el desarrollo: la instancia puede pararse (máximo 7 días seguidos) y solo se paga
+  el disco. Deja de ser posible cuando la Lambda ingiera cada 20 minutos.
 
 ### 8.4 Decisión de red
 
@@ -353,7 +394,12 @@ para llamar a la API de Madrid.
 | B | Lambda en VPC + NAT Gateway | ~32 $/mes | Desproporcionada para datos públicos |
 | C | Lambda sin VPC descarga a S3; Lambda en VPC lee vía Gateway Endpoint y escribe en RDS privado | 0 $ | La más elegante; mejora futura |
 
-**Estado:** opción A recomendada, **pendiente de confirmar**.
+**Estado: opción A aplicada** (2026-09-16). El grupo de seguridad admite el puerto 5432 desde
+`0.0.0.0/0` porque una Lambda fuera de VPC no tiene IP fija que autorizar. Mitigaciones: TLS
+obligatorio (`rds.force_ssl = 1`, verificado el 2026-09-16: RDS rechaza cualquier conexión
+sin cifrar), contraseña larga y aleatoria
+cifrada en SSM, y datos públicos sin información personal. Es una decisión consciente y
+documentada, no una configuración por defecto; la opción C queda como mejora futura.
 
 ### 8.5 Seguridad
 
@@ -362,7 +408,10 @@ para llamar a la API de Madrid.
 - **Mínimo privilegio:** la Lambda tendrá un rol que solo puede leer `models/*` del bucket, los
   parámetros `/jupiter/*` de SSM y escribir sus logs.
 - **S3:** acceso público bloqueado, ACL deshabilitadas, cifrado SSE-S3 y versionado.
-- **Secretos** en SSM Parameter Store (`SecureString`), no en ficheros desplegados.
+- **Secretos** en SSM Parameter Store (`SecureString`), no en ficheros desplegados: la cadena de
+  conexión vive en `/jupiter/database_url` y la Lambda la leerá en ejecución con su rol. Efecto
+  secundario útil: el equipo deja de compartirse la contraseña, cada persona la obtiene con sus
+  propias credenciales de AWS.
 - **Presupuesto con alertas** antes de crear recursos. Un Budget **avisa, no bloquea**.
 - **Roles previstos:** ejecución de la Lambda (obligatorio), EventBridge Scheduler (obligatorio) y
   OIDC para GitHub Actions (opcional). Un **usuario** tiene claves permanentes; un **rol** se asume
@@ -375,7 +424,24 @@ para llamar a la API de Madrid.
 - **Cachear `baseline_historico`:** hoy se lee entera en cada ejecución.
 - **Concurrencia reservada = 1:** las tablas de *staging* usan `if_exists="replace"` y se pisarían.
 - **Crear el índice único antes de programar** el scheduler: sobre ~1,27 M filas tarda.
-- **Arranques en frío de 5–15 s:** irrelevantes para una tarea por lotes con timeout de 300 s.
+- **Arranques en frío medidos:** 3,6 s de inicialización; la ejecución completa tarda 9,5 s en frío
+  y 3,0 s en caliente, muy lejos del timeout de 300 s. Irrelevante para una tarea por lotes.
+
+### 8.7 Observabilidad
+
+Dos alarmas de CloudWatch que avisan por correo (SNS), pensadas para dos fallos distintos:
+
+| Alarma | Métrica | Dispara cuando |
+|---|---|---|
+| `jupiter-pipeline-errores` | `Errors` (suma, 5 min) | La función lanza una excepción |
+| `jupiter-pipeline-sin-ejecuciones` | `Invocations` (suma, 24 h) | No ha habido ninguna ejecución |
+
+La segunda es la que más aporta y depende de un detalle de configuración: `treatMissingData:
+breaching`, es decir, **la ausencia de datos se interpreta como fallo**. Cubre el fallo silencioso
+de que el programador deje de disparar o alguien desactive la función: no hay errores que contar,
+no salta nada y el hueco en los datos se descubriría semanas después.
+
+La retención de los logs se baja a 14 días; por defecto no caducan nunca.
 
 ---
 
@@ -405,12 +471,27 @@ para llamar a la API de Madrid.
 
 **Ingeniería**
 - Compartir el código de features entre entrenamiento e inferencia evita divergencias silenciosas.
-- La idempotencia (`ON CONFLICT`) simplifica mucho programar el pipeline.
+- La idempotencia (`ON CONFLICT`) simplifica mucho programar el pipeline, pero **`DO NOTHING` no
+  es lo mismo que idempotencia**. La API entrega siempre las 24 horas del día y las aún no
+  medidas llegan como ceros con flag `N`: al ignorar los conflictos, la primera ejecución del día
+  fijaba esos ceros y ninguna posterior los corregía. El 2026-09-16, con varias ejecuciones
+  manuales durante la tarde, las horas 18 a 23 quedaron guardadas como inválidas de forma
+  permanente (740 filas `N` frente a 135-153 en los días de ejecución única). Corregido pasando a
+  `DO UPDATE` condicionado a que la medición entrante sea válida y la guardada no.
 - La carga fila a fila no escala a millones de filas; `COPY` sí.
+- **Un fallo de tipos que solo aparece con datos reales.** La API devuelve `PROVINCIA` y
+  `MUNICIPIO` como texto, pero `calidad_aire_horas_live` los declara `INTEGER`: como la tabla
+  de staging la crea pandas deduciendo tipos, el `INSERT` fallaba con `DatatypeMismatch`. Los
+  tests no lo detectaban porque construían los datos a mano ya como enteros. Salió a la luz al
+  ejecutar el pipeline dentro del entorno de Lambda contra RDS, y se corrigió en la limpieza
+  (que es quien debe entregar el esquema que espera la BBDD) con un test de regresión.
 - **GitHub Actions no puede escribir en un PostgreSQL local:** están en redes distintas. Por eso la
   ingesta en tiempo real no podía programarse ahí y hace falta la nube.
 - Commitear un CSV de ~13 MB cada día al repositorio (60 commits automáticos en la rama `main` local) infla el
   historial de git. Con los datos en RDS deja de tener sentido.
+- **Los workflows con `schedule` se ejecutan siempre desde la rama por defecto.** Comentar el
+  cron en una rama de trabajo no detiene nada hasta que el cambio llega a `main`; para pararlo
+  de inmediato hay que desactivarlo desde la interfaz de GitHub.
 - En CI el PostgreSQL de servicio es la versión 16 y en local la 18 `[pendiente de alinear]`.
 
 **Seguridad**
@@ -434,6 +515,11 @@ para llamar a la API de Madrid.
 - Evaluación del detector sin etiquetas y baseline con fuga de información (§6.5).
 - Distritos asignados manualmente; 4 estaciones fronterizas por revisar.
 - Sin datos meteorológicos, de polen ni de aire interior.
+- **La hora 23 nunca se captura.** El endpoint en tiempo real solo sirve el día en curso y publica
+  con ~1 hora de retraso (comprobado: a las 14:51 la última hora válida era la 13). A las 23:45 lo
+  último disponible es la hora 22, y pasada la medianoche la API ya solo devuelve el día nuevo.
+  Consecuencia sistemática: el bloque de noche (20-23) tiene cobertura 0,75 todos los días. Para
+  cerrarlo haría falta una segunda fuente (el fichero diario del Ayuntamiento), no otro horario.
 
 **Trabajo futuro**
 - LSTM Autoencoder o PCA para anomalías de forma del perfil horario.
@@ -466,6 +552,20 @@ para llamar a la API de Madrid.
 | 2026-09-14 | Acceso a la cuenta AWS del máster (SSO, `eu-west-1`) y AWS CLI configurada |
 | 2026-09-15 | Presupuesto mensual `jupiter-mensual` (10 $) y bucket S3 `jupiter-calidad-aire-madrid` (sin acceso público, versionado, SSE-S3) |
 | 2026-09-15 | Verificado que el CSV histórico actual no tiene filas duplicadas |
+| 2026-09-16 | Artefactos subidos a S3 (Guillermo): modelo, histórico, catálogo de estaciones y los dos parquet — 5 objetos, 166 MiB |
+| 2026-09-16 | Instancia RDS `jupiter-postgres` creada (Guillermo): PostgreSQL 18.3, `db.t4g.micro`, Single-AZ, 20 GB gp2, acceso público restringido por grupo de seguridad y TLS obligatorio |
+| 2026-09-16 | Tablas cargadas en RDS desde local con los scripts existentes: `resumen_datos_ml` (1.274.644 filas) y `estaciones` (24). La Fase 1 deja de depender del PostgreSQL en Docker |
+| 2026-09-16 | Cadena de conexión guardada cifrada en SSM Parameter Store (`/jupiter/database_url`, SecureString) |
+| 2026-09-16 | Desactivada la ingesta diaria a CSV (`ingesta_diaria.yml`): se comenta el cron y se conserva el disparo manual |
+| 2026-09-16 | Imagen de Lambda construida y probada en local (1,26 GB, `x86_64`). Detectado y corregido un fallo de tipos en la limpieza (`provincia`/`municipio` como texto) con test de regresión |
+| 2026-09-16 | Pipeline validado de punta a punta dentro del entorno de Lambda contra RDS: 2.568 mediciones horarias nuevas, 313 bloques y 41 anomalías en datos reales; la segunda invocación devuelve 0 filas nuevas (idempotencia confirmada en la nube) |
+| 2026-09-16 | Imagen subida a ECR (304 MB) y función Lambda `jupiter-pipeline` creada (imagen, x86_64, 1024 MB, timeout 300 s, concurrencia reservada 1) con rol de ejecución de mínimo privilegio. Primera invocación en AWS correcta |
+| 2026-09-16 | Ejecución diaria programada a las 23:45 (`Europe/Madrid`) con EventBridge Scheduler y rol propio; verificado `rds.force_ssl = 1`; alarmas de CloudWatch de errores y de ausencia de ejecuciones con aviso por SNS |
+| 2026-09-17 a 09-19 | **El pipeline se ejecuta solo**: tres noches consecutivas a las 23:45 sin intervención, 2.568 mediciones por día y 23 estaciones, sin errores ni alarmas. Queda respondida la pregunta abierta del plan v3 sobre dónde corre el pipeline en producción |
+| 2026-09-19 | Revisando esos datos se detectan dos problemas: el `DO NOTHING` congelaba las horas aún no medidas (corregido) y la hora 23 es inalcanzable con el endpoint en tiempo real (limitación documentada) |
+| 2026-09-19 a 20 | Arreglo desplegado y **validado en producción**: la ejecución de la noche del 19
+  corrigió 742 horas placeholder y las anomalías volvieron a 13 (frente a las 97 falsas de antes
+  del arreglo). Las 126 filas `N` restantes son exactamente la hora 23 en todas las series |
 
 ---
 
@@ -473,8 +573,17 @@ para llamar a la API de Madrid.
 
 - [ ] ¿Qué límite de gasto o créditos tiene la cuenta AWS del máster?
 - [ ] Confirmar la opción de red en AWS (A recomendada).
-- [ ] ¿Permite la organización crear roles IAM? (necesario para la Lambda)
+- [ ] ¿Permite la organización crear roles IAM? (necesario para la Lambda y para el despliegue
+  automático, ver más abajo)
 - [ ] LLM de la Fase 3: ¿local con GPU o servicio gestionado? ¿SQL generado o consultas predefinidas?
 - [ ] ¿Se valoró Azure Functions para la ingesta programada? (§2)
 - [ ] Pasar la Fase 2 (RAG) de `development` a `main`.
 - [ ] Contrastar la atribución del pico de PM10 del 15-03-2022 a polvo sahariano.
+- [ ] **Despliegue automático desde GitHub Actions (CI/CD).** Evaluado: `workflow_dispatch`
+  con selector de rama, build de la imagen, tag por SHA del commit (en vez de `latest`, para
+  poder saber qué código corre en producción y volver atrás), push a ECR y
+  `update-function-code`. Requiere autenticación **OIDC** (las credenciales de la cuenta son
+  de SSO, temporales, así que no hay claves que meter en GitHub Secrets), lo que implica crear
+  un proveedor de identidad OIDC y un rol IAM en la cuenta compartida. El fichero del workflow
+  solo se puede lanzar desde la interfaz una vez viva en `main`. Pendiente: 1) cerrar el PR de
+  la migración hasta `main`, 2) comprobar el permiso de crear roles IAM, 3) escribir el YAML.

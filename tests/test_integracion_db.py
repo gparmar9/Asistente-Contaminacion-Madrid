@@ -115,3 +115,28 @@ def test_procesar_no_duplica_y_detecta(engine):
     assert dup == 0             # sin duplicados por clave
     assert r2["horas_nuevas"] == 0
     assert base == 2            # baseline materializado desde el histórico sembrado
+
+
+def test_upsert_horario_corrige_horas_invalidas(engine):
+    """La API manda las horas no medidas como ceros con flag 'N'; cuando llega la
+    medicion real, el upsert debe corregir la fila en vez de ignorarla."""
+    ptr.asegurar_esquema(engine)
+
+    df = _horario_limpio()
+    placeholder = df.copy()
+    placeholder.loc[placeholder["hora"] >= 6, ["valor", "validacion"]] = [0.0, "N"]
+
+    ptr.upsert_horario(placeholder, engine)          # primera pasada del dia
+    corregidas = ptr.upsert_horario(df, engine)      # mas tarde llegan los valores reales
+
+    with engine.begin() as c:
+        invalidas = c.execute(text(
+            "SELECT count(*) FROM calidad_aire_horas_live WHERE validacion <> 'V'"
+        )).scalar()
+        valor_h6 = c.execute(text(
+            "SELECT valor FROM calidad_aire_horas_live WHERE hora = 6"
+        )).scalar()
+
+    assert corregidas == 6          # las horas 6..11 pasan de placeholder a medicion real
+    assert invalidas == 0
+    assert valor_h6 == 26.0         # 20 + hora, segun _horario_limpio()

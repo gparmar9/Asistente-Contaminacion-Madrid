@@ -100,6 +100,13 @@ def _a_formato_ingesta(largo: pd.DataFrame, ruta_estaciones: str) -> pd.DataFram
     df = largo.copy()
     df.columns = [c.lower() for c in df.columns]   # ESTACION -> estacion, etc.
 
+    # PROVINCIA y MUNICIPIO viajan como id_extra y la API los manda como texto.
+    # La tabla `calidad_aire_horas_live` los declara INTEGER, asi que hay que
+    # convertirlos aqui: si no, la tabla de staging se crea con columnas de texto
+    # y el INSERT falla con DatatypeMismatch.
+    for col in ('provincia', 'municipio'):
+        df[col] = pd.to_numeric(df[col], errors='coerce').astype('Int64')
+
     # Fecha completa con hora (a partir de FECHA date + HORA) y features de calendario
     df['fecha'] = pd.to_datetime(df['fecha']) + pd.to_timedelta(df['hora'], unit='h')
     df['ano'] = df['fecha'].dt.year
