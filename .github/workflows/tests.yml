@@ -19,7 +19,7 @@ jobs:
           cache: 'pip'
 
       - name: Instalar dependencias
-        run: pip install pandas numpy scikit-learn sqlalchemy requests python-dotenv pytest
+        run: pip install pandas numpy scikit-learn sqlalchemy requests python-dotenv pytest PyYAML
 
       - name: Ejecutar tests unitarios
         run: pytest tests/ -v --ignore=tests/test_integracion_db.py

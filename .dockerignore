@@ -1,0 +1,23 @@
+# Todo lo que NO debe viajar al construir la imagen de Lambda.
+# Sin esto, Docker enviaría el histórico (78 MB), los parquet (80 MB) y el venv
+# entero como contexto de construcción en cada `docker build`.
+
+venv/
+.git/
+.github/
+notebooks/
+docs/
+tests/
+models/
+data/
+# ...excepto el catálogo de estaciones, que sí va dentro de la imagen.
+!data/raw/estaciones-de-control.csv
+
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+.env
+*.parquet
+*.csv
+!data/raw/estaciones-de-control.csv

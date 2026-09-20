@@ -1,0 +1,7 @@
+# Dependencias de la Fase 2 (RAG). Complementan a requirements.txt.
+# Instalar con:  pip install -r requirements-rag.txt
+#
+# Aviso: sentence-transformers arrastra PyTorch (descarga grande, cientos de MB).
+sentence-transformers
+chromadb
+PyYAML

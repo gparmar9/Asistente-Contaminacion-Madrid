@@ -87,13 +87,24 @@ def asegurar_baseline(engine) -> pd.DataFrame:
 # --------------------------------------------------------------------------- upserts
 
 def upsert_horario(df_limpio: pd.DataFrame, engine) -> int:
-    """Inserta el horario crudo ignorando duplicados (ON CONFLICT DO NOTHING)."""
+    """Inserta el horario crudo y corrige las horas que aun no estaban medidas.
+
+    La API devuelve siempre las 24 horas del dia: las que todavia no se han
+    medido llegan como ceros con el flag 'N'. Si el upsert las ignorase sin mas
+    (ON CONFLICT DO NOTHING), la primera ejecucion del dia fijaria esos ceros y
+    ninguna ejecucion posterior los corregiria. Por eso se actualiza la fila
+    cuando la medicion entrante es valida y la guardada no lo era.
+
+    Devuelve el numero de filas insertadas mas las corregidas.
+    """
     df_limpio.to_sql("_stg_horario", engine, if_exists="replace", index=False)
     cols = ", ".join(df_limpio.columns)
     with engine.begin() as conn:
         res = conn.execute(text(
             f"INSERT INTO {TABLA_HORARIO} ({cols}) SELECT {cols} FROM _stg_horario "
-            f"ON CONFLICT (estacion, magnitud, fecha) DO NOTHING"
+            f"ON CONFLICT (estacion, magnitud, fecha) DO UPDATE "
+            f"SET valor = EXCLUDED.valor, validacion = EXCLUDED.validacion "
+            f"WHERE {TABLA_HORARIO}.validacion <> 'V' AND EXCLUDED.validacion = 'V'"
         ))
         conn.execute(text("DROP TABLE IF EXISTS _stg_horario"))
     return res.rowcount
