@@ -288,6 +288,12 @@ dejó de marcarse. Es decir, ejecutar a media jornada genera falsos positivos tr
 franja abierta. De ahí que la ingesta se programe a las **23:45**, con las cuatro franjas cerradas:
 el recuento es estable y comparable entre días.
 
+**Confirmado en producción, no solo en el test.** Tras desplegar el arreglo, la ejecución del
+2026-09-19 corrigió 742 horas que habían quedado como placeholder, y las anomalías del día
+volvieron al rango normal (13, frente a las 97 falsas registradas a media tarde antes del arreglo).
+Las 126 filas `N` que quedan son íntegramente la hora 23 (una por cada serie activa), la
+limitación permanente ya documentada — no un resto del bug.
+
 ### 6.6 Limitaciones del detector
 
 - **Sin etiquetas:** no se pueden calcular precisión ni *recall*; la evaluación es cualitativa
@@ -557,6 +563,9 @@ La retención de los logs se baja a 14 días; por defecto no caducan nunca.
 | 2026-09-16 | Ejecución diaria programada a las 23:45 (`Europe/Madrid`) con EventBridge Scheduler y rol propio; verificado `rds.force_ssl = 1`; alarmas de CloudWatch de errores y de ausencia de ejecuciones con aviso por SNS |
 | 2026-09-17 a 09-19 | **El pipeline se ejecuta solo**: tres noches consecutivas a las 23:45 sin intervención, 2.568 mediciones por día y 23 estaciones, sin errores ni alarmas. Queda respondida la pregunta abierta del plan v3 sobre dónde corre el pipeline en producción |
 | 2026-09-19 | Revisando esos datos se detectan dos problemas: el `DO NOTHING` congelaba las horas aún no medidas (corregido) y la hora 23 es inalcanzable con el endpoint en tiempo real (limitación documentada) |
+| 2026-09-19 a 20 | Arreglo desplegado y **validado en producción**: la ejecución de la noche del 19
+  corrigió 742 horas placeholder y las anomalías volvieron a 13 (frente a las 97 falsas de antes
+  del arreglo). Las 126 filas `N` restantes son exactamente la hora 23 en todas las series |
 
 ---
 
