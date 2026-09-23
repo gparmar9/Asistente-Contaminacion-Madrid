@@ -2,10 +2,24 @@
 titulo: Ozono troposférico (O3) y salud
 tema: salud
 contaminantes: [O3]
-fuente: "OMS 2021; EEA; US EPA"
+revisado: true
+fecha_revision: 2026-09-23
+fuentes:
+  - titulo: WHO global air quality guidelines 2021, capítulo de ozono
+    organismo: OMS
+    url: https://www.who.int/publications/i/item/9789240034228
+  - titulo: Informes «Air quality in Europe»
+    organismo: Agencia Europea de Medio Ambiente (EEA)
+    url: https://www.eea.europa.eu
+  - titulo: Ground-level Ozone Basics
+    organismo: U.S. Environmental Protection Agency (EPA)
+    url: https://www.epa.gov/ground-level-ozone-pollution
 ---
 
 # Ozono troposférico (O3) y salud
+
+Síntesis divulgativa elaborada para el proyecto a partir de las fuentes citadas; verifica las
+cifras exactas y su vigencia en los documentos originales.
 
 ## Qué es y su patrón particular
 
@@ -41,13 +55,3 @@ Para deporte en verano en Madrid: **mejor a primera hora de la mañana** (el ozo
 mínimo antes de que el sol dispare la fotoquímica) y evitar el tramo 14-20h. Nótese que es la
 recomendación inversa a la del NO2, cuyo mínimo diurno es el mediodía; el asistente debe
 priorizar el contaminante que esté elevado ese día.
-
-## Fuentes
-
-- OMS. *WHO global air quality guidelines* (2021), capítulo de ozono.
-  <https://www.who.int/publications/i/item/9789240034228>
-- Agencia Europea de Medio Ambiente (EEA). Informes «Air quality in Europe».
-- U.S. Environmental Protection Agency (EPA). «Ground-level Ozone Basics».
-  <https://www.epa.gov/ground-level-ozone-pollution>
-
-> Este documento es una **síntesis divulgativa** elaborada para el proyecto a partir de las fuentes citadas; no reproduce literalmente su contenido. Verifica las cifras exactas y su vigencia en los documentos originales antes de cualquier uso operativo. Consulta también el [aviso médico](aviso_medico.md).

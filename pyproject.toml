@@ -1,0 +1,27 @@
+# Empaquetado mínimo del módulo RAG (src/rag) para que sea importable como `rag`
+# desde la raíz del repo, desde ApiUsuario y desde las pruebas sin tocar sys.path.
+#
+#   pip install -e .                 # instala el paquete en modo editable
+#   pip install -r requirements-rag.txt  # dependencias fijadas + el paquete
+#
+# Los scripts de src/etl no forman parte del paquete: se ejecutan como hasta ahora.
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "asistente-contaminacion-rag"
+version = "0.1.0"
+description = "RAG documental del asistente de calidad del aire de Madrid"
+requires-python = ">=3.11"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+packages = ["rag"]
+
+[tool.pytest.ini_options]
+# `src` en el path hace que `import rag` funcione en pytest aunque no se haya
+# instalado el paquete (p. ej. en el job de CI que solo instala PyYAML).
+pythonpath = ["src"]
+testpaths = ["tests"]

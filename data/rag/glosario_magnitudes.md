@@ -1,8 +1,16 @@
 ---
 titulo: Glosario de magnitudes y estructura de los datos
-tema: referencia
+tema: proyecto
 contaminantes: ["NO", NO2, PM2.5, PM10, NOx, O3]
-fuente: "Ayuntamiento de Madrid — datos abiertos; OMS 2021"
+revisado: true
+fecha_revision: 2026-09-23
+fuentes:
+  - titulo: Especificación de los códigos de magnitud y del formato de los datos de calidad del aire (portal de datos abiertos)
+    organismo: Ayuntamiento de Madrid
+    url: https://datos.madrid.es
+  - titulo: WHO global air quality guidelines 2021
+    organismo: OMS
+    url: https://www.who.int/publications/i/item/9789240034228
 ---
 
 # Glosario de magnitudes y estructura de los datos
@@ -65,12 +73,3 @@ El modelo puntúa cada bloque a partir de tres features y salta por dos motivos 
 Para distinguirlos, el asistente debe mirar `media` frente a `expected_value`: si la media supera
 con mucho el esperado, es un episodio ambiental al alza y conviene recomendar prudencia; si la
 `media` es normal pero el bloque es anómalo, probablemente sea una anomalía operativa del sensor.
-
-## Fuentes
-
-- Ayuntamiento de Madrid — Portal de datos abiertos: especificación de los códigos de magnitud y
-  del formato de los datos de calidad del aire. <https://datos.madrid.es>
-- OMS. *WHO global air quality guidelines* (2021), para los umbrales de referencia.
-  <https://www.who.int/publications/i/item/9789240034228>
-
-> Este documento es una **síntesis divulgativa** elaborada para el proyecto a partir de las fuentes citadas; no reproduce literalmente su contenido. Verifica las cifras exactas y su vigencia en los documentos originales antes de cualquier uso operativo. Consulta también el [aviso médico](aviso_medico.md).
