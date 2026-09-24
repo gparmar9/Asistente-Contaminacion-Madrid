@@ -60,8 +60,9 @@ contaminante. Sirvieron para decidir qué documentos necesita el RAG.
 > el presente y el pasado; no hace *forecasting*.
 
 **Equipo** (según autores de git) `[por confirmar si hay más miembros]`: Guillermo Parés
-(ingesta, ETL, notebooks 01–03, base de datos, pipeline, CI/CD, RAG, cloud) y Carlos Fernández
-(banco de preguntas, EDA de PM10, esqueleto de `ApiUsuario`).
+(ingesta, ETL, notebooks 01–03, base de datos, pipeline, CI/CD, primera versión del RAG, cloud)
+y Carlos Fernández (banco de preguntas, EDA de PM10, esqueleto de `ApiUsuario`, reescritura del
+RAG como servicio de evidencias).
 
 ---
 
@@ -88,6 +89,10 @@ Hilo conductor de la memoria: cómo y por qué cambió el diseño.
 | 2026-09-12 | Infraestructura | Todo en local → **AWS**: Lambda + S3 + RDS (en curso) | Requisito del TFM y ejecución 24/7 sin depender de un PC |
 | 2026-09-16 | Backup de datos | GitHub Action que commitea `calidad_aire_live.csv` al repositorio (~13 MB/dia) → **desactivada** | Los datos ya viven en RDS con backups automaticos; el workflow inflaba el historial de git y provocaba conflictos de merge en todas las ramas |
 | 2026-09-16 | Base de datos | PostgreSQL 18 en Docker → **Amazon RDS for PostgreSQL 18.3** (`db.t4g.micro`, Single-AZ, 20 GB gp2) | Servicio gestionado: backups, parches y snapshots automáticos. Migración sin cambios de código: solo cambia `DATABASE_URL` (ver §8) |
+| 2026-09-23 | Embeddings | `paraphrase-multilingual-MiniLM-L12-v2` → **`intfloat/multilingual-e5-base`** | Ventana de 512 tokens y 768 dimensiones: las secciones largas del corpus dejan de truncarse. Coste: el modelo pasa de ~470 MB a ~1,1 GB y exige prefijos `query:`/`passage:` |
+| 2026-09-23 | Arquitectura del RAG | Biblioteca importable (`buscar_documentos`) → **servicio HTTP de evidencias, con el LLM fuera** | El LLM vive en la API de chat y usa el RAG como *function tool*. El RAG recupera, valida las citas que devuelve el modelo y construye la bibliografía desde el corpus (§7.2) |
+| 2026-09-23 | Metadatos del corpus | `fuente` como texto libre → **`fuentes` estructuradas (título, organismo, URL) + `revisado` / `fecha_revision`** | Permite citar cada fuente con su URL y dejar borradores versionados sin que entren en el índice |
+| 2026-09-23 | Identificador de fragmento | ID posicional por documento (`archivo#n`) → **`chunk_id` estable** (`archivo:slug-sección:ordinal`) | Reordenar o añadir secciones ya no cambia los IDs: una cita sigue apuntando al mismo texto |
 
 **Decisiones abiertas que alimentarán esta tabla:** LLM local vs. servicio gestionado, SQL generado
 por el LLM vs. consultas predefinidas, y opción de red en AWS (§12).
@@ -143,8 +148,8 @@ API Madrid (tiempo real) ─▶ pipeline_tiempo_real.py ─▶ PostgreSQL: calid
                                      ▼
 CSV histórico ─▶ notebooks 01/02/03 ─▶ modelo .joblib ─▶ PostgreSQL: resumen_datos_ml (+ anomalías)
 
-Corpus RAG (.md) ─▶ troceado + embeddings ─▶ ChromaDB            (Fase 2, en development)
-Usuario ─▶ LLM con tools: query_sql + search_documents ─▶ web   (Fases 3–4, pendiente)
+Corpus RAG (.md) ─▶ troceado + embeddings e5 ─▶ ChromaDB ─▶ servicio RAG (FastAPI)   (Fase 2)
+Usuario ─▶ API de chat: LLM + tools (query_sql, buscar_evidencias) ─▶ web        (Fases 3–4, pendiente)
 ```
 
 **Principio de diseño central:** los **datos de contaminación viven estructurados en SQL** y la
@@ -156,12 +161,13 @@ mediante *tool use*.
 | Fase | Contenido | Estado |
 |---|---|---|
 | 1 | Datos, detector de anomalías, pipeline en tiempo real | Hecha en local; migración a AWS en curso |
-| 2 | Vector DB con corpus de salud y normativa | Implementada y mergeada en `development` (PR #37); pendiente de pasar a `main` |
-| 3 | LLM con *tool use* | Pendiente |
+| 2 | Vector DB y servicio de evidencias | **Reescrita** (2026-09-23) en `feature/rag-herramienta-llm`, pendiente de PR. La primera versión sigue en `development` (PR #37) |
+| 3 | LLM con *tool use* | Pendiente. El contrato de la herramienta documental ya está fijado por el servicio RAG (§7.2) |
 | 4 | Informes y dashboard | Pendiente (solo esqueleto de `ApiUsuario` con `/health`) |
 
-**Stack actual:** Python 3.12 · pandas · NumPy · scikit-learn · PostgreSQL 18 (Docker) · SQLAlchemy ·
-pyarrow · ChromaDB · sentence-transformers · pytest · GitHub Actions · FastAPI (esqueleto) · AWS (en curso).
+**Stack actual:** Python 3.12 · pandas · NumPy · scikit-learn · PostgreSQL 18 (RDS) · SQLAlchemy ·
+pyarrow · ChromaDB · sentence-transformers (`multilingual-e5-base`) · FastAPI · pytest ·
+GitHub Actions · AWS (Lambda, S3, RDS, EventBridge, CloudWatch).
 
 ---
 
@@ -306,9 +312,7 @@ limitación permanente ya documentada — no un resto del bug.
 
 ## 7. Asistente: RAG y LLM
 
-### 7.1 Vector DB y corpus (Fase 2) — estado actual
-
-**Estado:** implementado (2026-09-02) y mergeado en `development` (PR #37); **pendiente de pasar a `main`**.
+### 7.1 Corpus documental — estado actual
 
 - **Corpus:** 11 documentos Markdown escritos para el proyecto como **síntesis divulgativas** de
   fuentes públicas, no copias: guías OMS 2021, límites legales UE, partículas, óxidos de nitrógeno,
@@ -316,23 +320,93 @@ limitación permanente ya documentada — no un resto del bug.
   zonas, glosario de magnitudes y aviso médico.
 - **Fuentes citadas:** OMS (2021), Directiva 2008/50/CE, Directiva (UE) 2024/2881, RD 102/2011,
   EEA, US EPA, SEAIC, AEMET y Ayuntamiento de Madrid (Madrid 360).
-- **Metadatos YAML** por documento (`titulo`, `tema`, `contaminantes`, `fuente`) para **filtrar**
-  búsquedas y **citar la fuente** en las respuestas.
-- **Troceado por secciones** `##`, anteponiendo título y sección a cada fragmento para dar contexto
-  al embedding; la sección de fuentes se excluye de la búsqueda.
-- **Embeddings locales:** `paraphrase-multilingual-MiniLM-L12-v2`, con vectores normalizados y
-  distancia coseno. Alternativa de más calidad: `multilingual-e5-base` (exige prefijos
-  `query:`/`passage:`).
-- **ChromaDB persistente**, reconstruida entera en cada ingesta (idempotente). `buscar_documentos`
-  devuelve los k = 4 fragmentos más cercanos con filtro opcional por tema: es la base de la futura
-  tool `search_documents`.
-- Coste práctico: `sentence-transformers` arrastra PyTorch y el modelo pesa ~470 MB.
+- **Frontmatter YAML** por documento: `titulo`, `tema` (salud | normativa | proyecto),
+  `contaminantes`, `revisado`, `fecha_revision` y `fuentes` estructuradas (título, organismo, URL).
+  Solo se indexa lo que tiene `revisado: true`, así que un borrador puede vivir en git sin
+  contaminar el índice. El formato se valida al leer: un documento mal formado es un error, no un
+  fragmento silenciosamente raro.
+- **Troceado por secciones** `##`, anteponiendo `título — sección` a cada fragmento para dar
+  contexto al embedding. Las secciones `Fuentes`, `Cómo lo usa el asistente` e `Indicación para el
+  asistente` se excluyen: las fuentes viven en el frontmatter y las instrucciones, en el prompt.
+- **`chunk_id` estable** (`ozono_salud:efectos-en-la-salud:0`): no depende de la posición de la
+  sección, de modo que reordenar el documento no invalida las citas ya emitidas.
+- **Guardia de tokens**: una sección que supera el presupuesto del modelo se parte por párrafos
+  conservando título y sección. Se cuenta con el tokenizer real del modelo, no por palabras.
 
-### 7.2 LLM con tool use (Fase 3) — pendiente
+### 7.2 Servicio de evidencias con citas verificables (Fase 2) — estado actual
 
-- Tools previstas: `query_sql` (solo lectura sobre las tablas de §5.3) y `search_documents`.
+**Estado:** reescrito el 2026-09-23 por Carlos Fernández en `feature/rag-herramienta-llm` (fases A y
+B de un plan propio de tres). Sustituye a `trocear_corpus.py` e `ingesta_vector.py`. Pendiente de PR
+y de la fase C (evaluación reproducible).
+
+**Principio de diseño: el LLM vive fuera.** El paquete `rag` no llama a ningún modelo de lenguaje.
+Se expone como servicio HTTP (FastAPI) y el LLM, que vive en la API de chat, lo usa como
+*function tool*. El flujo es de tres pasos:
+
+1. **Recuperar** — `POST /rag/evidencias` devuelve los fragmentos bajo un umbral de distancia,
+   numerados `D1..Dn`, con avisos fijos y bibliografía.
+2. **Redactar** — el modelo devuelve un JSON `{estado, afirmaciones[{texto, evidencias}],
+   limitaciones}` conforme a un esquema que sirve tal cual como `response_format` del proveedor.
+3. **Validar y renderizar** — `POST /rag/validar` comprueba el contrato y produce el texto final, o
+   devuelve los errores y un `mensaje_reparacion` listo para reenviar al modelo.
+
+**La garantía principal: las citas no se creen, se comprueban.** Título, sección, tema y fuentes se
+resuelven **desde el corpus a partir del `chunk_id`**, nunca de lo que envíe el cliente ni el
+modelo. Un ID inventado se rechaza; una URL que el modelo escriba dentro de una afirmación no llega
+nunca a la bibliografía; y la bibliografía final solo lista los documentos realmente citados. Es el
+argumento central del capítulo del asistente: la trazabilidad no depende de la buena conducta del
+LLM, sino de una comprobación determinista en el backend.
+
+**Endpoints:** `GET /salud` (modelo, fragmentos, commit y umbral vigentes), `GET /rag/herramienta`
+(definición de la tool en formato *function calling* de OpenAI, que aceptan también Ollama, vLLM y
+Mistral, más el JSON Schema de salida), `POST /rag/evidencias` y `POST /rag/validar`.
+
+**Qué se valida de la salida del modelo:** claves exactas, estado dentro de la enumeración, máximo 8
+afirmaciones de 700 caracteres, cada una con al menos un ID **de esa petición**, máximo 6
+limitaciones, coherencia entre estado y número de afirmaciones, y existencia real de cada
+`chunk_id` en el corpus.
+
+**Umbral de evidencia: 0,22 de distancia coseno, provisional.** Medido con e5-base, `k=4` y el
+corpus actual (11 documentos, 50 fragmentos): las preguntas documentales dan 0,11–0,20 en su mejor
+fragmento y las ajenas al corpus («capital de Francia») 0,24–0,25. El margen es estrecho y la
+calibración con casos de evaluación es la fase C. Si nada baja del umbral, el estado es
+`sin_evidencia` y la API de chat puede responder insuficiencia **sin llamar al modelo**.
+
+**Avisos fijos en código, no en el corpus.** El aviso sanitario se añade si la pregunta contiene
+términos de salud o si alguna evidencia citada es de `tema: salud`; la limitación de actualidad, si
+la pregunta habla de «hoy», «ahora» o «está activado». Confirma la decisión de julio: el aviso
+médico no puede quedar a merced de la recuperación semántica.
+
+**Robustez de la indexación:** `python -m rag.indexar` calcula los embeddings **antes** de borrar la
+colección anterior, así que un fallo a mitad no destruye el índice. La colección guarda el modelo
+con el que se construyó, el commit del corpus y la fecha; la búsqueda se niega a responder si el
+modelo configurado no coincide con el del índice. Cualquier respuesta es trazable al corpus exacto
+que la generó.
+
+**Defensa frente a inyección de prompt:** el prompt de sistema propuesto
+(`docs/rag/prompt_respuesta_fundamentada_v1.txt`) instruye tratar la pregunta y las evidencias como
+datos, nunca como instrucciones.
+
+**Coste práctico:** el modelo e5-base pesa ~1,1 GB y se carga en la primera petición, no al
+arrancar, así que esa primera llamada tarda. El servicio no lleva autenticación ni CORS: asume red
+interna entre la API de chat y él.
+
+**Fuera de alcance declarado:** ingesta incremental, filtro por contaminante, *reranking*, historial
+de conversación, *streaming* y consulta de mediciones.
+
+### 7.3 LLM con tool use (Fase 3) — pendiente
+
+- Tools previstas: `query_sql` (solo lectura sobre las tablas de §5.3) y `buscar_evidencias`
+  (§7.2, ya implementada como servicio).
 - Plan original: LLM local (Llama 3 / Mistral con Ollama o vLLM) por **privacidad**, condicionado a
-  disponer de GPU.
+  disponer de GPU. Decisión en revisión por plazos: se valora una API gestionada tras una interfaz
+  propia fina que permita sustituirla después por un modelo local `[por confirmar]`.
+- **Hueco de contrato detectado (2026-09-24).** El esquema de salida solo admite IDs `D1..Dn` del
+  corpus documental, y la validación rechaza cualquier afirmación que cite un ID que no venga de la
+  recuperación. Una afirmación basada en `query_sql` («ayer el NO2 en Escuelas Aguirre estuvo
+  anómalo») no tiene ningún `Dn` que citar. Hay que decidir si la API de chat separa las dos rutas
+  (datos por un lado, documentos por otro) o si el esquema se extiende con IDs de medición
+  (`S1..Sn`) validados igual que las citas. Conviene resolverlo antes de implementar `query_sql`.
 
 ---
 
@@ -450,7 +524,15 @@ La retención de los logs se baja a 14 días; por defecto no caducan nunca.
 - **Flujo de ramas:** `feature/*` → PR a `development` → PR a `main`. Un workflow bloquea cualquier
   PR a `main` que no venga de `development`. Más de 30 pull requests hasta julio de 2026.
 - **Tests:** 16 en `main` (limpieza, features, inferencia, estaciones, ingesta, pipeline e
-  integración) más 5 del troceado del corpus (en `development`).
+  integración). Con el RAG reescrito la suite unitaria sube a **80 pruebas** (verificado el
+  2026-09-24 en local: 80 pasan y 2 ficheros se saltan por no tener `chromadb` instalado; con él
+  serían 95 según el autor `[por confirmar]`).
+- **La cobertura real en CI es menor que la nominal.** El job unitario instala solo
+  `pandas numpy scikit-learn sqlalchemy requests python-dotenv pytest PyYAML`; sin `fastapi`,
+  `chromadb` ni `jsonschema` se saltan las pruebas del contrato HTTP, de la búsqueda y del esquema
+  de salida. Sí se cubren el troceado del corpus y la validación de citas, que son lógica pura y
+  la parte crítica. `[pendiente: añadir fastapi, httpx y jsonschema al job — son ligeros y no
+  arrastran torch]`
 - **CI con dos jobs:** unitarios sin base de datos e **integración contra un PostgreSQL efímero**
   como servicio. Los de integración solo corren con `RUN_DB_TESTS=1`, para no tocar nunca la base
   local por accidente.
@@ -493,6 +575,16 @@ La retención de los logs se baja a 14 días; por defecto no caducan nunca.
   cron en una rama de trabajo no detiene nada hasta que el cambio llega a `main`; para pararlo
   de inmediato hay que desactivarlo desde la interfaz de GitHub.
 - En CI el PostgreSQL de servicio es la versión 16 y en local la 18 `[pendiente de alinear]`.
+- **A un LLM no se le pide que cite bien: se le comprueba.** En el servicio de evidencias el modelo
+  solo elige identificadores `D1..Dn`; el backend resuelve título, sección y fuentes desde el
+  `chunk_id` leyendo el corpus. Una URL que invente el modelo no puede llegar a la bibliografía.
+  Convertir una promesa de comportamiento en una comprobación determinista es lo que hace la
+  trazabilidad defendible.
+- **Un índice se reconstruye sin ventana de indisponibilidad** calculando los embeddings antes de
+  borrar la colección anterior. El orden ingenuo (borrar y luego calcular) deja el sistema sin
+  índice si el cálculo falla.
+- **Un identificador derivado de la posición es frágil.** Pasar a `chunk_id` estables
+  (`archivo:slug-sección:ordinal`) permite reordenar el corpus sin invalidar las citas emitidas.
 
 **Seguridad**
 - En abril la contraseña de la base de datos quedó **escrita en el código y commiteada**. Se corrigió
@@ -520,6 +612,11 @@ La retención de los logs se baja a 14 días; por defecto no caducan nunca.
   último disponible es la hora 22, y pasada la medianoche la API ya solo devuelve el día nuevo.
   Consecuencia sistemática: el bloque de noche (20-23) tiene cobertura 0,75 todos los días. Para
   cerrarlo haría falta una segunda fuente (el fichero diario del Ayuntamiento), no otro horario.
+- **El asistente documental no consulta mediciones.** El RAG responde sobre documentación revisada,
+  no sobre la situación de hoy; por eso añade automáticamente una limitación de actualidad cuando
+  la pregunta habla del presente. Unir ambas fuentes es la Fase 3 (§7.3).
+- **El umbral de evidencia está calibrado a ojo** (0,22) con un margen estrecho entre las preguntas
+  del corpus y las ajenas, y sin casos de evaluación todavía.
 
 **Trabajo futuro**
 - LSTM Autoencoder o PCA para anomalías de forma del perfil horario.
@@ -527,6 +624,10 @@ La retención de los logs se baja a 14 días; por defecto no caducan nunca.
 - Módulo de *forecasting* para las preguntas de planificación.
 - Opción de red C en AWS (RDS sin exposición pública a coste cero).
 - CI/CD con despliegue automático a AWS mediante OIDC.
+- **Evaluación del RAG (fase C):** 20–30 casos (documentales, sin evidencia y adversarios) con
+  recall@k, validez de citas y acierto de abstención, y recalibrado del umbral con esos datos.
+- **Decidir dónde se despliega el servicio RAG.** El modelo de embeddings (~1,1 GB) y su carga en
+  la primera petición no encajan bien en Lambda; habrá que valorar otra opción de cómputo.
 
 ---
 
@@ -566,6 +667,13 @@ La retención de los logs se baja a 14 días; por defecto no caducan nunca.
 | 2026-09-19 a 20 | Arreglo desplegado y **validado en producción**: la ejecución de la noche del 19
   corrigió 742 horas placeholder y las anomalías volvieron a 13 (frente a las 97 falsas de antes
   del arreglo). Las 126 filas `N` restantes son exactamente la hora 23 en todas las series |
+| 2026-09-23 | **RAG reescrito como servicio de evidencias** (Carlos Fernández, rama
+  `feature/rag-herramienta-llm`): paquete `rag` instalable, modelo e5-base, `chunk_id` estables,
+  umbral de evidencia y API FastAPI que valida las citas del modelo. Sustituye a `trocear_corpus.py`
+  e `ingesta_vector.py` |
+| 2026-09-24 | Revisión de esa rama (Guillermo): la suite unitaria pasa (80 pruebas en local). Se
+  detectan el README principal desactualizado (documenta ficheros ya borrados), la cobertura parcial
+  del RAG en CI y el hueco de contrato entre `query_sql` y el esquema de citas (§7.3) |
 
 ---
 
@@ -576,8 +684,15 @@ La retención de los logs se baja a 14 días; por defecto no caducan nunca.
 - [ ] ¿Permite la organización crear roles IAM? (necesario para la Lambda y para el despliegue
   automático, ver más abajo)
 - [ ] LLM de la Fase 3: ¿local con GPU o servicio gestionado? ¿SQL generado o consultas predefinidas?
+- [ ] **¿Cómo se citan los datos de SQL?** El esquema de respuesta del RAG solo admite evidencias
+  documentales `D1..Dn`; hay que decidir cómo encajan las afirmaciones basadas en mediciones antes
+  de implementar `query_sql` (§7.3).
+- [ ] ¿Dónde se despliega el servicio RAG en producción? (§7.2: modelo de ~1,1 GB)
 - [ ] ¿Se valoró Azure Functions para la ingesta programada? (§2)
-- [ ] Pasar la Fase 2 (RAG) de `development` a `main`.
+- [ ] Integrar la Fase 2: abrir el PR de `feature/rag-herramienta-llm` a `development` y llevar el
+  RAG hasta `main`. La versión anterior (PR #37) queda sustituida.
+- [ ] Actualizar el README principal: sigue documentando `trocear_corpus.py`, `ingesta_vector.py` y
+  el modelo MiniLM, todos ya sustituidos (enlaces rotos en las líneas 50, 208, 284-286 y 347-364).
 - [ ] Contrastar la atribución del pico de PM10 del 15-03-2022 a polvo sahariano.
 - [ ] **Despliegue automático desde GitHub Actions (CI/CD).** Evaluado: `workflow_dispatch`
   con selector de rama, build de la imagen, tag por SHA del commit (en vez de `latest`, para

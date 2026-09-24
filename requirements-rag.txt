@@ -1,7 +1,21 @@
-# Dependencias de la Fase 2 (RAG). Complementan a requirements.txt.
+# Dependencias del RAG documental (src/rag). Complementan a requirements.txt.
 # Instalar con:  pip install -r requirements-rag.txt
 #
-# Aviso: sentence-transformers arrastra PyTorch (descarga grande, cientos de MB).
-sentence-transformers
-chromadb
-PyYAML
+# Aviso: sentence-transformers arrastra PyTorch (descarga grande). En máquinas sin
+# GPU conviene instalar antes la rueda de CPU:
+#   pip install torch --index-url https://download.pytorch.org/whl/cpu
+# La primera ejecución descarga el modelo intfloat/multilingual-e5-base (~1,1 GB,
+# se cachea en ~/.cache/huggingface).
+sentence-transformers==6.1.0
+transformers==5.17.0
+tokenizers==0.23.2
+chromadb==1.5.9
+PyYAML==6.0.3
+fastapi==0.141.1         # servicio HTTP de la herramienta RAG (rag/api.py)
+uvicorn==0.53.0          # `python -m rag.api`
+httpx==0.28.1            # cliente HTTP que usa fastapi.testclient en las pruebas
+pytest==9.1.1
+
+# El propio paquete `rag` (src/rag) en modo editable, para `python -m rag.indexar`
+# y para que ApiUsuario lo importe sin tocar sys.path.
+-e .

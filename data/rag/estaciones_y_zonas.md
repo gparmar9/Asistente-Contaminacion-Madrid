@@ -1,8 +1,13 @@
 ---
 titulo: Estaciones de medición y zonas de Madrid
-tema: estaciones
+tema: proyecto
 contaminantes: []
-fuente: "Ayuntamiento de Madrid — datos abiertos"
+revisado: true
+fecha_revision: 2026-09-23
+fuentes:
+  - titulo: Estaciones de control de calidad del aire (catálogo del portal de datos abiertos)
+    organismo: Ayuntamiento de Madrid
+    url: https://datos.madrid.es
 ---
 
 # Estaciones de medición y zonas de Madrid
@@ -16,6 +21,9 @@ datos y recomendar zonas:
 - **Urbana fondo**: en zonas residenciales alejadas del tráfico directo. Reflejan el aire que
   respira la mayoría de la población en su barrio.
 - **Suburbana**: en la periferia y zonas verdes. Menor NO2 pero mayor ozono en verano.
+
+El catálogo procede de `data/raw/estaciones-de-control.csv` (portal de datos abiertos). Es una
+síntesis orientativa: verifica los datos en la fuente original antes de un uso operativo.
 
 ## Catálogo de estaciones
 
@@ -57,10 +65,3 @@ datos y recomendar zonas:
   Plaza de España (4), Escuelas Aguirre (8), Castellana (48), Plaza Castilla (50).
 - Para dar la "mejor zona hoy", el asistente debe consultar los datos reales del día
   (tool de comparación de estaciones) y no basarse solo en esta tabla orientativa.
-
-## Fuentes
-
-- Ayuntamiento de Madrid — Portal de datos abiertos, «Estaciones de control de calidad del aire»
-  (catálogo usado en `data/raw/estaciones-de-control.csv`). <https://datos.madrid.es>
-
-> Este documento es una **síntesis divulgativa** elaborada para el proyecto a partir de las fuentes citadas; no reproduce literalmente su contenido. Verifica las cifras exactas y su vigencia en los documentos originales antes de cualquier uso operativo. Consulta también el [aviso médico](aviso_medico.md).

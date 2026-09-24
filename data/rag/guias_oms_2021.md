@@ -2,7 +2,15 @@
 titulo: Guías de calidad del aire de la OMS (2021)
 tema: normativa
 contaminantes: [PM2.5, PM10, NO2, O3, SO2, CO]
-fuente: "OMS 2021"
+revisado: true
+fecha_revision: 2026-09-23
+fuentes:
+  - titulo: "WHO global air quality guidelines: particulate matter (PM2.5 and PM10), ozone, nitrogen dioxide, sulfur dioxide and carbon monoxide (Ginebra, 2021)"
+    organismo: OMS
+    url: https://www.who.int/publications/i/item/9789240034228
+  - titulo: Nota descriptiva «Calidad del aire ambiente (exterior) y salud»
+    organismo: OMS
+    url: https://www.who.int/es/news-room/fact-sheets/detail/ambient-(outdoor)-air-quality-and-health
 ---
 
 # Guías de calidad del aire de la OMS (2021)
@@ -11,6 +19,9 @@ La Organización Mundial de la Salud publicó en septiembre de 2021 sus nuevas G
 de Calidad del Aire, que endurecen notablemente los niveles recomendados de 2005. Son niveles
 de referencia sanitaria, no límites legales: por debajo de ellos el riesgo para la salud se
 considera bajo, aunque no existe un umbral totalmente seguro para partículas ni NO2.
+
+Síntesis divulgativa elaborada para el proyecto a partir de las fuentes citadas; verifica las
+cifras exactas y su vigencia en los documentos originales.
 
 ## Niveles recomendados por contaminante
 
@@ -38,13 +49,3 @@ no implica una emergencia, pero indica exposición con riesgo sanitario acumulat
   desfavorable para grupos sensibles.
 - Para PM10, una media de 45 µg/m³ en 24h suele corresponder en Madrid a episodios de calima
   (polvo sahariano) o a obras/tráfico intenso muy locales.
-
-## Fuentes
-
-- Organización Mundial de la Salud (OMS). *WHO global air quality guidelines: particulate matter
-  (PM2.5 and PM10), ozone, nitrogen dioxide, sulfur dioxide and carbon monoxide.* Ginebra, 2021.
-  <https://www.who.int/publications/i/item/9789240034228>
-- OMS. Nota descriptiva «Calidad del aire ambiente (exterior) y salud».
-  <https://www.who.int/es/news-room/fact-sheets/detail/ambient-(outdoor)-air-quality-and-health>
-
-> Este documento es una **síntesis divulgativa** elaborada para el proyecto a partir de las fuentes citadas; no reproduce literalmente su contenido. Verifica las cifras exactas y su vigencia en los documentos originales antes de cualquier uso operativo. Consulta también el [aviso médico](aviso_medico.md).

@@ -2,7 +2,20 @@
 titulo: Límites legales de calidad del aire en la Unión Europea
 tema: normativa
 contaminantes: [NO2, PM10, PM2.5, O3]
-fuente: "Directiva 2008/50/CE; Directiva (UE) 2024/2881; RD 102/2011"
+revisado: true
+fecha_revision: 2026-09-23
+fuentes:
+  - titulo: Directiva 2008/50/CE relativa a la calidad del aire ambiente y a una atmósfera más limpia en Europa
+    organismo: Parlamento Europeo y Consejo
+    url: https://eur-lex.europa.eu/legal-content/ES/TXT/?uri=CELEX:32008L0050
+  - titulo: Directiva (UE) 2024/2881 relativa a la calidad del aire ambiente (refundición, límites 2030)
+    organismo: Parlamento Europeo y Consejo
+    url: https://eur-lex.europa.eu/eli/dir/2024/2881/oj
+  - titulo: Real Decreto 102/2011, de 28 de enero, relativo a la mejora de la calidad del aire
+    organismo: Gobierno de España (BOE)
+    url: https://www.boe.es/eli/es/rd/2011/01/28/102
+  - titulo: Sentencia de 2022 sobre superaciones de NO2 en España, asunto C-125/20
+    organismo: Tribunal de Justicia de la Unión Europea
 ---
 
 # Límites legales de calidad del aire en la Unión Europea
@@ -11,6 +24,9 @@ Los límites legales vigentes proceden de la Directiva 2008/50/CE (transpuesta e
 el RD 102/2011). En 2024 se aprobó la nueva Directiva (UE) 2024/2881, que endurece los límites
 con efecto en 2030 para acercarlos a las guías OMS. Son de obligado cumplimiento para las
 administraciones, a diferencia de las guías OMS que son recomendaciones sanitarias.
+
+Síntesis divulgativa elaborada para el proyecto a partir de las fuentes citadas; verifica las
+cifras exactas y su vigencia en los textos legales originales.
 
 ## Límites vigentes (Directiva 2008/50/CE)
 
@@ -42,17 +58,3 @@ Madrid ha incumplido históricamente el límite anual de NO2 (40 µg/m³) en est
 tráfico, lo que motivó una condena del Tribunal de Justicia de la UE a España en 2022 y la
 creación de Madrid Zona de Bajas Emisiones (ZBE) y Madrid 360. Desde 2022-2023 la ciudad
 cumple el límite legal anual de NO2 aunque sigue lejos de la guía OMS de 10 µg/m³.
-
-## Fuentes
-
-- Directiva 2008/50/CE del Parlamento Europeo y del Consejo, relativa a la calidad del aire
-  ambiente y a una atmósfera más limpia en Europa.
-  <https://eur-lex.europa.eu/legal-content/ES/TXT/?uri=CELEX:32008L0050>
-- Directiva (UE) 2024/2881 relativa a la calidad del aire ambiente (refundición, límites 2030).
-  <https://eur-lex.europa.eu/eli/dir/2024/2881/oj>
-- Real Decreto 102/2011, de 28 de enero, relativo a la mejora de la calidad del aire (España).
-  <https://www.boe.es/eli/es/rd/2011/01/28/102>
-- Tribunal de Justicia de la Unión Europea, sentencia de 2022 sobre superaciones de NO2 en España
-  (incluida la aglomeración de Madrid), asunto C-125/20.
-
-> Este documento es una **síntesis divulgativa** elaborada para el proyecto a partir de las fuentes citadas; no reproduce literalmente su contenido. Verifica las cifras exactas y su vigencia en los documentos originales antes de cualquier uso operativo. Consulta también el [aviso médico](aviso_medico.md).
