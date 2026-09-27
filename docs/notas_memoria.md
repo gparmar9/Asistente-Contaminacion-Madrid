@@ -93,6 +93,7 @@ Hilo conductor de la memoria: cómo y por qué cambió el diseño.
 | 2026-09-23 | Arquitectura del RAG | Biblioteca importable (`buscar_documentos`) → **servicio HTTP de evidencias, con el LLM fuera** | El LLM vive en la API de chat y usa el RAG como *function tool*. El RAG recupera, valida las citas que devuelve el modelo y construye la bibliografía desde el corpus (§7.2) |
 | 2026-09-23 | Metadatos del corpus | `fuente` como texto libre → **`fuentes` estructuradas (título, organismo, URL) + `revisado` / `fecha_revision`** | Permite citar cada fuente con su URL y dejar borradores versionados sin que entren en el índice |
 | 2026-09-23 | Identificador de fragmento | ID posicional por documento (`archivo#n`) → **`chunk_id` estable** (`archivo:slug-sección:ordinal`) | Reordenar o añadir secciones ya no cambia los IDs: una cita sigue apuntando al mismo texto |
+| 2026-09-28 | Despliegue | Build + push + `update-function-code` a mano desde un PC con credenciales SSO → **workflow de GitHub Actions (`workflow_dispatch`) con OIDC** | Cualquiera del equipo puede desplegar sin credenciales de AWS; no se despliega si fallan los tests; el tag por SHA dice qué commit corre en producción y permite volver atrás; la verificación del digest elimina el fallo silencioso de subir la imagen sin actualizar la función. Descartado: claves de acceso en GitHub Secrets (permanentes y compartidas) y despliegue en cada push a `main` (se optó por lanzarlo a mano para decidir cuándo se toca producción) |
 
 **Decisiones abiertas que alimentarán esta tabla:** LLM local vs. servicio gestionado, SQL generado
 por el LLM vs. consultas predefinidas, y dónde se despliega el servicio RAG en producción (§13).
@@ -651,7 +652,6 @@ La retención de los logs se baja a 14 días; por defecto no caducan nunca.
 - Baseline ponderado por recencia y ajustado solo con el periodo de entrenamiento.
 - Módulo de *forecasting* para las preguntas de planificación.
 - Opción de red C en AWS (RDS sin exposición pública a coste cero).
-- CI/CD con despliegue automático a AWS mediante OIDC.
 - **Evaluación del RAG (fase C):** 20–30 casos (documentales, sin evidencia y adversarios) con
   recall@k, validez de citas y acierto de abstención, y recalibrado del umbral con esos datos.
 - **Decidir dónde se despliega el servicio RAG.** El modelo de embeddings (~1,1 GB) y su carga en
@@ -713,8 +713,13 @@ La retención de los logs se baja a 14 días; por defecto no caducan nunca.
   identidad + rol `jupiter-github-actions-deploy` con permisos mínimos sobre ECR y la Lambda
   `jupiter-pipeline`. La primera *trust policy* (por `job_workflow_ref`) era inasumible y se
   corrigió a `sub` del repositorio (§10). Workflow `deploy_lambda.yml` escrito: tests → build →
-  push a ECR con tag por SHA → `update-function-code` → verificación del digest. Pendiente de la
-  primera ejecución real |
+  push a ECR con tag por SHA → `update-function-code` → verificación del digest |
+| 2026-09-28 | **Primer despliegue automático correcto** (Guillermo, desde `main`, commit `2778132`):
+  2 min 26 s en total (tests unitarios 41 s e integración 57 s en paralelo; build 24 s, push 26 s,
+  actualización 20 s). Verificado fuera del workflow: la Lambda ejecuta la imagen con tag
+  `2778132`, su `CodeSha256` coincide con el digest de ECR, se publicó la versión 2 y CloudTrail
+  registra el `AssumeRoleWithWebIdentity` con `sub` de la rama `main`. Primera ejecución
+  programada con la imagen nueva: noche del 28-09 `[por confirmar en CloudWatch]` |
 
 ---
 
@@ -739,12 +744,8 @@ La retención de los logs se baja a 14 días; por defecto no caducan nunca.
   ahí a `main` (hecho el 2026-09-27). La versión anterior (PR #37) queda sustituida.
 - [x] Actualizar el README principal al paquete `rag` (hecho el 2026-09-27).
 - [ ] Contrastar la atribución del pico de PM10 del 15-03-2022 a polvo sahariano.
-- [ ] **Despliegue automático desde GitHub Actions (CI/CD) — en curso.** Evaluado: `workflow_dispatch`
-  con selector de rama, build de la imagen, tag por SHA del commit (en vez de `latest`, para
-  poder saber qué código corre en producción y volver atrás), push a ECR y
-  `update-function-code`. De los tres pasos pendientes, los tres primeros ya están resueltos:
-  1) ~~cerrar el PR de la migración hasta `main`~~ hecho, 2) ~~comprobar el permiso de crear roles
-  IAM~~ confirmado, 3) ~~crear el proveedor OIDC y el rol~~ hecho el 2026-09-27 (§8.5,
-  `jupiter-github-actions-deploy`). Workflow escrito (`.github/workflows/deploy_lambda.yml`).
-  Queda: crear el secreto `AWS_ACCOUNT_ID` en GitHub, llevar el workflow a `main` (solo ahí
-  aparece el botón *Run workflow*) y **probar un despliegue real de punta a punta**.
+- [x] **Despliegue automático desde GitHub Actions (CI/CD) — hecho el 2026-09-28** (primer
+  despliegue verificado, ver bitácora; queda confirmar la ejecución programada de esa noche).
+  `workflow_dispatch` con selector de rama → tests → build → push a ECR con tag por SHA →
+  `update-function-code --publish` → verificación del digest. Rol `jupiter-github-actions-deploy`
+  por OIDC (§8.5). Detalle operativo en `deploy/README.md`.
