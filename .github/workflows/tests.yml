@@ -3,6 +3,8 @@ name: Tests
 on:
   push:
   pull_request:
+  # Lo reutiliza deploy_lambda.yml: no se despliega nada si los tests no pasan.
+  workflow_call:
 
 jobs:
   # Tests unitarios: lógica pura, sin base de datos. Rápidos y deterministas.

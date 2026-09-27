@@ -13,8 +13,13 @@ deploy/
     ├── confianza-lambda.json
     ├── permisos-lambda.json
     ├── confianza-scheduler.json
-    └── permisos-scheduler.json
+    ├── permisos-scheduler.json
+    ├── confianza-github-actions.json
+    └── permisos-github-actions.json
 ```
+
+El despliegue automático vive en
+[`.github/workflows/deploy_lambda.yml`](../.github/workflows/deploy_lambda.yml).
 
 ## Qué hay desplegado
 
@@ -65,7 +70,7 @@ cada invocación: Lambda reutiliza el contenedor mientras está caliente.
 
 ## Los roles IAM
 
-Hay **dos roles**, y cada uno se define con **dos ficheros**, que responden a preguntas distintas:
+Hay **tres roles**, y cada uno se define con **dos ficheros**, que responden a preguntas distintas:
 
 - **Política de confianza** (`confianza-*.json`): *¿quién puede ponerse este rol?*
 - **Política de permisos** (`permisos-*.json`): *¿qué puede hacer quien lo lleva puesto?*
@@ -86,7 +91,54 @@ sería mínimo. Eso es el **mínimo privilegio**.
 
 Un único permiso: `lambda:InvokeFunction` sobre **esta** función. No puede invocar ninguna otra.
 
+### `jupiter-github-actions-deploy` — rol del despliegue automático
+
+Lo asume el workflow [`deploy_lambda.yml`](../.github/workflows/deploy_lambda.yml) mediante
+**OIDC**: GitHub entrega al workflow un token firmado que dice de qué repositorio y rama viene, y
+AWS lo cambia por credenciales temporales de este rol. No hay ninguna clave de AWS guardada en
+GitHub.
+
+| Permiso | Alcance |
+|---|---|
+| `ecr:GetAuthorizationToken` | Login en ECR (esta acción no admite restringirse a un repositorio) |
+| Subida de imágenes (`ecr:PutImage`, capas…) | **Solo** el repositorio `jupiter-pipeline` |
+| `lambda:UpdateFunctionCode` + lecturas | **Solo** la función `jupiter-pipeline` |
+
+**Quién puede asumirlo** ([`confianza-github-actions.json`](iam/confianza-github-actions.json)):
+tokens con audiencia `sts.amazonaws.com` y `sub` de **este** repositorio, desde cualquier rama.
+IAM solo sabe evaluar las claves `aud` y `sub` del token, así que no se puede restringir a un
+fichero de workflow concreto. Consecuencia práctica: cualquier workflow del repositorio con
+`id-token: write` podría asumir el rol, así que **los cambios en `.github/workflows/` se revisan
+en el PR** como cualquier otro código con acceso a producción. El `<ID_CUENTA>` del fichero se
+sustituye al aplicarlo; no se versiona porque el repositorio es público.
+
 ## Desplegar un cambio
+
+### Opción recomendada: desde GitHub Actions
+
+Pestaña **Actions → Desplegar Lambda → Run workflow**, eligiendo la rama en *Use workflow from*
+(lo normal es `main`; con otra rama el workflow avisa). El workflow:
+
+1. Ejecuta los tests unitarios y de integración ([`tests.yml`](../.github/workflows/tests.yml)).
+   Si fallan, no despliega.
+2. Construye la imagen y la sube a ECR con dos tags: el **SHA corto del commit** (para saber qué
+   código corre y poder volver atrás) y `latest`.
+3. Actualiza la función con `update-function-code --publish` y espera a que termine.
+4. **Verifica** que el `CodeSha256` de la Lambda coincide con el digest recién subido; si no,
+   falla.
+5. Deja un resumen en la ejecución: rama, commit, tag, digest y versión publicada.
+
+Requisitos (una sola vez):
+
+- El workflow tiene que estar en `main`: GitHub solo muestra el botón *Run workflow* de los
+  workflows que existen en la rama por defecto.
+- Un secreto del repositorio `AWS_ACCOUNT_ID` (*Settings → Secrets and variables → Actions*) con
+  el ID de la cuenta. Es un secreto para que GitHub lo oculte en los logs, que son públicos.
+
+**Volver a una versión anterior:** relanzar el workflow desde el commit bueno, o a mano con
+`aws lambda update-function-code --image-uri <registro>/jupiter-pipeline:<sha-bueno>`.
+
+### Opción manual (sin GitHub Actions)
 
 Desde la **raíz del repositorio** (el contexto de construcción incluye `src/` y el CSV de
 estaciones):

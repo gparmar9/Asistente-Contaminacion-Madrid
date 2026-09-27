@@ -95,7 +95,8 @@ Hilo conductor de la memoria: cómo y por qué cambió el diseño.
 | 2026-09-23 | Identificador de fragmento | ID posicional por documento (`archivo#n`) → **`chunk_id` estable** (`archivo:slug-sección:ordinal`) | Reordenar o añadir secciones ya no cambia los IDs: una cita sigue apuntando al mismo texto |
 
 **Decisiones abiertas que alimentarán esta tabla:** LLM local vs. servicio gestionado, SQL generado
-por el LLM vs. consultas predefinidas, y opción de red en AWS (§12).
+por el LLM vs. consultas predefinidas, y dónde se despliega el servicio RAG en producción (§13).
+La opción de red en AWS ya está decidida y aplicada (opción A, §8.4).
 
 ---
 
@@ -487,9 +488,23 @@ documentada, no una configuración por defecto; la opción C queda como mejora f
   secundario útil: el equipo deja de compartirse la contraseña, cada persona la obtiene con sus
   propias credenciales de AWS.
 - **Presupuesto con alertas** antes de crear recursos. Un Budget **avisa, no bloquea**.
-- **Roles previstos:** ejecución de la Lambda (obligatorio), EventBridge Scheduler (obligatorio) y
-  OIDC para GitHub Actions (opcional). Un **usuario** tiene claves permanentes; un **rol** se asume
+- **Roles:** ejecución de la Lambda (`jupiter-lambda-pipeline`), EventBridge Scheduler
+  (`jupiter-scheduler-pipeline`) y, desde el 2026-09-27, **`jupiter-github-actions-deploy`** para el
+  despliegue automático (§13). Un **usuario** tiene claves permanentes; un **rol** se asume
   temporalmente. El propio acceso por SSO ya es un rol asumido.
+- **OIDC de GitHub Actions** (2026-09-27): proveedor de identidad
+  `token.actions.githubusercontent.com` + rol `jupiter-github-actions-deploy`, sin claves de acceso
+  guardadas en GitHub (el único secreto es el ID de cuenta, para que no salga en los logs públicos).
+  La *trust policy* exige audiencia `sts.amazonaws.com` y `sub` de este repositorio, desde
+  **cualquier rama**: el equipo quiere poder desplegar una rama concreta con `workflow_dispatch`.
+  Permisos inline `despliegue-ecr-lambda`: subir imágenes solo al repositorio ECR
+  `jupiter-pipeline` y `UpdateFunctionCode` solo sobre esa función. Políticas versionadas en
+  `deploy/iam/*-github-actions.json`.
+  - *Descartado:* restringir a la rama `main` (lo más seguro, pero impide desplegar otras ramas) y
+    personalizar el `sub` del token con la API de GitHub para incluir el workflow (una pieza más que
+    mantener y cambia el token de todos los workflows del repo).
+  - *Riesgo asumido:* cualquier workflow del repo con `id-token: write` podría asumir el rol, así
+    que los cambios en `.github/workflows/` se revisan en el PR como código con acceso a producción.
 
 ### 8.6 Adaptaciones del código detectadas para la nube
 
@@ -587,6 +602,11 @@ La retención de los logs se baja a 14 días; por defecto no caducan nunca.
   índice si el cálculo falla.
 - **Un identificador derivado de la posición es frágil.** Pasar a `chunk_id` estables
   (`archivo:slug-sección:ordinal`) permite reordenar el corpus sin invalidar las citas emitidas.
+- **Dependencias sin fijar en CI rompen sin tocar código.** El job de integración instalaba
+  `sqlalchemy` sin versión; una versión nueva pasó a elegir el driver `psycopg` (v3) para las URL
+  `postgresql://` y el job falló con `No module named 'psycopg'` en un PR que no tocaba la base de
+  datos. En local no pasaba porque `requirements.txt` fija `SQLAlchemy==2.0.49`. Corregido fijando
+  en CI las mismas versiones (2026-09-27).
 
 **Seguridad**
 - En abril la contraseña de la base de datos quedó **escrita en el código y commiteada**. Se corrigió
@@ -599,6 +619,12 @@ La retención de los logs se baja a 14 días; por defecto no caducan nunca.
 - El NAT Gateway es el coste inesperado más común al meter una Lambda en una VPC.
 - En una cuenta de una organización, las políticas del máster (SCP) pueden restringir acciones
   aunque se tenga `AdministratorAccess`.
+- **IAM solo evalúa `aud` y `sub` de un token OIDC de GitHub.** La primera versión del rol de
+  despliegue se restringía por `job_workflow_ref` (el fichero de workflow), que viaja en el token
+  pero IAM no expone como condición: la condición nunca se cumplía y el rol era inasumible.
+  AWS aceptó la política sin avisar; se detectó revisando la documentación antes del primer
+  despliegue y se corrigió a `sub` (2026-09-27). Lección: una *trust policy* válida
+  sintácticamente no es una *trust policy* que funcione.
 
 ---
 
@@ -679,30 +705,46 @@ La retención de los logs se baja a 14 días; por defecto no caducan nunca.
 | 2026-09-27 | Preparación del PR de la rama del RAG (Guillermo): README principal actualizado al paquete
   `rag` (instalación, `python -m rag.indexar`, servicio de evidencias, nuevo formato del
   frontmatter) y job de CI ampliado para probar la API del RAG. Suite local: 95 pasan, 1 saltada |
+| 2026-09-27 | En el PR salta el job `integracion`: `sqlalchemy` sin fijar versión en el workflow
+  eligió el driver `psycopg` (v3) para `postgresql://` y rompió la conexión (`requirements.txt` fija
+  `SQLAlchemy==2.0.49`, que resuelve a `psycopg2`). Corregido fijando las mismas versiones en CI.
+  RAG mergeado a `development` (PR #42) y de ahí a `main` (Guillermo) |
+| 2026-09-27 | **OIDC de GitHub Actions creado** (Guillermo, cuenta AWS del máster): proveedor de
+  identidad + rol `jupiter-github-actions-deploy` con permisos mínimos sobre ECR y la Lambda
+  `jupiter-pipeline`. La primera *trust policy* (por `job_workflow_ref`) era inasumible y se
+  corrigió a `sub` del repositorio (§10). Workflow `deploy_lambda.yml` escrito: tests → build →
+  push a ECR con tag por SHA → `update-function-code` → verificación del digest. Pendiente de la
+  primera ejecución real |
 
 ---
 
 ## 13. Preguntas abiertas
 
 - [ ] ¿Qué límite de gasto o créditos tiene la cuenta AWS del máster?
-- [ ] Confirmar la opción de red en AWS (A recomendada).
-- [ ] ¿Permite la organización crear roles IAM? (necesario para la Lambda y para el despliegue
-  automático, ver más abajo)
+- [x] Confirmar la opción de red en AWS → **opción A aplicada** desde el 2026-09-16 (RDS público +
+  TLS forzado), ver §8.4.
+- [x] ¿Permite la organización crear roles IAM? → sí: se creó el rol de ejecución de la Lambda
+  `jupiter-pipeline` (bitácora 2026-09-16). Queda por comprobar si también se puede crear el
+  **proveedor de identidad OIDC** que necesita GitHub Actions, que es un recurso distinto (ver el
+  punto de CI/CD más abajo).
 - [ ] LLM de la Fase 3: ¿local con GPU o servicio gestionado? ¿SQL generado o consultas predefinidas?
 - [ ] **¿Cómo se citan los datos de SQL?** El esquema de respuesta del RAG solo admite evidencias
   documentales `D1..Dn`; hay que decidir cómo encajan las afirmaciones basadas en mediciones antes
   de implementar `query_sql` (§7.3).
 - [ ] ¿Dónde se despliega el servicio RAG en producción? (§7.2: modelo de ~1,1 GB)
-- [ ] ¿Se valoró Azure Functions para la ingesta programada? (§2)
-- [ ] Integrar la Fase 2: abrir el PR de `feature/rag-herramienta-llm` a `development` y llevar el
-  RAG hasta `main`. La versión anterior (PR #37) queda sustituida.
+- [ ] ¿Se valoró Azure Functions para la ingesta programada? La rama `feature/azure-functions`
+  existe en el repositorio (ingesta a CSV), así que se llegó a probar algo, pero no queda anotado
+  por qué se optó por GitHub Actions en su lugar `[por confirmar con quien la creó]` (§2).
+- [x] Integrar la Fase 2: PR `feature/rag-herramienta-llm` mergeado a `development` (PR #42) y de
+  ahí a `main` (hecho el 2026-09-27). La versión anterior (PR #37) queda sustituida.
 - [x] Actualizar el README principal al paquete `rag` (hecho el 2026-09-27).
 - [ ] Contrastar la atribución del pico de PM10 del 15-03-2022 a polvo sahariano.
-- [ ] **Despliegue automático desde GitHub Actions (CI/CD).** Evaluado: `workflow_dispatch`
+- [ ] **Despliegue automático desde GitHub Actions (CI/CD) — en curso.** Evaluado: `workflow_dispatch`
   con selector de rama, build de la imagen, tag por SHA del commit (en vez de `latest`, para
   poder saber qué código corre en producción y volver atrás), push a ECR y
-  `update-function-code`. Requiere autenticación **OIDC** (las credenciales de la cuenta son
-  de SSO, temporales, así que no hay claves que meter en GitHub Secrets), lo que implica crear
-  un proveedor de identidad OIDC y un rol IAM en la cuenta compartida. El fichero del workflow
-  solo se puede lanzar desde la interfaz una vez viva en `main`. Pendiente: 1) cerrar el PR de
-  la migración hasta `main`, 2) comprobar el permiso de crear roles IAM, 3) escribir el YAML.
+  `update-function-code`. De los tres pasos pendientes, los tres primeros ya están resueltos:
+  1) ~~cerrar el PR de la migración hasta `main`~~ hecho, 2) ~~comprobar el permiso de crear roles
+  IAM~~ confirmado, 3) ~~crear el proveedor OIDC y el rol~~ hecho el 2026-09-27 (§8.5,
+  `jupiter-github-actions-deploy`). Workflow escrito (`.github/workflows/deploy_lambda.yml`).
+  Queda: crear el secreto `AWS_ACCOUNT_ID` en GitHub, llevar el workflow a `main` (solo ahí
+  aparece el botón *Run workflow*) y **probar un despliegue real de punta a punta**.
