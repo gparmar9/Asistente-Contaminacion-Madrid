@@ -40,3 +40,6 @@ __pycache__/
 
 #documentación
 docs/hoja_de_ruta.html
+
+# Metadatos de empaquetado (pip install -e .)
+*.egg-info/

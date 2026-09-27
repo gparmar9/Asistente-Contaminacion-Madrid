@@ -1,8 +1,16 @@
 ---
 titulo: Protocolo de episodios de alta contaminación de Madrid (NO2)
-tema: protocolo
+tema: normativa
 contaminantes: [NO2]
-fuente: "Ayuntamiento de Madrid; Madrid 360"
+revisado: true
+fecha_revision: 2026-09-23
+fuentes:
+  - titulo: Protocolo de actuación para episodios de contaminación por dióxido de nitrógeno (NO2)
+    organismo: Ayuntamiento de Madrid
+    url: https://www.madrid.es
+  - titulo: Madrid 360 y Zona de Bajas Emisiones
+    organismo: Ayuntamiento de Madrid
+    url: https://www.madrid360.es
 ---
 
 # Protocolo de episodios de alta contaminación de Madrid (NO2)
@@ -11,6 +19,10 @@ El Ayuntamiento de Madrid activa un protocolo específico cuando el dióxido de 
 supera ciertos umbrales, para proteger la salud y reducir emisiones de forma temporal. Se basa
 en las mediciones de la red y en la previsión meteorológica (los episodios coinciden con
 anticiclones invernales y estabilidad atmosférica que impide la dispersión).
+
+Advertencia: el protocolo y sus umbrales se han revisado en distintas versiones. Este documento
+es una síntesis divulgativa; comprueba siempre la **versión vigente** en las fuentes oficiales
+del Ayuntamiento de Madrid.
 
 ## Niveles del protocolo NO2
 
@@ -35,22 +47,3 @@ Madrid cuenta con la ZBE de ámbito ciudad (Madrid 360) y zonas de especial prot
 Madrid ZBEDEP Distrito Centro y Plaza Elíptica. Restringen el acceso de los vehículos más
 contaminantes (sin etiqueta ambiental) de forma permanente, lo que ha contribuido a la bajada
 estructural del NO2 desde 2019.
-
-## Cómo lo usa el asistente
-
-Cuando el asistente detecta valores de NO2 muy elevados o bloques marcados como anomalía en
-varias estaciones el mismo día, puede explicar al usuario que se dan las condiciones típicas de
-un episodio y recomendar prudencia, además de mencionar que el Ayuntamiento podría activar
-medidas de tráfico. No sustituye a la comunicación oficial: para saber si el protocolo está
-realmente activado hay que consultar las fuentes del Ayuntamiento de Madrid.
-
-## Fuentes
-
-- Ayuntamiento de Madrid — «Protocolo de actuación para episodios de contaminación por dióxido de
-  nitrógeno (NO2)». <https://www.madrid.es> (buscar «protocolo episodios NO2»).
-- Ayuntamiento de Madrid — Madrid 360 y Zona de Bajas Emisiones. <https://www.madrid360.es>
-
-> ⚠️ El protocolo y sus umbrales se han revisado en distintas versiones. Comprueba siempre la
-> **versión vigente** en las fuentes oficiales del Ayuntamiento de Madrid.
-
-> Este documento es una **síntesis divulgativa** elaborada para el proyecto a partir de las fuentes citadas; no reproduce literalmente su contenido. Verifica las cifras exactas y su vigencia en los documentos originales antes de cualquier uso operativo. Consulta también el [aviso médico](aviso_medico.md).

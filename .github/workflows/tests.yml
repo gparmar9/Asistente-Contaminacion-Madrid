@@ -18,8 +18,14 @@ jobs:
           python-version: '3.12'
           cache: 'pip'
 
+      # fastapi + httpx (mismas versiones que requirements-rag.txt) y jsonschema permiten probar
+      # la API del RAG y su esquema de salida. chromadb y sentence-transformers (PyTorch) no se
+      # instalan: test_buscar y test_indexar se saltan solos con importorskip.
+      # sqlalchemy fijado a la misma versión que requirements.txt: una versión más nueva sin fijar
+      # cambió el driver de PostgreSQL por defecto (psycopg2 → psycopg v3) y rompió el job de
+      # integración (ver requirements.txt).
       - name: Instalar dependencias
-        run: pip install pandas numpy scikit-learn sqlalchemy requests python-dotenv pytest PyYAML
+        run: pip install pandas numpy scikit-learn sqlalchemy==2.0.49 requests python-dotenv pytest PyYAML fastapi==0.141.1 httpx==0.28.1 jsonschema
 
       - name: Ejecutar tests unitarios
         run: pytest tests/ -v --ignore=tests/test_integracion_db.py
@@ -52,8 +58,11 @@ jobs:
           python-version: '3.12'
           cache: 'pip'
 
+      # sqlalchemy y psycopg2-binary fijados a las mismas versiones que requirements.txt: sin
+      # fijar, una SQLAlchemy más nueva elige el driver `psycopg` (v3) por defecto para
+      # `postgresql://` y el job falla con "No module named 'psycopg'" al no estar instalado.
       - name: Instalar dependencias
-        run: pip install pandas numpy scikit-learn sqlalchemy psycopg2-binary requests python-dotenv pytest
+        run: pip install pandas numpy scikit-learn sqlalchemy==2.0.49 psycopg2-binary==2.9.12 requests python-dotenv pytest
 
       - name: Ejecutar tests de integración
         env:
