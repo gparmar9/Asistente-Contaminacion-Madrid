@@ -9,7 +9,7 @@
 # temporales del rol jupiter-github-actions-deploy (deploy/iam/*-github-actions.json). No hay
 # claves de AWS en el repositorio. El único secreto es AWS_ACCOUNT_ID, para que el ID de la
 # cuenta no aparezca en los logs, que son públicos.
-name: Desplegar Lambda
+name: 🚀 Desplegar Lambda
 
 on:
   workflow_dispatch:
