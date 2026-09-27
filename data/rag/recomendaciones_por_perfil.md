@@ -2,7 +2,18 @@
 titulo: Recomendaciones de exposición por perfil de persona
 tema: salud
 contaminantes: [NO2, PM10, PM2.5, O3]
-fuente: "OMS 2021"
+revisado: true
+fecha_revision: 2026-09-23
+fuentes:
+  - titulo: WHO global air quality guidelines 2021 y notas descriptivas sobre calidad del aire y salud
+    organismo: OMS
+    url: https://www.who.int/publications/i/item/9789240034228
+  - titulo: Información al paciente sobre alergia y contaminación
+    organismo: Sociedad Española de Alergología e Inmunología Clínica (SEAIC)
+    url: https://www.seaic.org
+  - titulo: Recomendaciones de salud durante episodios de contaminación
+    organismo: Ayuntamiento de Madrid
+    url: https://www.madrid.es
 ---
 
 # Recomendaciones de exposición por perfil de persona
@@ -10,6 +21,9 @@ fuente: "OMS 2021"
 Guía práctica para adaptar la respuesta del asistente al perfil del usuario. La regla general:
 identificar qué contaminante está elevado ese día y en esa zona, y cruzarlo con la
 sensibilidad del perfil.
+
+Las recomendaciones por perfil son una **síntesis práctica de salud pública** orientativa, no
+pautas clínicas individualizadas. Verifica las cifras y su vigencia en las fuentes originales.
 
 ## Personas con alergias respiratorias (rinitis, asma alérgica)
 
@@ -55,17 +69,3 @@ frente a `expected_value`: al alza = episodio de contaminación, lo relevante pa
 fallo del sensor (poca cobertura de horas o señal congelada). Ante una anomalía **al alza**,
 conviene ser más prudente en la recomendación aunque el valor absoluto no sea extremo, y avisar
 al usuario de que la situación es atípica.
-
-## Fuentes
-
-- OMS. *WHO global air quality guidelines* (2021) y notas descriptivas sobre calidad del aire y
-  salud. <https://www.who.int/publications/i/item/9789240034228>
-- Sociedad Española de Alergología e Inmunología Clínica (SEAIC) — información al paciente sobre
-  alergia y contaminación. <https://www.seaic.org>
-- Ayuntamiento de Madrid — recomendaciones de salud durante episodios de contaminación.
-  <https://www.madrid.es>
-
-> Las recomendaciones por perfil son una **síntesis práctica de salud pública** orientativa, no
-> pautas clínicas individualizadas.
-
-> Este documento es una **síntesis divulgativa** elaborada para el proyecto a partir de las fuentes citadas; no reproduce literalmente su contenido. Verifica las cifras exactas y su vigencia en los documentos originales antes de cualquier uso operativo. Consulta también el [aviso médico](aviso_medico.md).
