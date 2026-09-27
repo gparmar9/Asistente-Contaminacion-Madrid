@@ -2,7 +2,8 @@
 #
 # Se lanza a mano: pestaña Actions → "Desplegar Lambda" → Run workflow, eligiendo la rama en
 # "Use workflow from". Automatiza el despliegue manual de deploy/README.md:
-#   tests → build de la imagen → push a ECR (tag = SHA del commit) → update-function-code → verificación
+#   tests → build de la imagen → push a ECR (tag = SHA del commit) → update-function-code
+#   → versión publicada con descripción → verificación. Para volver atrás: rollback_lambda.yml.
 #
 # Autenticación por OIDC: GitHub entrega un token firmado y AWS lo cambia por credenciales
 # temporales del rol jupiter-github-actions-deploy (deploy/iam/*-github-actions.json). No hay
@@ -76,12 +77,18 @@ jobs:
           echo "DIGEST=$DIGEST" >> "$GITHUB_ENV"
 
       # Subir la imagen no basta: la función sigue con la copia anterior hasta este paso.
+      # La versión se publica aparte para darle una descripción que rollback_lambda.yml muestra
+      # en su tabla; --code-sha256 impide publicar si la función no tiene la imagen recién subida.
       - name: Actualizar la función Lambda
         run: |
-          VERSION=$(aws lambda update-function-code --function-name "$FUNCTION_NAME" \
-            --image-uri "$IMAGEN:$TAG" --publish --query Version --output text)
-          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
+          aws lambda update-function-code --function-name "$FUNCTION_NAME" \
+            --image-uri "$IMAGEN:$TAG" --query LastUpdateStatus --output text
           aws lambda wait function-updated --function-name "$FUNCTION_NAME"
+          VERSION=$(aws lambda publish-version --function-name "$FUNCTION_NAME" \
+            --code-sha256 "${DIGEST#sha256:}" \
+            --description "deploy $TAG desde $GITHUB_REF_NAME (@$GITHUB_ACTOR)" \
+            --query Version --output text)
+          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
 
       - name: Verificar que la Lambda ejecuta la imagen nueva
         run: |

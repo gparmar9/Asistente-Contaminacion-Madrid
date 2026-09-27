@@ -93,7 +93,8 @@ Un único permiso: `lambda:InvokeFunction` sobre **esta** función. No puede inv
 
 ### `jupiter-github-actions-deploy` — rol del despliegue automático
 
-Lo asume el workflow [`deploy_lambda.yml`](../.github/workflows/deploy_lambda.yml) mediante
+Lo asumen los workflows [`deploy_lambda.yml`](../.github/workflows/deploy_lambda.yml) y
+[`rollback_lambda.yml`](../.github/workflows/rollback_lambda.yml) mediante
 **OIDC**: GitHub entrega al workflow un token firmado que dice de qué repositorio y rama viene, y
 AWS lo cambia por credenciales temporales de este rol. No hay ninguna clave de AWS guardada en
 GitHub.
@@ -102,7 +103,7 @@ GitHub.
 |---|---|
 | `ecr:GetAuthorizationToken` | Login en ECR (esta acción no admite restringirse a un repositorio) |
 | Subida de imágenes (`ecr:PutImage`, capas…) | **Solo** el repositorio `jupiter-pipeline` |
-| `lambda:UpdateFunctionCode` + lecturas | **Solo** la función `jupiter-pipeline` |
+| `lambda:UpdateFunctionCode`, `PublishVersion`, `ListVersionsByFunction` + lecturas | **Solo** la función `jupiter-pipeline` (no puede borrarla ni cambiar su configuración) |
 
 **Quién puede asumirlo** ([`confianza-github-actions.json`](iam/confianza-github-actions.json)):
 tokens con audiencia `sts.amazonaws.com` y `sub` de **este** repositorio, desde cualquier rama.
@@ -123,7 +124,8 @@ Pestaña **Actions → Desplegar Lambda → Run workflow**, eligiendo la rama en
    Si fallan, no despliega.
 2. Construye la imagen y la sube a ECR con dos tags: el **SHA corto del commit** (para saber qué
    código corre y poder volver atrás) y `latest`.
-3. Actualiza la función con `update-function-code --publish` y espera a que termine.
+3. Actualiza la función, espera a que termine y publica una **versión numerada** con la
+   descripción `deploy <commit> desde <rama> (@quien)`.
 4. **Verifica** que el `CodeSha256` de la Lambda coincide con el digest recién subido; si no,
    falla.
 5. Deja un resumen en la ejecución: rama, commit, tag, digest y versión publicada.
@@ -134,9 +136,6 @@ Requisitos (una sola vez):
   workflows que existen en la rama por defecto.
 - Un secreto del repositorio `AWS_ACCOUNT_ID` (*Settings → Secrets and variables → Actions*) con
   el ID de la cuenta. Es un secreto para que GitHub lo oculte en los logs, que son públicos.
-
-**Volver a una versión anterior:** relanzar el workflow desde el commit bueno, o a mano con
-`aws lambda update-function-code --image-uri <registro>/jupiter-pipeline:<sha-bueno>`.
 
 ### Opción manual (sin GitHub Actions)
 
@@ -172,6 +171,28 @@ Para verificar que la función tiene la imagen nueva, compara el digest del `pus
 ```powershell
 aws lambda get-function-configuration --function-name jupiter-pipeline --query "{estado:State,sha:CodeSha256}" --output table
 ```
+
+## Volver a una versión anterior (rollback)
+
+Si un despliegue rompe algo: **Actions → Rollback Lambda → Run workflow**, en dos pasos.
+
+1. **Consultar** (campos vacíos). No cambia nada: muestra en el resumen de la ejecución una tabla
+   con las versiones publicadas (número, fecha, imagen, descripción) y cuál está en producción, y
+   sugiere la anterior.
+2. **Volver atrás**: relanzar con la **versión** elegida y el **motivo**. El workflow apunta la
+   función a la imagen de esa versión por su digest (no reconstruye nada: segundos), publica una
+   versión nueva con la descripción `rollback a vN: <motivo> (@quien)` y verifica que la Lambda
+   ejecuta exactamente esa imagen.
+
+No hay un "volver a la anterior" automático a propósito: después de un rollback, la versión
+anterior es justo la que estaba mal. Si la versión activa ya es un rollback, la tabla lo avisa en
+vez de sugerir.
+
+El rollback funciona porque **ECR conserva las imágenes antiguas** aunque pierdan su tag cuando se
+sube una nueva. Si algún día se añade una regla de ciclo de vida que borre imágenes sin tag, las
+versiones que apunten a ellas dejarán de poder recuperarse.
+
+Deshacer un rollback es otro rollback (a la versión que se retiró) o un despliegue nuevo.
 
 ## Probar en local antes de desplegar
 
