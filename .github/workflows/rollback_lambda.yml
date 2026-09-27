@@ -10,7 +10,7 @@
 #
 # Usa el mismo rol OIDC que deploy_lambda.yml y comparte su bloqueo: nunca coinciden un
 # despliegue y un rollback.
-name: Rollback Lambda
+name: ⏮️ Rollback Lambda
 
 on:
   workflow_dispatch:
