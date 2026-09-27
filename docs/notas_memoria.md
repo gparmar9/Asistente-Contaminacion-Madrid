@@ -524,15 +524,15 @@ La retención de los logs se baja a 14 días; por defecto no caducan nunca.
 - **Flujo de ramas:** `feature/*` → PR a `development` → PR a `main`. Un workflow bloquea cualquier
   PR a `main` que no venga de `development`. Más de 30 pull requests hasta julio de 2026.
 - **Tests:** 16 en `main` (limpieza, features, inferencia, estaciones, ingesta, pipeline e
-  integración). Con el RAG reescrito la suite unitaria sube a **80 pruebas** (verificado el
-  2026-09-24 en local: 80 pasan y 2 ficheros se saltan por no tener `chromadb` instalado; con él
-  serían 95 según el autor `[por confirmar]`).
-- **La cobertura real en CI es menor que la nominal.** El job unitario instala solo
-  `pandas numpy scikit-learn sqlalchemy requests python-dotenv pytest PyYAML`; sin `fastapi`,
-  `chromadb` ni `jsonschema` se saltan las pruebas del contrato HTTP, de la búsqueda y del esquema
-  de salida. Sí se cubren el troceado del corpus y la validación de citas, que son lógica pura y
-  la parte crítica. `[pendiente: añadir fastapi, httpx y jsonschema al job — son ligeros y no
-  arrastran torch]`
+  integración). Con el RAG reescrito la suite unitaria llega a **95 pruebas** (verificado el
+  2026-09-27 en local con todas las dependencias del RAG: 95 pasan y 1 se salta, la que carga el
+  modelo real, que solo corre con `RUN_RAG_TESTS=1`).
+- **Cobertura del RAG en CI.** El job unitario instala además `fastapi`, `httpx` (mismas versiones
+  que `requirements-rag.txt`) y `jsonschema`, que son ligeros y no arrastran PyTorch: así se prueban
+  el contrato HTTP y el esquema de salida del modelo, además del troceado y la validación de citas.
+  `chromadb` y `sentence-transformers` no se instalan a propósito (descarga grande), y
+  `test_buscar` y `test_indexar` se saltan solos con `importorskip`. Simulado en local sin esas
+  dos librerías: 80 pasan y 2 ficheros se saltan `[por confirmar en la primera ejecución de CI]`.
 - **CI con dos jobs:** unitarios sin base de datos e **integración contra un PostgreSQL efímero**
   como servicio. Los de integración solo corren con `RUN_DB_TESTS=1`, para no tocar nunca la base
   local por accidente.
@@ -674,6 +674,9 @@ La retención de los logs se baja a 14 días; por defecto no caducan nunca.
 | 2026-09-24 | Revisión de esa rama (Guillermo): la suite unitaria pasa (80 pruebas en local). Se
   detectan el README principal desactualizado (documenta ficheros ya borrados), la cobertura parcial
   del RAG en CI y el hueco de contrato entre `query_sql` y el esquema de citas (§7.3) |
+| 2026-09-27 | Preparación del PR de la rama del RAG (Guillermo): README principal actualizado al paquete
+  `rag` (instalación, `python -m rag.indexar`, servicio de evidencias, nuevo formato del
+  frontmatter) y job de CI ampliado para probar la API del RAG. Suite local: 95 pasan, 1 saltada |
 
 ---
 
@@ -691,8 +694,7 @@ La retención de los logs se baja a 14 días; por defecto no caducan nunca.
 - [ ] ¿Se valoró Azure Functions para la ingesta programada? (§2)
 - [ ] Integrar la Fase 2: abrir el PR de `feature/rag-herramienta-llm` a `development` y llevar el
   RAG hasta `main`. La versión anterior (PR #37) queda sustituida.
-- [ ] Actualizar el README principal: sigue documentando `trocear_corpus.py`, `ingesta_vector.py` y
-  el modelo MiniLM, todos ya sustituidos (enlaces rotos en las líneas 50, 208, 284-286 y 347-364).
+- [x] Actualizar el README principal al paquete `rag` (hecho el 2026-09-27).
 - [ ] Contrastar la atribución del pico de PM10 del 15-03-2022 a polvo sahariano.
 - [ ] **Despliegue automático desde GitHub Actions (CI/CD).** Evaluado: `workflow_dispatch`
   con selector de rama, build de la imagen, tag por SHA del commit (en vez de `latest`, para

@@ -18,8 +18,11 @@ jobs:
           python-version: '3.12'
           cache: 'pip'
 
+      # fastapi + httpx (mismas versiones que requirements-rag.txt) y jsonschema permiten probar
+      # la API del RAG y su esquema de salida. chromadb y sentence-transformers (PyTorch) no se
+      # instalan: test_buscar y test_indexar se saltan solos con importorskip.
       - name: Instalar dependencias
-        run: pip install pandas numpy scikit-learn sqlalchemy requests python-dotenv pytest PyYAML
+        run: pip install pandas numpy scikit-learn sqlalchemy requests python-dotenv pytest PyYAML fastapi==0.141.1 httpx==0.28.1 jsonschema
 
       - name: Ejecutar tests unitarios
         run: pytest tests/ -v --ignore=tests/test_integracion_db.py

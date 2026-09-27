@@ -22,7 +22,7 @@ mediciones con conocimiento de salud y normativa.
 | Ingesta del histórico y del tiempo real a PostgreSQL | La base de datos sobre la que se responde |
 | Detección de anomalías: Isolation Forest + baseline z-score | Distingue lo inusual de lo normal, tanto episodios ambientales como fallos de sensor |
 | Vector DB con documentos de salud y normativa | Aporta el conocimiento que las mediciones por sí solas no contienen |
-| Chatbot con *tool use*: `query_sql` y `search_documents` | Traduce una pregunta en lenguaje natural a consultas sobre ambas fuentes |
+| Chatbot con *tool use*: `query_sql` y `buscar_evidencias` (citas verificables) | Traduce una pregunta en lenguaje natural a consultas sobre ambas fuentes |
 | Interfaz mínima para chatear, con aviso médico visible | Hace el sistema usable por alguien que no escribe SQL |
 
 **Qué queda fuera**: informes automáticos rotativos, dashboard completo con visualizaciones y
@@ -47,9 +47,9 @@ API Madrid (tiempo real) ──▶ AWS Lambda: pipeline_tiempo_real ──▶ RD
 
 CSV histórico 2018-2026 ──▶ Notebooks 01/02/03 (en local) ──▶ modelo .joblib ──▶ S3
 
-data/rag/*.md ──▶ trocear_corpus.py ──▶ embeddings locales ──▶ ChromaDB: corpus_rag   (Fase 2)
+data/rag/*.md ──▶ rag.indexar (embeddings e5) ──▶ ChromaDB: corpus_rag ──▶ rag.api: evidencias D1..Dn   (Fase 2)
 
-RDS + ChromaDB ──▶ LLM con tool use ──▶ Dashboard   (Fases 3-4)
+RDS + servicio RAG ──▶ LLM con tool use ──▶ Dashboard   (Fases 3-4)
 ```
 
 Los **datos de contaminación viven estructurados en PostgreSQL**. La Vector DB solo contiene
@@ -204,19 +204,23 @@ todavía no estaban publicadas cuando se ejecutó antes.
 No depende de Postgres ni del histórico: funciona igual elijas la opción A o la B.
 
 ```bash
-pip install -r requirements-rag.txt   # arrastra PyTorch, descarga grande
-python src/rag/ingesta_vector.py      # trocea data/rag/*.md e indexa en data/chroma/
+pip install torch --index-url https://download.pytorch.org/whl/cpu   # opcional: rueda de CPU, más ligera
+pip install -r requirements-rag.txt   # versiones fijadas; instala también el paquete `rag` (-e .)
+python -m rag.indexar                 # trocea data/rag/*.md e indexa en data/chroma/
 ```
 
-La primera ejecución también descarga el modelo de embeddings (~470 MB, se cachea en `~/.cache`).
-Comprueba que la búsqueda responde:
+La primera ejecución también descarga el modelo de embeddings `intfloat/multilingual-e5-base`
+(~1,1 GB, se cachea en `~/.cache/huggingface`). Comprueba que la recuperación responde y arranca
+el servicio:
 
 ```bash
-python src/rag/buscar.py "¿puedo correr hoy si soy asmático?"
+python -m rag.evidencias "¿puedo correr si soy asmático?"   # evidencias D1..Dn bajo el umbral
+python -m rag.api                                           # servicio HTTP en :8010 (docs en /docs)
 ```
 
-El índice se reconstruye entero en cada ejecución, así que reejecutar la ingesta tras tocar el
-corpus es la forma normal de actualizarlo.
+El índice se reconstruye entero en cada ejecución, así que reindexar tras tocar el corpus es la
+forma normal de actualizarlo. Detalles, variables de entorno y contrato HTTP en
+[`src/rag/README.md`](src/rag/README.md).
 
 ### Comprobar los tests
 
@@ -280,17 +284,21 @@ aws logs tail /aws/lambda/jupiter-pipeline --since 1d --format short
 │   │   ├── cargar_resumen_ml.py            # carga inicial masiva (COPY) de ResumenDatosML
 │   │   ├── cargar_estaciones.py            # carga la tabla de estaciones (con distrito)
 │   │   └── ingesta_datos_live_csv.py       # backup diario a CSV (GitHub Action)
-│   └── rag/
-│       ├── trocear_corpus.py               # .md → fragmentos con metadatos (lógica pura, testeada)
-│       ├── embeddings.py                   # modelo de embeddings + colección ChromaDB (config común)
-│       ├── ingesta_vector.py               # reconstruye el índice vectorial desde el corpus
-│       └── buscar.py                       # búsqueda semántica (base de la tool `search_documents`)
+│   └── rag/                                # paquete `rag` (detalle en src/rag/README.md)
+│       ├── corpus.py                       # .md → fragmentos con chunk_id estable (lógica pura)
+│       ├── embeddings.py                   # modelo e5 + recuento de tokens + colección ChromaDB
+│       ├── indexar.py                      # reconstruye el índice vectorial desde el corpus
+│       ├── buscar.py                       # búsqueda semántica con filtro por tema
+│       ├── evidencias.py                   # evidencias D1..Dn, validación de citas y bibliografía
+│       ├── api.py                          # servicio FastAPI (tool `buscar_evidencias` para el LLM)
+│       └── errores.py                      # excepciones tipadas
 ├── deploy/                                  # infraestructura AWS (imagen Lambda + roles IAM)
 ├── tests/                                   # tests unitarios y de integración
 ├── docker-compose.yml                       # PostgreSQL 18 + volumen
 ├── .env.example                             # plantilla de variables de entorno
 ├── requirements.txt
-├── requirements-rag.txt                     # dependencias extra de la Fase 2 (RAG)
+├── requirements-rag.txt                     # dependencias extra de la Fase 2 (RAG), versiones fijadas
+├── pyproject.toml                           # empaquetado del paquete `rag` y config de pytest
 └── AGENTS.md / CLAUDE.md                    # instrucciones para asistentes de IA (Claude, Codex)
 ```
 
@@ -318,50 +326,65 @@ corpus fuente que se trocea, se convierte en *embeddings* y se indexa en la Vect
 - **Se versionan en git**: son fuente escrita a mano y pequeños. Lo que **no** se versiona es el
   índice generado (embeddings/ChromaDB), igual que los `.parquet`.
 - **Metadatos**: cada documento empieza con *frontmatter* YAML para poder filtrar en la búsqueda
-  y citar la fuente en la respuesta:
+  y construir la bibliografía de la respuesta (las fuentes salen de aquí, nunca del modelo):
 
   ```yaml
   ---
   titulo: Ozono troposférico (O3) y salud
-  tema: salud            # salud | normativa | referencia | estaciones | protocolo | disclaimer
-  contaminantes: [O3]    # códigos afectados; [] si no aplica
-  fuente: "OMS 2021; EEA; US EPA"
+  tema: salud                  # salud | normativa | proyecto
+  contaminantes: [O3]          # códigos afectados; [] si no aplica
+  revisado: true               # false = se lee y valida, pero no se indexa
+  fecha_revision: 2026-09-23   # obligatoria si revisado
+  fuentes:                     # obligatoria y no vacía si revisado
+    - titulo: WHO global air quality guidelines 2021
+      organismo: OMS
+      url: https://www.who.int/publications/i/item/9789240034228
   ---
   ```
 
   > Nota YAML: los códigos que YAML interpreta como booleanos (`NO`, `YES`, `ON`, `OFF`) deben ir
   > entrecomillados en la lista `contaminantes` (p. ej. `["NO", NO2, NOx]`).
 
-- **Disclaimer médico**: [`data/rag/aviso_medico.md`](data/rag/aviso_medico.md) (`tema: disclaimer`)
-  está en el corpus para trazabilidad, pero su recordatorio debe aplicarse **desde el system
-  prompt** del chatbot, no dejarse a la recuperación semántica (podría no recuperarse justo en la
-  respuesta que lo necesita).
+- **Aviso sanitario**: el texto del aviso vive **en código** ([`src/rag/evidencias.py`](src/rag/evidencias.py)),
+  no en el corpus, y se añade siempre que la pregunta es de salud o se cita un documento con
+  `tema: salud`. Así no depende de que la búsqueda recupere justo el documento
+  [`aviso_medico.md`](data/rag/aviso_medico.md), que sigue en el corpus como documento normal.
 
 ## Pipeline RAG / Vector DB (Fase 2)
 
-Convierte el corpus de [`data/rag/`](data/rag/) en un índice vectorial consultable en lenguaje
-natural. Vive en [`src/rag/`](src/rag/) y **no depende de PostgreSQL**: se puede usar sin levantar
-Docker.
+Convierte el corpus de [`data/rag/`](data/rag/) en un índice vectorial y lo expone como una
+**herramienta (*function tool*) para el LLM de la API de chat**. El RAG **no llama a ningún modelo
+de lenguaje**: devuelve fragmentos numerados `D1..Dn`, el modelo redacta citándolos y después el
+RAG **valida las citas y construye la bibliografía desde el corpus**. Vive en
+[`src/rag/`](src/rag/) y **no depende de PostgreSQL**: se puede usar sin levantar Docker.
 
 ```
-data/rag/*.md ──▶ trocear_corpus.py ──▶ embeddings.py ──▶ ChromaDB (data/chroma/, colección `corpus_rag`)
-                     (fragmentos)        (vectores)                    │
-                                                                       ▼
-                                                       buscar.py · buscar_documentos(consulta, k, tema)
+data/rag/*.md ──▶ rag.corpus ──▶ rag.embeddings ──▶ ChromaDB (data/chroma/, colección `corpus_rag`)
+ (revisado: true)  (fragmentos)   (vectores e5)               │
+                                                              ▼
+                          rag.buscar · rag.evidencias (umbral → D1..Dn, validación de citas)
+                                                              │
+                                                              ▼
+            rag.api (FastAPI, :8010) · POST /rag/evidencias · POST /rag/validar  ◀── LLM de la API de chat
 ```
 
 | Módulo | Qué hace |
 |---|---|
-| [`trocear_corpus.py`](src/rag/trocear_corpus.py) | Separa el frontmatter, trocea por encabezados `##` y antepone `título — sección` a cada fragmento (da contexto al embedding y mejora el *recall*). Ignora la sección `Fuentes` (ya está en los metadatos) y aplana `contaminantes` a cadena, porque ChromaDB no admite listas. Es **lógica pura**, sin torch ni ChromaDB: por eso se puede testear en CI. |
-| [`embeddings.py`](src/rag/embeddings.py) | Config compartida por ingesta y búsqueda para que no se desincronicen: modelo `paraphrase-multilingual-MiniLM-L12-v2` (local, multilingüe, se cachea en memoria) y colección persistente con métrica **coseno**. |
-| [`ingesta_vector.py`](src/rag/ingesta_vector.py) | Reconstruye el índice de cero en cada ejecución, así que el índice siempre refleja el corpus actual (**idempotente**). |
-| [`buscar.py`](src/rag/buscar.py) | `buscar_documentos(consulta, k, tema)` — devuelve los *k* fragmentos más cercanos, con filtro opcional por metadatos. Es la base de la futura tool `search_documents` de la Fase 3. |
+| [`corpus.py`](src/rag/corpus.py) | Valida el frontmatter, trocea por `##` con guardia de tokens y genera `chunk_id` estables (`ozono_salud:efectos-en-la-salud:0`). **Lógica pura**, sin torch ni ChromaDB: se testea en CI. |
+| [`embeddings.py`](src/rag/embeddings.py) | Modelo `intfloat/multilingual-e5-base` (512 tokens), recuento con el tokenizer real y colección Chroma con métrica **coseno**. |
+| [`indexar.py`](src/rag/indexar.py) | `python -m rag.indexar`: reconstruye el índice entero (**idempotente**). Calcula los embeddings antes de borrar el índice anterior y guarda modelo, commit del corpus y fecha. |
+| [`buscar.py`](src/rag/buscar.py) | `buscar(consulta, k, tema)`: los *k* fragmentos más cercanos. Rechaza un índice construido con otro modelo. |
+| [`evidencias.py`](src/rag/evidencias.py) | Filtra por umbral de distancia (0,22, provisional), numera `D1..Dn`, valida que cada afirmación del modelo cite IDs existentes y añade avisos y bibliografía. |
+| [`api.py`](src/rag/api.py) | Servicio FastAPI: `/rag/evidencias`, `/rag/validar`, `/rag/herramienta` y `/salud`. |
+
+El contrato completo para la API de chat (flujo en tres pasos, esquema de salida del modelo,
+reparación) está en [`src/rag/README.md`](src/rag/README.md).
 
 **Dependencias**: van en [`requirements-rag.txt`](requirements-rag.txt) aparte, porque
-`sentence-transformers` arrastra PyTorch (descarga de cientos de MB) y no hace falta para la Fase 1.
+`sentence-transformers` arrastra PyTorch (descarga grande) y no hace falta para la Fase 1.
 
 > El índice generado (`data/chroma/`) **no se versiona**, igual que los `.parquet`: se regenera con
-> `python src/rag/ingesta_vector.py`.
+> `python -m rag.indexar`.
 
 ---
 
@@ -437,6 +460,6 @@ enchufable, así que añadir un detector nuevo no toca el resto del sistema.
 ## Tecnologías
 
 Python · pandas / NumPy · scikit-learn · PostgreSQL 18 (RDS en AWS, Docker en local) ·
-SQLAlchemy + psycopg2 · pyarrow · pytest · GitHub Actions · ChromaDB + sentence-transformers (RAG) ·
+SQLAlchemy + psycopg2 · pyarrow · pytest · GitHub Actions · ChromaDB + sentence-transformers + FastAPI (RAG) ·
 **AWS**: Lambda, ECR, S3, RDS, EventBridge Scheduler, SSM Parameter Store, CloudWatch y SNS ·
-(futuro: FastAPI, LLM)
+(futuro: LLM)
