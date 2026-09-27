@@ -94,6 +94,7 @@ Hilo conductor de la memoria: cómo y por qué cambió el diseño.
 | 2026-09-23 | Metadatos del corpus | `fuente` como texto libre → **`fuentes` estructuradas (título, organismo, URL) + `revisado` / `fecha_revision`** | Permite citar cada fuente con su URL y dejar borradores versionados sin que entren en el índice |
 | 2026-09-23 | Identificador de fragmento | ID posicional por documento (`archivo#n`) → **`chunk_id` estable** (`archivo:slug-sección:ordinal`) | Reordenar o añadir secciones ya no cambia los IDs: una cita sigue apuntando al mismo texto |
 | 2026-09-28 | Despliegue | Build + push + `update-function-code` a mano desde un PC con credenciales SSO → **workflow de GitHub Actions (`workflow_dispatch`) con OIDC** | Cualquiera del equipo puede desplegar sin credenciales de AWS; no se despliega si fallan los tests; el tag por SHA dice qué commit corre en producción y permite volver atrás; la verificación del digest elimina el fallo silencioso de subir la imagen sin actualizar la función. Descartado: claves de acceso en GitHub Secrets (permanentes y compartidas) y despliegue en cada push a `main` (se optó por lanzarlo a mano para decidir cuándo se toca producción) |
+| 2026-09-28 | Vuelta atrás | `update-function-code` a mano con la imagen buena → **workflow de rollback** con modo consulta, vuelta por digest a una versión publicada y verificación | Deshacer un despliegue fallido en segundos, sin credenciales ni reconstruir la imagen, y dejando rastro (cada rollback publica una versión con su motivo). Descartado: "volver a la versión anterior" automático, porque tras un rollback la anterior es justo la versión que se deshizo; primero se consulta la tabla y luego se elige |
 
 **Decisiones abiertas que alimentarán esta tabla:** LLM local vs. servicio gestionado, SQL generado
 por el LLM vs. consultas predefinidas, y dónde se despliega el servicio RAG en producción (§13).
@@ -499,8 +500,10 @@ documentada, no una configuración por defecto; la opción C queda como mejora f
   La *trust policy* exige audiencia `sts.amazonaws.com` y `sub` de este repositorio, desde
   **cualquier rama**: el equipo quiere poder desplegar una rama concreta con `workflow_dispatch`.
   Permisos inline `despliegue-ecr-lambda`: subir imágenes solo al repositorio ECR
-  `jupiter-pipeline` y `UpdateFunctionCode` solo sobre esa función. Políticas versionadas en
-  `deploy/iam/*-github-actions.json`.
+  `jupiter-pipeline` y, solo sobre esa función, `UpdateFunctionCode`, `PublishVersion` y
+  `ListVersionsByFunction` (las dos últimas añadidas el 2026-09-28 para el rollback). Comprobado
+  con el simulador de IAM que no puede borrar la función ni cambiar su configuración. Políticas
+  versionadas en `deploy/iam/*-github-actions.json`.
   - *Descartado:* restringir a la rama `main` (lo más seguro, pero impide desplegar otras ramas) y
     personalizar el `sub` del token con la API de GitHub para incluir el workflow (una pieza más que
     mantener y cambia el token de todos los workflows del repo).
@@ -620,6 +623,10 @@ La retención de los logs se baja a 14 días; por defecto no caducan nunca.
 - El NAT Gateway es el coste inesperado más común al meter una Lambda en una VPC.
 - En una cuenta de una organización, las políticas del máster (SCP) pueden restringir acciones
   aunque se tenga `AdministratorAccess`.
+- **El simulador de políticas de IAM** (`simulate-principal-policy`) permite comprobar permisos
+  sin ejecutar nada. Con varios recursos en la misma llamada, el resultado resumido marcó como
+  denegadas acciones que el rol sí tenía; hay que leer el detalle por recurso o simular recurso a
+  recurso.
 - **IAM solo evalúa `aud` y `sub` de un token OIDC de GitHub.** La primera versión del rol de
   despliegue se restringía por `job_workflow_ref` (el fichero de workflow), que viaja en el token
   pero IAM no expone como condición: la condición nunca se cumplía y el rol era inasumible.
@@ -720,6 +727,11 @@ La retención de los logs se baja a 14 días; por defecto no caducan nunca.
   `2778132`, su `CodeSha256` coincide con el digest de ECR, se publicó la versión 2 y CloudTrail
   registra el `AssumeRoleWithWebIdentity` con `sub` de la rama `main`. Primera ejecución
   programada con la imagen nueva: noche del 28-09 `[por confirmar en CloudWatch]` |
+| 2026-09-28 | **Workflow de rollback** (Guillermo, `rollback_lambda.yml`): modo consulta con la tabla
+  de versiones y vuelta a una versión por digest, sin reconstruir, con verificación. El despliegue
+  pasa a publicar versiones con descripción (`deploy <commit> desde <rama>`). Rol ampliado con
+  `PublishVersion` y `ListVersionsByFunction`. Lógica de la tabla probada en local con los datos
+  reales de la función (v1 y v2); **pendiente de la primera ejecución real** |
 
 ---
 

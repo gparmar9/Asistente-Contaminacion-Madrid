@@ -1,0 +1,160 @@
+# Vuelta atrás de la Lambda del pipeline (jupiter-pipeline) a una versión anterior.
+#
+# Se lanza a mano: Actions → "Rollback Lambda" → Run workflow.
+#   - Sin versión: modo consulta. Muestra las versiones publicadas y cuál está activa, y no cambia nada.
+#   - Con versión y motivo: apunta la función a la imagen de esa versión (por digest, sin
+#     reconstruir), publica una versión nueva que deja constancia del rollback y lo verifica.
+#
+# No hay "volver a la anterior" automático a propósito: después de un rollback, la versión
+# anterior es justo la que estaba mal. Primero se consulta y luego se elige.
+#
+# Usa el mismo rol OIDC que deploy_lambda.yml y comparte su bloqueo: nunca coinciden un
+# despliegue y un rollback.
+name: Rollback Lambda
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Versión a la que volver (vacío = solo consultar, no cambia nada)"
+        required: false
+        default: ""
+      motivo:
+        description: "Motivo del rollback (obligatorio si indicas versión)"
+        required: false
+        default: ""
+
+permissions:
+  contents: read
+  id-token: write   # permite pedir el token OIDC que AWS cambia por credenciales temporales
+
+concurrency:
+  group: despliegue-lambda
+  cancel-in-progress: false
+
+env:
+  AWS_REGION: eu-west-1
+  ECR_REPOSITORY: jupiter-pipeline
+  FUNCTION_NAME: jupiter-pipeline
+
+jobs:
+  rollback:
+    name: Consultar versiones o volver atrás
+    runs-on: ubuntu-latest
+    steps:
+      # Las entradas llegan por variables de entorno y no interpoladas en el script, para que un
+      # motivo con comillas o $(...) no se ejecute como código.
+      - name: Validar la entrada
+        env:
+          VERSION: ${{ inputs.version }}
+          MOTIVO: ${{ inputs.motivo }}
+        run: |
+          if [ -n "$VERSION" ]; then
+            [[ "$VERSION" =~ ^[0-9]+$ ]] || { echo "::error::La versión debe ser un número (p. ej. 1), no '$VERSION'."; exit 1; }
+            [ -n "${MOTIVO// }" ] || { echo "::error::Indica el motivo del rollback."; exit 1; }
+          fi
+
+      - name: Credenciales de AWS (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::${{ secrets.AWS_ACCOUNT_ID }}:role/jupiter-github-actions-deploy
+          role-session-name: rollback-${{ github.run_id }}
+          aws-region: ${{ env.AWS_REGION }}
+          mask-aws-account-id: true
+
+      - name: Versiones publicadas
+        run: |
+          ACTUAL=$(aws lambda get-function-configuration --function-name "$FUNCTION_NAME" \
+            --query CodeSha256 --output text)
+          echo "ACTUAL=$ACTUAL" >> "$GITHUB_ENV"
+          aws lambda list-versions-by-function --function-name "$FUNCTION_NAME" \
+            --query "Versions[?Version!='\$LATEST'].{v:Version,fecha:LastModified,sha:CodeSha256,desc:Description}" \
+            --output json | jq 'sort_by(.v | tonumber) | reverse' > versiones.json
+
+          # Versión activa: la más reciente publicada con la imagen que ejecuta la función.
+          VIVA=$(jq -r --arg a "$ACTUAL" 'map(select(.sha == $a) | .v | tonumber) | max // empty' versiones.json)
+          DESC_VIVA=$(jq -r --arg v "$VIVA" '.[] | select(.v == $v) | .desc' versiones.json)
+          # Sugerencia: la versión más reciente anterior a la activa y con otra imagen.
+          SUGERIDA=$(jq -r --arg a "$ACTUAL" --argjson viva "${VIVA:-0}" \
+            'map(select(.sha != $a and (.v | tonumber) < $viva)) | first | .v // empty' versiones.json)
+
+          {
+            echo "### Versiones de \`$FUNCTION_NAME\`"
+            echo
+            echo "| Versión | Fecha (UTC) | Imagen | Descripción | |"
+            echo "|---|---|---|---|---|"
+            jq -r --arg a "$ACTUAL" --arg viva "$VIVA" '.[] | "| \(.v) | \(.fecha[0:16] | sub("T"; " ")) | `\(.sha[0:12])` | \(if .desc == "" then "—" else .desc end) | \(if .v == $viva then "**en producción**" elif .sha == $a then "misma imagen" else "" end) |"' versiones.json
+            echo
+            if [ -z "$VIVA" ]; then
+              echo "La imagen activa no coincide con ninguna versión publicada: revisa la función antes de volver atrás."
+            elif [[ "$DESC_VIVA" == rollback* ]]; then
+              echo "La versión activa ($VIVA) ya es un rollback: la anterior es justo la que se deshizo. Elige en la tabla."
+            elif [ -n "$SUGERIDA" ]; then
+              echo "Versión anterior a la activa: **$SUGERIDA**. Comprueba en la tabla que es la que quieres."
+            fi
+          } | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - name: Modo consulta
+        if: inputs.version == ''
+        run: |
+          echo "No se ha cambiado nada. Para volver atrás, relanza el workflow indicando versión y motivo." \
+            | tee -a "$GITHUB_STEP_SUMMARY"
+
+      # La imagen se referencia por digest: aunque ya no tenga tag en ECR, es exactamente la misma.
+      - name: Volver a la versión elegida
+        if: inputs.version != ''
+        env:
+          VERSION: ${{ inputs.version }}
+          MOTIVO: ${{ inputs.motivo }}
+          REGISTRO: ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ env.AWS_REGION }}.amazonaws.com
+        run: |
+          DESTINO=$(jq -r --arg v "$VERSION" '.[] | select(.v == $v) | .sha' versiones.json)
+          [ -n "$DESTINO" ] || { echo "::error::La versión $VERSION no existe. Consulta la tabla del paso anterior."; exit 1; }
+          if [ "$DESTINO" = "$ACTUAL" ]; then
+            echo "::error::La función ya ejecuta la imagen de la versión $VERSION: no hay nada que deshacer."
+            exit 1
+          fi
+          echo "DESTINO=$DESTINO" >> "$GITHUB_ENV"
+
+          aws lambda update-function-code --function-name "$FUNCTION_NAME" \
+            --image-uri "$REGISTRO/$ECR_REPOSITORY@sha256:$DESTINO" --query LastUpdateStatus --output text
+          aws lambda wait function-updated --function-name "$FUNCTION_NAME"
+
+          # --code-sha256: solo publica si la función tiene exactamente la imagen elegida.
+          DESCRIPCION="rollback a v$VERSION: $MOTIVO (@$GITHUB_ACTOR)"
+          NUEVA=$(aws lambda publish-version --function-name "$FUNCTION_NAME" \
+            --code-sha256 "$DESTINO" --description "${DESCRIPCION:0:256}" --query Version --output text)
+          echo "NUEVA=$NUEVA" >> "$GITHUB_ENV"
+
+      - name: Verificar que la Lambda ejecuta la imagen elegida
+        if: inputs.version != ''
+        run: |
+          read -r ESTADO SHA_LAMBDA < <(aws lambda get-function-configuration \
+            --function-name "$FUNCTION_NAME" \
+            --query "[LastUpdateStatus, CodeSha256]" --output text)
+          echo "Estado de la actualización: $ESTADO"
+          echo "Imagen elegida:             $DESTINO"
+          echo "CodeSha256 de la Lambda:    $SHA_LAMBDA"
+          if [ "$ESTADO" != "Successful" ] || [ "$SHA_LAMBDA" != "$DESTINO" ]; then
+            echo "::error::La Lambda no ejecuta la imagen elegida."
+            exit 1
+          fi
+
+      - name: Resumen
+        if: inputs.version != ''
+        env:
+          VERSION: ${{ inputs.version }}
+          MOTIVO: ${{ inputs.motivo }}
+        run: |
+          {
+            echo
+            echo "### Rollback hecho"
+            echo
+            echo "| | |"
+            echo "|---|---|"
+            echo "| Vuelta a la versión | $VERSION (imagen \`${DESTINO:0:12}\`) |"
+            echo "| Imagen que se retira | \`${ACTUAL:0:12}\` |"
+            echo "| Versión publicada con el rollback | $NUEVA |"
+            echo "| Motivo | $MOTIVO |"
+            echo "| Lanzado por | @$GITHUB_ACTOR |"
+          } >> "$GITHUB_STEP_SUMMARY"
