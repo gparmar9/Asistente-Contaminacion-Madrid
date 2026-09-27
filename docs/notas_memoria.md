@@ -524,9 +524,11 @@ La retención de los logs se baja a 14 días; por defecto no caducan nunca.
 - **Flujo de ramas:** `feature/*` → PR a `development` → PR a `main`. Un workflow bloquea cualquier
   PR a `main` que no venga de `development`. Más de 30 pull requests hasta julio de 2026.
 - **Tests:** 16 en `main` (limpieza, features, inferencia, estaciones, ingesta, pipeline e
-  integración). Con el RAG reescrito la suite unitaria llega a **95 pruebas** (verificado el
-  2026-09-27 en local con todas las dependencias del RAG: 95 pasan y 1 se salta, la que carga el
-  modelo real, que solo corre con `RUN_RAG_TESTS=1`).
+  integración). Con el RAG reescrito la suite unitaria llega a **96 pruebas** (verificado el
+  2026-09-27 en local con todas las dependencias del RAG: 95 pasan por defecto y 1 se salta —
+  la que carga el modelo real e indexa y busca de extremo a extremo, solo activa con
+  `RUN_RAG_TESTS=1` por el coste de cargar el modelo—; con esa variable activada pasan las 96,
+  en 42,55 s).
 - **Cobertura del RAG en CI.** El job unitario instala además `fastapi`, `httpx` (mismas versiones
   que `requirements-rag.txt`) y `jsonschema`, que son ligeros y no arrastran PyTorch: así se prueban
   el contrato HTTP y el esquema de salida del modelo, además del troceado y la validación de citas.
