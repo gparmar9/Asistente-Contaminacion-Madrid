@@ -2,10 +2,27 @@
 titulo: Partículas en suspensión (PM10 y PM2.5) y salud
 tema: salud
 contaminantes: [PM10, PM2.5]
-fuente: "OMS 2021; EEA; AEMET"
+revisado: true
+fecha_revision: 2026-09-23
+fuentes:
+  - titulo: WHO global air quality guidelines 2021, capítulos de PM2.5 y PM10
+    organismo: OMS
+    url: https://www.who.int/publications/i/item/9789240034228
+  - titulo: Nota descriptiva «Calidad del aire ambiente (exterior) y salud»
+    organismo: OMS
+    url: https://www.who.int/es/news-room/fact-sheets/detail/ambient-(outdoor)-air-quality-and-health
+  - titulo: Informes «Air quality in Europe»
+    organismo: Agencia Europea de Medio Ambiente (EEA)
+    url: https://www.eea.europa.eu
+  - titulo: Información y avisos sobre intrusiones de polvo sahariano (calima)
+    organismo: AEMET
+    url: https://www.aemet.es
 ---
 
 # Partículas en suspensión (PM10 y PM2.5) y salud
+
+Síntesis divulgativa elaborada para el proyecto a partir de las fuentes citadas; verifica las
+cifras exactas y su vigencia en los documentos originales.
 
 ## Qué son
 
@@ -49,14 +66,3 @@ febrero-marzo de 2021. En calima:
 | 15-25 | 45-50 | Aceptable; sensibles: moderar esfuerzo prolongado |
 | 25-50 | 50-100 | Moderado-alto; sensibles: evitar ejercicio exterior |
 | >50 | >100 | Alto (episodio); población general: reducir actividad exterior |
-
-## Fuentes
-
-- OMS. *WHO global air quality guidelines* (2021), capítulos de PM2.5 y PM10.
-  <https://www.who.int/publications/i/item/9789240034228>
-- OMS. Nota descriptiva «Calidad del aire ambiente (exterior) y salud».
-- Agencia Europea de Medio Ambiente (EEA). Informes «Air quality in Europe».
-- AEMET — información y avisos sobre intrusiones de polvo sahariano (calima) sobre la península.
-  <https://www.aemet.es>
-
-> Este documento es una **síntesis divulgativa** elaborada para el proyecto a partir de las fuentes citadas; no reproduce literalmente su contenido. Verifica las cifras exactas y su vigencia en los documentos originales antes de cualquier uso operativo. Consulta también el [aviso médico](aviso_medico.md).

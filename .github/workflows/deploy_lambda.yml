@@ -1,0 +1,119 @@
+# Despliegue de la Lambda del pipeline (jupiter-pipeline) desde GitHub Actions.
+#
+# Se lanza a mano: pestaña Actions → "Desplegar Lambda" → Run workflow, eligiendo la rama en
+# "Use workflow from". Automatiza el despliegue manual de deploy/README.md:
+#   tests → build de la imagen → push a ECR (tag = SHA del commit) → update-function-code
+#   → versión publicada con descripción → verificación. Para volver atrás: rollback_lambda.yml.
+#
+# Autenticación por OIDC: GitHub entrega un token firmado y AWS lo cambia por credenciales
+# temporales del rol jupiter-github-actions-deploy (deploy/iam/*-github-actions.json). No hay
+# claves de AWS en el repositorio. El único secreto es AWS_ACCOUNT_ID, para que el ID de la
+# cuenta no aparezca en los logs, que son públicos.
+name: 🚀 Desplegar Lambda
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write   # permite pedir el token OIDC que AWS cambia por credenciales temporales
+
+# Nunca dos despliegues a la vez: el segundo espera a que termine el primero.
+concurrency:
+  group: despliegue-lambda
+  cancel-in-progress: false
+
+env:
+  AWS_REGION: eu-west-1
+  ECR_REPOSITORY: jupiter-pipeline
+  FUNCTION_NAME: jupiter-pipeline
+
+jobs:
+  # Los mismos tests que en cada push (unitarios + integración contra PostgreSQL).
+  tests:
+    uses: ./.github/workflows/tests.yml
+
+  desplegar:
+    name: Build, push y despliegue
+    needs: tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repositorio
+        uses: actions/checkout@v4
+
+      - name: Avisar si no se despliega desde main
+        if: github.ref_name != 'main'
+        run: echo "::warning::Se está desplegando la rama '${GITHUB_REF_NAME}', no main. La Lambda de producción ejecutará este código."
+
+      - name: Credenciales de AWS (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::${{ secrets.AWS_ACCOUNT_ID }}:role/jupiter-github-actions-deploy
+          role-session-name: despliegue-${{ github.run_id }}
+          aws-region: ${{ env.AWS_REGION }}
+          mask-aws-account-id: true
+
+      - name: Login en ECR
+        id: ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      # --provenance/--sbom=false: sin ellos la imagen se sube como lista de manifiestos, que
+      # Lambda no sabe leer. --platform: la función está creada como x86_64.
+      - name: Build de la imagen
+        env:
+          IMAGEN: ${{ steps.ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}
+        run: |
+          TAG="${GITHUB_SHA::7}"
+          echo "TAG=$TAG" >> "$GITHUB_ENV"
+          echo "IMAGEN=$IMAGEN" >> "$GITHUB_ENV"
+          docker build --provenance=false --sbom=false --platform linux/amd64 \
+            -f deploy/Dockerfile.lambda -t "$IMAGEN:$TAG" -t "$IMAGEN:latest" .
+
+      - name: Push a ECR
+        run: |
+          docker push "$IMAGEN:$TAG"
+          docker push "$IMAGEN:latest"
+          DIGEST=$(docker inspect --format '{{index .RepoDigests 0}}' "$IMAGEN:$TAG" | cut -d@ -f2)
+          echo "DIGEST=$DIGEST" >> "$GITHUB_ENV"
+
+      # Subir la imagen no basta: la función sigue con la copia anterior hasta este paso.
+      # La versión se publica aparte para darle una descripción que rollback_lambda.yml muestra
+      # en su tabla; --code-sha256 impide publicar si la función no tiene la imagen recién subida.
+      - name: Actualizar la función Lambda
+        run: |
+          aws lambda update-function-code --function-name "$FUNCTION_NAME" \
+            --image-uri "$IMAGEN:$TAG" --query LastUpdateStatus --output text
+          aws lambda wait function-updated --function-name "$FUNCTION_NAME"
+          VERSION=$(aws lambda publish-version --function-name "$FUNCTION_NAME" \
+            --code-sha256 "${DIGEST#sha256:}" \
+            --description "deploy $TAG desde $GITHUB_REF_NAME (@$GITHUB_ACTOR)" \
+            --query Version --output text)
+          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
+
+      - name: Verificar que la Lambda ejecuta la imagen nueva
+        run: |
+          read -r ESTADO SHA_LAMBDA < <(aws lambda get-function-configuration \
+            --function-name "$FUNCTION_NAME" \
+            --query "[LastUpdateStatus, CodeSha256]" --output text)
+          echo "Estado de la actualización: $ESTADO"
+          echo "Digest subido a ECR:        ${DIGEST#sha256:}"
+          echo "CodeSha256 de la Lambda:    $SHA_LAMBDA"
+          if [ "$ESTADO" != "Successful" ] || [ "$SHA_LAMBDA" != "${DIGEST#sha256:}" ]; then
+            echo "::error::La Lambda no ejecuta la imagen recién subida."
+            exit 1
+          fi
+
+      - name: Resumen
+        run: |
+          {
+            echo "### Lambda \`$FUNCTION_NAME\` desplegada"
+            echo
+            echo "| | |"
+            echo "|---|---|"
+            echo "| Rama | \`$GITHUB_REF_NAME\` |"
+            echo "| Commit | \`$GITHUB_SHA\` |"
+            echo "| Tag en ECR | \`$TAG\` |"
+            echo "| Digest | \`$DIGEST\` |"
+            echo "| Versión de la función | $VERSION |"
+            echo "| Lanzado por | @$GITHUB_ACTOR |"
+          } >> "$GITHUB_STEP_SUMMARY"

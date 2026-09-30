@@ -13,8 +13,13 @@ deploy/
     ├── confianza-lambda.json
     ├── permisos-lambda.json
     ├── confianza-scheduler.json
-    └── permisos-scheduler.json
+    ├── permisos-scheduler.json
+    ├── confianza-github-actions.json
+    └── permisos-github-actions.json
 ```
+
+El despliegue automático vive en
+[`.github/workflows/deploy_lambda.yml`](../.github/workflows/deploy_lambda.yml).
 
 ## Qué hay desplegado
 
@@ -65,7 +70,7 @@ cada invocación: Lambda reutiliza el contenedor mientras está caliente.
 
 ## Los roles IAM
 
-Hay **dos roles**, y cada uno se define con **dos ficheros**, que responden a preguntas distintas:
+Hay **tres roles**, y cada uno se define con **dos ficheros**, que responden a preguntas distintas:
 
 - **Política de confianza** (`confianza-*.json`): *¿quién puede ponerse este rol?*
 - **Política de permisos** (`permisos-*.json`): *¿qué puede hacer quien lo lleva puesto?*
@@ -86,7 +91,53 @@ sería mínimo. Eso es el **mínimo privilegio**.
 
 Un único permiso: `lambda:InvokeFunction` sobre **esta** función. No puede invocar ninguna otra.
 
+### `jupiter-github-actions-deploy` — rol del despliegue automático
+
+Lo asumen los workflows [`deploy_lambda.yml`](../.github/workflows/deploy_lambda.yml) y
+[`rollback_lambda.yml`](../.github/workflows/rollback_lambda.yml) mediante
+**OIDC**: GitHub entrega al workflow un token firmado que dice de qué repositorio y rama viene, y
+AWS lo cambia por credenciales temporales de este rol. No hay ninguna clave de AWS guardada en
+GitHub.
+
+| Permiso | Alcance |
+|---|---|
+| `ecr:GetAuthorizationToken` | Login en ECR (esta acción no admite restringirse a un repositorio) |
+| Subida de imágenes (`ecr:PutImage`, capas…) | **Solo** el repositorio `jupiter-pipeline` |
+| `lambda:UpdateFunctionCode`, `PublishVersion`, `ListVersionsByFunction` + lecturas | **Solo** la función `jupiter-pipeline` (no puede borrarla ni cambiar su configuración) |
+
+**Quién puede asumirlo** ([`confianza-github-actions.json`](iam/confianza-github-actions.json)):
+tokens con audiencia `sts.amazonaws.com` y `sub` de **este** repositorio, desde cualquier rama.
+IAM solo sabe evaluar las claves `aud` y `sub` del token, así que no se puede restringir a un
+fichero de workflow concreto. Consecuencia práctica: cualquier workflow del repositorio con
+`id-token: write` podría asumir el rol, así que **los cambios en `.github/workflows/` se revisan
+en el PR** como cualquier otro código con acceso a producción. El `<ID_CUENTA>` del fichero se
+sustituye al aplicarlo; no se versiona porque el repositorio es público.
+
 ## Desplegar un cambio
+
+### Opción recomendada: desde GitHub Actions
+
+Pestaña **Actions → Desplegar Lambda → Run workflow**, eligiendo la rama en *Use workflow from*
+(lo normal es `main`; con otra rama el workflow avisa). El workflow:
+
+1. Ejecuta los tests unitarios y de integración ([`tests.yml`](../.github/workflows/tests.yml)).
+   Si fallan, no despliega.
+2. Construye la imagen y la sube a ECR con dos tags: el **SHA corto del commit** (para saber qué
+   código corre y poder volver atrás) y `latest`.
+3. Actualiza la función, espera a que termine y publica una **versión numerada** con la
+   descripción `deploy <commit> desde <rama> (@quien)`.
+4. **Verifica** que el `CodeSha256` de la Lambda coincide con el digest recién subido; si no,
+   falla.
+5. Deja un resumen en la ejecución: rama, commit, tag, digest y versión publicada.
+
+Requisitos (una sola vez):
+
+- El workflow tiene que estar en `main`: GitHub solo muestra el botón *Run workflow* de los
+  workflows que existen en la rama por defecto.
+- Un secreto del repositorio `AWS_ACCOUNT_ID` (*Settings → Secrets and variables → Actions*) con
+  el ID de la cuenta. Es un secreto para que GitHub lo oculte en los logs, que son públicos.
+
+### Opción manual (sin GitHub Actions)
 
 Desde la **raíz del repositorio** (el contexto de construcción incluye `src/` y el CSV de
 estaciones):
@@ -120,6 +171,28 @@ Para verificar que la función tiene la imagen nueva, compara el digest del `pus
 ```powershell
 aws lambda get-function-configuration --function-name jupiter-pipeline --query "{estado:State,sha:CodeSha256}" --output table
 ```
+
+## Volver a una versión anterior (rollback)
+
+Si un despliegue rompe algo: **Actions → Rollback Lambda → Run workflow**, en dos pasos.
+
+1. **Consultar** (campos vacíos). No cambia nada: muestra en el resumen de la ejecución una tabla
+   con las versiones publicadas (número, fecha, imagen, descripción) y cuál está en producción, y
+   sugiere la anterior.
+2. **Volver atrás**: relanzar con la **versión** elegida y el **motivo**. El workflow apunta la
+   función a la imagen de esa versión por su digest (no reconstruye nada: segundos), publica una
+   versión nueva con la descripción `rollback a vN: <motivo> (@quien)` y verifica que la Lambda
+   ejecuta exactamente esa imagen.
+
+No hay un "volver a la anterior" automático a propósito: después de un rollback, la versión
+anterior es justo la que estaba mal. Si la versión activa ya es un rollback, la tabla lo avisa en
+vez de sugerir.
+
+El rollback funciona porque **ECR conserva las imágenes antiguas** aunque pierdan su tag cuando se
+sube una nueva. Si algún día se añade una regla de ciclo de vida que borre imágenes sin tag, las
+versiones que apunten a ellas dejarán de poder recuperarse.
+
+Deshacer un rollback es otro rollback (a la versión que se retiró) o un despliegue nuevo.
 
 ## Probar en local antes de desplegar
 

@@ -1,8 +1,16 @@
 ---
 titulo: Aviso médico y sobre el uso de la información
-tema: disclaimer
+tema: proyecto
 contaminantes: []
-fuente: "OMS 2021; Ayuntamiento de Madrid"
+revisado: true
+fecha_revision: 2026-09-23
+fuentes:
+  - titulo: WHO global air quality guidelines 2021
+    organismo: OMS
+    url: https://www.who.int/publications/i/item/9789240034228
+  - titulo: Portal de datos abiertos, calidad del aire
+    organismo: Ayuntamiento de Madrid
+    url: https://datos.madrid.es
 ---
 
 # Aviso médico y sobre el uso de la información
@@ -31,23 +39,6 @@ diagnóstico, y **no sustituye** la consulta con un profesional sanitario.
 
 El corpus de documentación de este asistente es una **síntesis divulgativa** elaborada para el
 proyecto a partir de fuentes públicas y autorizadas (Organización Mundial de la Salud, normativa
-de la Unión Europea, Ayuntamiento de Madrid y agencias medioambientales). Cada documento incluye
-su sección de **Fuentes**. Las cifras y umbrales deben verificarse en los documentos originales,
-que pueden actualizarse con el tiempo.
-
-## Indicación para el asistente
-
-Cuando la respuesta incluya recomendaciones de salud o interpretación de riesgos, el asistente
-debe añadir un **recordatorio breve** de que se trata de información orientativa, que no
-sustituye el criterio de un profesional sanitario ni las alertas oficiales, e invitar a consultar
-a un profesional en caso de duda o síntomas, especialmente a personas de grupos sensibles
-(asma, EPOC, cardiopatías, embarazo, niñez y personas mayores).
-
-El asistente **no debe indicar medicamentos, dosis ni pautas de tratamiento concretas**: esas
-decisiones corresponden a un profesional sanitario. Puede, como mucho, recordar de forma general
-que quien tenga medicación de rescate prescrita la lleve consigo en días desfavorables.
-
-## Fuentes
-
-- Organización Mundial de la Salud (OMS). *WHO global air quality guidelines* (2021).
-  <https://www.who.int/publications/i/item/9789240034228>
+de la Unión Europea, Ayuntamiento de Madrid y agencias medioambientales). Cada documento declara
+sus **fuentes** en su cabecera y el asistente las lista al citarlo. Las cifras y umbrales deben
+verificarse en los documentos originales, que pueden actualizarse con el tiempo.

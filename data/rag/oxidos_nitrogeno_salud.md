@@ -2,10 +2,27 @@
 titulo: Óxidos de nitrógeno (NO, NO2, NOx) y salud
 tema: salud
 contaminantes: ["NO", NO2, NOx]
-fuente: "OMS 2021; EEA; US EPA"
+revisado: true
+fecha_revision: 2026-09-23
+fuentes:
+  - titulo: WHO global air quality guidelines 2021, capítulo de dióxido de nitrógeno
+    organismo: OMS
+    url: https://www.who.int/publications/i/item/9789240034228
+  - titulo: Nota descriptiva «Calidad del aire ambiente (exterior) y salud»
+    organismo: OMS
+    url: https://www.who.int/es/news-room/fact-sheets/detail/ambient-(outdoor)-air-quality-and-health
+  - titulo: Informes «Air quality in Europe»
+    organismo: Agencia Europea de Medio Ambiente (EEA)
+    url: https://www.eea.europa.eu
+  - titulo: Basic Information about NO2
+    organismo: U.S. Environmental Protection Agency (EPA)
+    url: https://www.epa.gov/no2-pollution
 ---
 
 # Óxidos de nitrógeno (NO, NO2, NOx) y salud
+
+Síntesis divulgativa elaborada para el proyecto a partir de las fuentes citadas; verifica las
+cifras exactas y su vigencia en los documentos originales.
 
 ## Qué son y de dónde vienen
 
@@ -47,15 +64,3 @@ inversión térmica en anticiclones) y mínimos en agosto.
 Alejarse del tráfico funciona: a 100-200 metros de una vía principal el NO2 cae de forma
 notable. Parques grandes (Casa de Campo, Retiro interior) y horas valle (mediodía, madrugada)
 tienen niveles claramente menores que las aceras de ejes de tráfico en hora punta.
-
-## Fuentes
-
-- OMS. *WHO global air quality guidelines* (2021), capítulo de dióxido de nitrógeno.
-  <https://www.who.int/publications/i/item/9789240034228>
-- OMS. Nota descriptiva «Calidad del aire ambiente (exterior) y salud».
-- Agencia Europea de Medio Ambiente (EEA). Informes «Air quality in Europe».
-  <https://www.eea.europa.eu>
-- U.S. Environmental Protection Agency (EPA). «Basic Information about NO2».
-  <https://www.epa.gov/no2-pollution>
-
-> Este documento es una **síntesis divulgativa** elaborada para el proyecto a partir de las fuentes citadas; no reproduce literalmente su contenido. Verifica las cifras exactas y su vigencia en los documentos originales antes de cualquier uso operativo. Consulta también el [aviso médico](aviso_medico.md).

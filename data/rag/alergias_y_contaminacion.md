@@ -2,10 +2,24 @@
 titulo: Alergias respiratorias y contaminación en Madrid
 tema: salud
 contaminantes: [NO2, PM10, PM2.5, O3]
-fuente: "SEAIC; OMS 2021; EEA"
+revisado: true
+fecha_revision: 2026-09-23
+fuentes:
+  - titulo: Alergia y contaminación (información al paciente)
+    organismo: Sociedad Española de Alergología e Inmunología Clínica (SEAIC)
+    url: https://www.seaic.org
+  - titulo: WHO global air quality guidelines 2021
+    organismo: OMS
+    url: https://www.who.int/publications/i/item/9789240034228
+  - titulo: Air quality in Europe (informes) y literatura revisada sobre contaminación y aeroalérgenos
+    organismo: Agencia Europea de Medio Ambiente (EEA)
+    url: https://www.eea.europa.eu
 ---
 
 # Alergias respiratorias y contaminación en Madrid
+
+Síntesis divulgativa elaborada para el proyecto a partir de las fuentes citadas; no reproduce
+literalmente su contenido. Verifica las cifras exactas y su vigencia en los documentos originales.
 
 ## La interacción polen-contaminación
 
@@ -39,22 +53,3 @@ contaminación multiplica sus efectos por tres vías:
   ventilar la casa poco y en las horas de menor concentración.
 - A igualdad de polen, una zona verde alejada del tráfico produce menos síntomas que una
   acera de una vía principal.
-
-## Cómo lo usa el asistente
-
-Ante una pregunta de una persona alérgica ("¿cuál es la mejor zona para pasear hoy?"), el
-asistente debe: (1) consultar con las tools de datos qué estación tiene hoy los niveles más
-bajos de NO2 y partículas en el bloque horario relevante, y (2) explicar la recomendación
-apoyándose en esta documentación. Si algún bloque está marcado como anomalía al alza, avisar
-de que la situación es inusual y recomendar prudencia extra.
-
-## Fuentes
-
-- Sociedad Española de Alergología e Inmunología Clínica (SEAIC) — alergia y contaminación.
-  <https://www.seaic.org>
-- OMS. *WHO global air quality guidelines* (2021).
-  <https://www.who.int/publications/i/item/9789240034228>
-- Agencia Europea de Medio Ambiente (EEA) y literatura científica revisada sobre la interacción
-  entre contaminación atmosférica y aeroalérgenos (efecto de NO2 y partículas sobre el polen).
-
-> Este documento es una **síntesis divulgativa** elaborada para el proyecto a partir de las fuentes citadas; no reproduce literalmente su contenido. Verifica las cifras exactas y su vigencia en los documentos originales antes de cualquier uso operativo. Consulta también el [aviso médico](aviso_medico.md).
