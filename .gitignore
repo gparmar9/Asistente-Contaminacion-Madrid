@@ -39,7 +39,15 @@ __pycache__/
 /ApiUsuario/.venv/
 
 #documentación
-docs/hoja_de_ruta.html
+# Informes, revisiones y estados generados a partir del código: no son fuente, se
+# regeneran y quedan obsoletos en cuanto cambia el codigo. No se versionan.
+# Los docs/plan_arquitectura_v*.html ya versionados NO se ven afectados: .gitignore
+# no aplica a ficheros ya seguidos. Para añadir un .html nuevo a proposito: git add -f
+docs/*.html
+docs/arquitectura_estado_actual.md
 
 # Metadatos de empaquetado (pip install -e .)
 *.egg-info/
+
+# Configuración local de asistentes de IA (permisos de cada persona, no del proyecto)
+.claude/

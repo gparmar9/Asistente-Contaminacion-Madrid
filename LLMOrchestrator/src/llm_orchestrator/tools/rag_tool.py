@@ -1,83 +1,53 @@
-"""Tool `search_documents`: búsqueda en el corpus de salud y normativa (Fase 2).
+"""Tool `buscar_evidencias`: paso 1 del contrato de evidencias de la Fase 2.
 
-Envuelve `buscar_documentos` (ChromaDB + embeddings) validando los argumentos
-que genera el LLM y filtrando resultados poco relevantes, para que el modelo
-reciba solo fragmentos citables.
+Llama por HTTP al servicio RAG (`POST /rag/evidencias`, vía
+`integrations/rag.py`) validando antes los argumentos que genera el LLM. El
+umbral de relevancia y la numeración D1..Dn son los del servicio: esta tool no
+filtra por su cuenta. La validación de las citas del modelo (paso 3) la hace
+el agente al cerrar la respuesta, no esta tool.
+
+La definición de la tool la publica el propio RAG (`GET /rag/herramienta`),
+única fuente de verdad del esquema: `esquema_tool()` la pide la primera vez y
+la cachea para el resto del proceso. Si el GET falla, el registro no ofrece la
+tool en esa vuelta (el agente sigue solo con `query_sql`) y se reintenta en la
+siguiente: no hay copia local que pueda divergir del servicio.
 """
 from llm_orchestrator.integrations import rag
 
-# Distancia coseno máxima para considerar un fragmento relevante (0 = idéntico).
-# Por encima de este umbral el fragmento se descarta en vez de dárselo al LLM.
-UMBRAL_DISTANCIA = 0.8
+# Temas del corpus. Duplicado a propósito de `rag.corpus.TEMAS`: el RAG es otro
+# servicio y el contrato es la costura, no un paquete común.
+TEMAS = ("salud", "normativa", "proyecto")
 
-# Tamaño máximo de cada fragmento devuelto al LLM (controla los tokens por vuelta)
-MAX_CARACTERES_FRAGMENTO = 1200
-
-ESQUEMA_TOOL = {
-    "type": "function",
-    "function": {
-        "name": "search_documents",
-        "description": (
-            "Busca en el corpus documental del proyecto: salud (efectos de los "
-            "contaminantes, recomendaciones por perfil, alergias), normativa "
-            "(límites OMS 2021 y UE, protocolo anticontaminación de Madrid) y "
-            "contexto (estaciones y zonas, glosario). Usa esta tool para "
-            "preguntas de salud o normativa; para cifras de mediciones usa query_sql."
-        ),
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "consulta": {
-                    "type": "string",
-                    "description": "Qué buscar, en lenguaje natural y en español",
-                },
-                "k": {
-                    "type": "integer",
-                    "description": "Cuántos fragmentos devolver (1-10, por defecto 4)",
-                },
-                "tema": {
-                    "type": "string",
-                    "description": ("Filtro opcional por el campo 'tema' del corpus. "
-                                    "Si no conoces el valor exacto, no lo uses: sin filtro "
-                                    "se busca en todo el corpus"),
-                },
-            },
-            "required": ["consulta"],
-        },
-    },
-}
+_esquema_cacheado: dict | None = None
 
 
-def search_documents(consulta: str = "", k: int = 4, tema: str | None = None) -> dict:
-    """Busca fragmentos relevantes. Errores como {'error': ...}, nunca excepción."""
-    if not isinstance(consulta, str) or not consulta.strip():
-        return {"error": "'consulta' no puede estar vacía"}
-    try:
-        k = int(k)
-    except (TypeError, ValueError):
-        return {"error": f"'k' debe ser un entero entre 1 y 10, no {k!r}"}
-    if not 1 <= k <= 10:
-        return {"error": f"'k' debe estar entre 1 y 10, no {k}"}
+def esquema_tool() -> dict:
+    """La definición de la tool (GET /rag/herramienta), cacheada por proceso.
+
+    Lanza si el servicio no responde o si publica una tool con otro nombre,
+    que `registro` no sabría despachar: quien llama decide cómo degradar.
+    """
+    global _esquema_cacheado
+    if _esquema_cacheado is None:
+        esquema = rag.obtener_herramienta()
+        nombre = esquema.get("function", {}).get("name")
+        if nombre != "buscar_evidencias":
+            raise RuntimeError("GET /rag/herramienta publica la tool "
+                               f"{nombre!r}, no 'buscar_evidencias'")
+        _esquema_cacheado = esquema
+    return _esquema_cacheado
+
+
+def buscar_evidencias(pregunta: str = "", tema: str | None = None) -> dict:
+    """Recupera evidencias citables. Errores como {'error': ...}, nunca excepción."""
+    if not isinstance(pregunta, str) or not pregunta.strip():
+        return {"error": "'pregunta' no puede estar vacía"}
     if tema is not None:
         tema = str(tema).strip() or None  # espacios accidentales del LLM fuera
+        if tema is not None and tema not in TEMAS:
+            return {"error": f"'tema' debe ser uno de {list(TEMAS)}, no {tema!r}"}
 
     try:
-        fragmentos = rag.buscar_en_corpus(consulta.strip(), k=k, tema=tema)
+        return rag.recuperar_evidencias(pregunta.strip(), tema=tema)
     except Exception as exc:  # índice ausente, modelo no descargado...
         return {"error": f"La búsqueda documental falló: {exc}"}
-
-    relevantes = [f for f in fragmentos if f.get("distancia", 1.0) <= UMBRAL_DISTANCIA]
-    if not relevantes:
-        return {"resultados": [],
-                "mensaje": "No se encontraron documentos relevantes para esa consulta"}
-
-    return {"resultados": [
-        {
-            "texto": str(f["texto"])[:MAX_CARACTERES_FRAGMENTO],
-            "titulo": f.get("metadatos", {}).get("titulo", "documento sin título"),
-            "seccion": f.get("metadatos", {}).get("seccion", ""),
-            "fuente": f.get("metadatos", {}).get("fuente", ""),
-            "distancia": round(float(f.get("distancia", 0.0)), 3),
-        }
-        for f in relevantes
-    ]}

@@ -46,5 +46,7 @@ La cuenta es compartida y la proporciona el máster (región `eu-west-1`).
 - Flujo de ramas: `feature/*` → PR a `development` → PR a `main`. `main` solo acepta PR desde
   `development`.
 - Tests unitarios: `pytest tests/ --ignore=tests/test_integracion_db.py -v`
+- Tests de la API: `pytest ApiUsuario/tests/ -v` (SQLite en memoria, sin BBDD externa)
+- Tests del orquestador: `pytest LLMOrchestrator/tests/ -v` (LLM falso, sin red ni torch)
 - No subas `.env`, credenciales ni ficheros de datos grandes (revisa `.gitignore`).
 - Mensajes de commit en español con prefijo: `feat:`, `fix:`, `docs:`…

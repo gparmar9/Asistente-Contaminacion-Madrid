@@ -21,6 +21,28 @@ from llm_orchestrator.config.settings import Settings, get_settings  # noqa: E40
 from llm_orchestrator.data_access.sql_connection import get_engine  # noqa: E402
 from llm_orchestrator.integrations.llm_client import get_cliente_llm  # noqa: E402
 from llm_orchestrator.main import app  # noqa: E402
+from llm_orchestrator.tools import rag_tool  # noqa: E402
+
+
+# Definición mínima de `buscar_evidencias` para precargar la caché del esquema:
+# el LLM falso sigue un guion y no la lee, pero así los esquemas se construyen
+# sin GET al RAG aunque RAG_URL esté definida en el entorno.
+ESQUEMA_DE_PRUEBA = {
+    "type": "function",
+    "function": {"name": "buscar_evidencias", "description": "stub de tests",
+                 "parameters": {"type": "object",
+                                "properties": {"pregunta": {"type": "string"}},
+                                "required": ["pregunta"]}},
+}
+
+
+@pytest.fixture(autouse=True)
+def _esquema_tool_sin_red():
+    """Precarga la caché de `esquema_tool`. Los tests que ejercitan el fetch
+    la vacían y fingen `rag.obtener_herramienta`."""
+    rag_tool._esquema_cacheado = ESQUEMA_DE_PRUEBA
+    yield
+    rag_tool._esquema_cacheado = None
 
 _DDL_ESTACIONES = """
 CREATE TABLE estaciones (
