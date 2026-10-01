@@ -497,7 +497,8 @@ documentada, no una configuración por defecto; la opción C queda como mejora f
 - **Roles:** ejecución de la Lambda (`jupiter-lambda-pipeline`), EventBridge Scheduler
   (`jupiter-scheduler-pipeline`), desde el 2026-09-27 **`jupiter-github-actions-deploy`** para el
   despliegue automático (§13) y, desde el 2026-10-01, **`jupiter-automation-rds`** (los runbooks que
-  encienden y apagan la RDS) y **`jupiter-github-actions-entorno`** (workflow «Encender entorno»),
+  encienden y apagan la RDS) y **`jupiter-github-actions-entorno`** (workflows «Encender entorno» y
+  «Apagar entorno»),
   ambos limitados a `jupiter-postgres` y comprobados con el simulador de IAM (§8.8). Un **usuario** tiene claves permanentes; un **rol** se asume
   temporalmente. El propio acceso por SSO ya es un rol asumido.
 - **OIDC de GitHub Actions** (2026-09-27): proveedor de identidad
@@ -567,10 +568,13 @@ la enciende a mano para trabajar o hacer una demo.
   encendido antes. Contenido de los runbooks revisado el 2026-10-01.
 - **Pocos reintentos** (3, durante como mucho 30 min): un fallo nocturno no debe acabar encendiendo
   la base por la mañana. La Lambda conserva su política anterior.
-- **Encendido a demanda:** workflow `encender_entorno.yml` («▶️ Encender entorno»), con rol propio
-  que solo puede consultar y encender `jupiter-postgres` (no apagarla ni borrarla). Si ya está
-  encendida, termina bien sin hacer nada. Cuando exista el servidor de la API encenderá también la
-  EC2. El apagado se deja a la programación de la 01:30.
+- **Encendido y apagado a demanda:** workflows `encender_entorno.yml` («▶️ Encender entorno») y
+  `apagar_entorno.yml` («⏹️ Apagar entorno»), con un rol propio que solo puede consultar, encender
+  y apagar `jupiter-postgres` (no borrarla ni modificarla). Los dos terminan bien si la base ya está
+  en el estado pedido y comparten bloqueo para no solaparse. El de apagar **se niega entre las 22:00
+  y las 00:00** (hora de Madrid) para no dejar sin base de datos la carga de las 23:45; apagar a
+  mano es opcional, porque la programación de la 01:30 la apaga igualmente. Cuando exista el
+  servidor de la API, ambos gestionarán también la EC2.
 - **Riesgo aceptado:** el día que haya mantenimiento pendiente, si se alarga en invierno puede
   coincidir con la Lambda (22:45 UTC) y hacerla fallar esa noche. Lo detecta la alarma de errores y
   la carga es idempotente, así que basta con relanzarla. Ocurre pocas veces al año.
@@ -784,7 +788,8 @@ la enciende a mano para trabajar o hacer una demo.
   con el simulador de IAM: cada rol puede justo lo previsto y nada más. Prueba real del apagado con
   el runbook el mismo día. Primer ciclo nocturno completo (encender → carga → apagar):
   `[por confirmar el 02-10]`. Los cambios en IAM y RDS los ejecutó Guillermo con un script: el modo
-  automático del asistente bloquea por diseño conceder permisos y modificar recursos compartidos |
+  automático del asistente bloquea por diseño conceder permisos y modificar recursos compartidos.
+  Mismo día: workflow «Apagar entorno» y `rds:StopDBInstance` añadido al rol de entorno |
 
 ---
 

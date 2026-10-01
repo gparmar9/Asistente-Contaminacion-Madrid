@@ -1,0 +1,108 @@
+# Apaga el entorno del proyecto en AWS cuando se ha terminado de trabajar o de hacer una demo.
+#
+# Se lanza a mano: Actions → "Apagar entorno" → Run workflow.
+# Hoy solo apaga la base de datos (RDS jupiter-postgres); cuando exista el servidor de la API
+# (EC2) lo apagará antes que la base de datos.
+#
+# Es opcional: la programación nocturna la apaga igualmente a la 01:30 (hora de Madrid).
+# Si ya está apagada, el workflow termina bien sin hacer nada.
+#
+# Entre las 22:00 y las 00:00 (hora de Madrid) se niega a apagarla: la programación la enciende a
+# las 22:00 para la carga de las 23:45, que fallaría con la base de datos parada.
+name: ⏹️ Apagar entorno
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write   # permite pedir el token OIDC que AWS cambia por credenciales temporales
+
+# Mismo grupo que "Encender entorno": nunca se encienden y apagan a la vez.
+concurrency:
+  group: entorno
+  cancel-in-progress: false
+
+env:
+  AWS_REGION: eu-west-1
+  DB_INSTANCE: jupiter-postgres
+
+jobs:
+  apagar:
+    name: Apagar la base de datos
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Comprobar que no es la hora de la carga nocturna
+        run: |
+          AHORA=$(TZ=Europe/Madrid date +%H%M)
+          echo "Hora de Madrid: ${AHORA:0:2}:${AHORA:2:2}"
+          if [ "$AHORA" -ge 2200 ]; then
+            echo "::error::Entre las 22:00 y las 00:00 la base de datos tiene que estar encendida para la carga de las 23:45. Se apagará sola a la 01:30."
+            exit 1
+          fi
+
+      - name: Credenciales de AWS (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::${{ secrets.AWS_ACCOUNT_ID }}:role/jupiter-github-actions-entorno
+          role-session-name: apagar-${{ github.run_id }}
+          aws-region: ${{ env.AWS_REGION }}
+          mask-aws-account-id: true
+
+      # Estados posibles: available, stopping, stopped, starting y otros transitorios
+      # (backing-up, modifying...). Solo se puede apagar desde "available".
+      - name: Apagar la RDS
+        run: |
+          estado() {
+            aws rds describe-db-instances --db-instance-identifier "$DB_INSTANCE" \
+              --query "DBInstances[0].DBInstanceStatus" --output text
+          }
+          ESTADO=$(estado)
+          echo "Estado inicial: $ESTADO"
+          echo "INICIAL=$ESTADO" >> "$GITHUB_ENV"
+
+          if [ "$ESTADO" = "stopped" ]; then
+            echo "Ya estaba apagada: no hay nada que hacer."
+            exit 0
+          fi
+
+          if [ "$ESTADO" != "stopping" ]; then
+            if [ "$ESTADO" != "available" ]; then
+              echo "Estado '$ESTADO': se espera a que quede disponible para poder apagarla."
+              aws rds wait db-instance-available --db-instance-identifier "$DB_INSTANCE"
+            fi
+            # Si otra cosa la apaga justo entre la consulta y esta llamada, AWS da error;
+            # se acepta mientras el estado resultante sea "apagándose" o "apagada".
+            if ! aws rds stop-db-instance --db-instance-identifier "$DB_INSTANCE" \
+                 --query "DBInstance.DBInstanceStatus" --output text; then
+              ESTADO=$(estado)
+              case "$ESTADO" in
+                stopping|stopped) echo "Ya se estaba apagando por otra vía." ;;
+                *) echo "::error::No se pudo apagar la base de datos (estado: $ESTADO)."; exit 1 ;;
+              esac
+            fi
+          fi
+
+          # Espera hasta 30 min (60 consultas cada 30 s). Apagar suele tardar unos minutos.
+          for _ in $(seq 60); do
+            ESTADO=$(estado)
+            [ "$ESTADO" = "stopped" ] && break
+            sleep 30
+          done
+          echo "Estado final: $ESTADO"
+          [ "$ESTADO" = "stopped" ] || { echo "::error::Tras 30 min sigue en '$ESTADO'."; exit 1; }
+
+      - name: Resumen
+        run: |
+          {
+            echo "### Entorno apagado"
+            echo
+            echo "| | |"
+            echo "|---|---|"
+            echo "| Base de datos | \`$DB_INSTANCE\` |"
+            echo "| Estado al empezar | $INICIAL |"
+            echo "| Estado ahora | stopped |"
+            echo "| Próximo encendido automático | 22:00 (hora de Madrid) |"
+            echo "| Lanzado por | @$GITHUB_ACTOR |"
+          } >> "$GITHUB_STEP_SUMMARY"

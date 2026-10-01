@@ -22,8 +22,9 @@ deploy/
 ```
 
 El despliegue automático vive en
-[`.github/workflows/deploy_lambda.yml`](../.github/workflows/deploy_lambda.yml) y el encendido a
-demanda en [`.github/workflows/encender_entorno.yml`](../.github/workflows/encender_entorno.yml).
+[`.github/workflows/deploy_lambda.yml`](../.github/workflows/deploy_lambda.yml), y el encendido y
+apagado a demanda en [`encender_entorno.yml`](../.github/workflows/encender_entorno.yml) y
+[`apagar_entorno.yml`](../.github/workflows/apagar_entorno.yml).
 
 ## Qué hay desplegado
 
@@ -131,13 +132,14 @@ fichero de workflow concreto. Consecuencia práctica: cualquier workflow del rep
 en el PR** como cualquier otro código con acceso a producción. El `<ID_CUENTA>` del fichero se
 sustituye al aplicarlo; no se versiona porque el repositorio es público.
 
-### `jupiter-github-actions-entorno` — rol del encendido a demanda
+### `jupiter-github-actions-entorno` — rol del encendido y apagado a demanda
 
-Lo asume el workflow [`encender_entorno.yml`](../.github/workflows/encender_entorno.yml) con la
-**misma** política de confianza OIDC que el anterior. Permisos
-([`permisos-github-entorno.json`](iam/permisos-github-entorno.json)): consultar y encender **solo**
-`jupiter-postgres`. No puede apagarla ni borrarla. Se separa del rol de despliegue para que cada
-workflow tenga solo lo que necesita.
+Lo asumen los workflows [`encender_entorno.yml`](../.github/workflows/encender_entorno.yml) y
+[`apagar_entorno.yml`](../.github/workflows/apagar_entorno.yml) con la **misma** política de
+confianza OIDC que el anterior. Permisos
+([`permisos-github-entorno.json`](iam/permisos-github-entorno.json)): consultar, encender y apagar
+**solo** `jupiter-postgres`. No puede borrarla ni modificarla. Se separa del rol de despliegue para
+que cada workflow tenga solo lo que necesita.
 
 ## Desplegar un cambio
 
@@ -232,7 +234,12 @@ La RDS **solo está encendida cuando hace falta**. Parada solo se paga el disco,
 
 **Para trabajar o hacer una demo de día:** **Actions → Encender entorno → Run workflow**. Si ya está
 encendida, termina bien sin hacer nada; si está parada, la enciende y espera a que esté lista
-(unos minutos). No hace falta apagarla: se apaga sola a la 01:30.
+(unos minutos).
+
+**Al terminar:** **Actions → Apagar entorno → Run workflow** para no pagar horas de más. Es
+opcional, porque se apaga sola a la 01:30. Si ya está apagada, no hace nada; si se está
+encendiendo, espera a que esté lista y la apaga. **Entre las 22:00 y las 00:00 se niega a
+apagarla**, porque la carga de las 23:45 la necesita encendida.
 
 Cómo está montado:
 

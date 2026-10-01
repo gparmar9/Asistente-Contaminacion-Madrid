@@ -4,11 +4,11 @@
 # Hoy solo enciende la base de datos (RDS jupiter-postgres); cuando exista el servidor de la API
 # (EC2) lo encenderá después de la base de datos, que es de la que depende.
 #
-# No hace falta apagarla: la programación nocturna la apaga a las 01:30 (hora de Madrid).
-# Si ya está encendida, el workflow termina bien sin hacer nada.
+# Para apagarla al terminar: "Apagar entorno". Si nadie lo hace, la programación nocturna la apaga
+# a la 01:30 (hora de Madrid). Si ya está encendida, este workflow termina bien sin hacer nada.
 #
-# Rol propio (jupiter-github-actions-entorno), separado del de despliegue: solo puede consultar
-# y encender esta base de datos.
+# Rol propio (jupiter-github-actions-entorno), separado del de despliegue: solo puede consultar,
+# encender y apagar esta base de datos.
 name: ▶️ Encender entorno
 
 on:
