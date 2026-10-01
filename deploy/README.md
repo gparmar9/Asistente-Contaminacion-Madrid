@@ -15,21 +15,27 @@ deploy/
     ├── confianza-scheduler.json
     ├── permisos-scheduler.json
     ├── confianza-github-actions.json
-    └── permisos-github-actions.json
+    ├── permisos-github-actions.json
+    ├── permisos-github-entorno.json
+    ├── confianza-automation-rds.json
+    └── permisos-automation-rds.json
 ```
 
 El despliegue automático vive en
-[`.github/workflows/deploy_lambda.yml`](../.github/workflows/deploy_lambda.yml).
+[`.github/workflows/deploy_lambda.yml`](../.github/workflows/deploy_lambda.yml) y el encendido a
+demanda en [`.github/workflows/encender_entorno.yml`](../.github/workflows/encender_entorno.yml).
 
 ## Qué hay desplegado
 
 | Servicio | Nombre | Para qué |
 |---|---|---|
 | **S3** | `jupiter-calidad-aire-madrid` | Modelo entrenado, histórico y parquet |
-| **RDS PostgreSQL** | `jupiter-postgres` | La base de datos del proyecto (`db.t4g.micro`) |
+| **RDS PostgreSQL** | `jupiter-postgres` | La base de datos del proyecto (`db.t4g.micro`). Encendida solo de noche y a demanda |
 | **ECR** | `jupiter-pipeline` | Registro de la imagen de la función |
 | **Lambda** | `jupiter-pipeline` | Ejecuta el pipeline (imagen, x86_64, 1024 MB, timeout 300 s) |
 | **EventBridge Scheduler** | `jupiter-pipeline-diario` | Lo dispara a las 23:45 (`Europe/Madrid`) |
+| **EventBridge Scheduler** | `jupiter-rds-encender` / `jupiter-rds-apagar` | Enciende la RDS a las 22:00 y la apaga a la 01:30 (`Europe/Madrid`) |
+| **Systems Manager Automation** | `AWS-StartRdsInstance` / `AWS-StopRdsInstance` | Runbooks de AWS que encienden o apagan la RDS solo si hace falta |
 | **SSM Parameter Store** | `/jupiter/database_url` | La cadena de conexión, cifrada |
 | **CloudWatch + SNS** | `jupiter-alertas` | Logs y avisos por correo |
 
@@ -70,7 +76,7 @@ cada invocación: Lambda reutiliza el contenedor mientras está caliente.
 
 ## Los roles IAM
 
-Hay **tres roles**, y cada uno se define con **dos ficheros**, que responden a preguntas distintas:
+Hay **cinco roles**, y cada uno se define con **dos ficheros**, que responden a preguntas distintas:
 
 - **Política de confianza** (`confianza-*.json`): *¿quién puede ponerse este rol?*
 - **Política de permisos** (`permisos-*.json`): *¿qué puede hacer quien lo lleva puesto?*
@@ -89,7 +95,19 @@ sería mínimo. Eso es el **mínimo privilegio**.
 
 ### `jupiter-scheduler-pipeline` — rol del disparador
 
-Un único permiso: `lambda:InvokeFunction` sobre **esta** función. No puede invocar ninguna otra.
+Lo usan las tres programaciones. Puede:
+
+- `lambda:InvokeFunction` sobre **esta** función, y ninguna otra.
+- Lanzar **solo** los runbooks `AWS-StartRdsInstance` y `AWS-StopRdsInstance`.
+- Entregarles el rol `jupiter-automation-rds` (`iam:PassRole`, solo hacia Systems Manager).
+
+No puede tocar la RDS directamente: lo hace el runbook con su propio rol.
+
+### `jupiter-automation-rds` — rol de los runbooks
+
+Lo asume Systems Manager (solo desde esta cuenta) mientras ejecuta el runbook. Permisos:
+consultar, encender y apagar **solo** `jupiter-postgres`. No puede borrarla ni tocar otras bases
+de datos.
 
 ### `jupiter-github-actions-deploy` — rol del despliegue automático
 
@@ -112,6 +130,14 @@ fichero de workflow concreto. Consecuencia práctica: cualquier workflow del rep
 `id-token: write` podría asumir el rol, así que **los cambios en `.github/workflows/` se revisan
 en el PR** como cualquier otro código con acceso a producción. El `<ID_CUENTA>` del fichero se
 sustituye al aplicarlo; no se versiona porque el repositorio es público.
+
+### `jupiter-github-actions-entorno` — rol del encendido a demanda
+
+Lo asume el workflow [`encender_entorno.yml`](../.github/workflows/encender_entorno.yml) con la
+**misma** política de confianza OIDC que el anterior. Permisos
+([`permisos-github-entorno.json`](iam/permisos-github-entorno.json)): consultar y encender **solo**
+`jupiter-postgres`. No puede apagarla ni borrarla. Se separa del rol de despliegue para que cada
+workflow tenga solo lo que necesita.
 
 ## Desplegar un cambio
 
@@ -194,6 +220,41 @@ versiones que apunten a ellas dejarán de poder recuperarse.
 
 Deshacer un rollback es otro rollback (a la versión que se retiró) o un despliegue nuevo.
 
+## Encendido y apagado de la base de datos
+
+La RDS **solo está encendida cuando hace falta**. Parada solo se paga el disco, no la instancia.
+
+| Hora (Madrid) | Qué pasa |
+|---|---|
+| 22:00 | `jupiter-rds-encender` enciende la RDS |
+| 23:45 | `jupiter-pipeline-diario` lanza la carga (la Lambda) |
+| 01:30 | `jupiter-rds-apagar` la apaga, **también si alguien la encendió a mano y se olvidó** |
+
+**Para trabajar o hacer una demo de día:** **Actions → Encender entorno → Run workflow**. Si ya está
+encendida, termina bien sin hacer nada; si está parada, la enciende y espera a que esté lista
+(unos minutos). No hace falta apagarla: se apaga sola a la 01:30.
+
+Cómo está montado:
+
+- Las programaciones no llaman a RDS directamente: lanzan los runbooks de AWS
+  `AWS-StartRdsInstance` / `AWS-StopRdsInstance`, que **primero consultan el estado** y no hacen
+  nada si la base ya está como se pide. Así no hay errores si alguien la encendió o apagó antes.
+- Pocos reintentos (3, como mucho durante 30 min): un fallo de noche no debe acabar encendiéndola
+  por la mañana.
+- Las ventanas de RDS están dentro de la franja encendida, en verano y en invierno: copias
+  **21:10–21:40 UTC** y mantenimiento **domingo 22:00–22:30 UTC**. RDS solo admite UTC; por eso la
+  franja encendida es de 3,5 h y no de una (ver la §8.8 de las notas de la memoria).
+
+Ver qué ha hecho cada noche:
+
+```powershell
+# Últimas ejecuciones de los runbooks (encender/apagar) y su resultado
+aws ssm describe-automation-executions --filters Key=DocumentNamePrefix,Values=AWS-StartRdsInstance,AWS-StopRdsInstance --max-results 6 --query "AutomationExecutionMetadataList[].[DocumentName,AutomationExecutionStatus,ExecutionStartTime]" --output table
+
+# Estado actual de la base de datos
+aws rds describe-db-instances --db-instance-identifier jupiter-postgres --query "DBInstances[0].DBInstanceStatus" --output text
+```
+
 ## Probar en local antes de desplegar
 
 ```powershell
@@ -227,12 +288,15 @@ Get-Content "$env:TEMP\respuesta.json"
 # Estado de la programación
 aws scheduler get-schedule --name jupiter-pipeline-diario --query "{estado:State,expresion:ScheduleExpression,zona:ScheduleExpressionTimezone}"
 
-# Parar / arrancar la base de datos (máximo 7 días parada: AWS la arranca sola)
+# Parar / arrancar la base de datos a mano (lo normal es el workflow "Encender entorno"
+# y dejar que la programación la apague a la 01:30)
 aws rds stop-db-instance  --db-instance-identifier jupiter-postgres
 aws rds start-db-instance --db-instance-identifier jupiter-postgres
 ```
 
-> Si la base de datos está parada a las 23:45, **la ejecución de esa noche falla**.
+> Si la base de datos está parada a las 23:45, **la ejecución de esa noche falla**. La
+> programación de las 22:00 lo evita; no desactives `jupiter-rds-encender` sin desactivar también
+> la carga.
 
 ## Alarmas
 
@@ -245,9 +309,10 @@ Ambas avisan por correo a través del tema SNS `jupiter-alertas`.
 
 ## Coste
 
-Unos **15,5 $/mes** si la cuenta no tiene capa gratuita, y prácticamente todo es la instancia de
-RDS. Lambda, S3, ECR, EventBridge, SSM, CloudWatch y SNS caen dentro de capas gratuitas a este
-volumen. Detalle en [`docs/notas_memoria.md`](../docs/notas_memoria.md).
+Prácticamente todo el coste es la instancia de RDS. Encendida 24 h eran unos **15,5 $/mes** sin
+capa gratuita; con el encendido programado (unas 3,5 h por noche más el uso a demanda) la
+estimación baja a **4–5 $/mes**, pendiente de confirmar con la factura. Lambda, S3, ECR,
+EventBridge, SSM, CloudWatch y SNS caen dentro de capas gratuitas a este volumen. Detalle en [`docs/notas_memoria.md`](../docs/notas_memoria.md).
 
 **El coste a evitar** es un NAT Gateway (~32 $/mes): por eso la Lambda vive **fuera de la VPC** y se
 conecta a RDS por su endpoint público, con TLS obligatorio (`rds.force_ssl = 1`) y la contraseña

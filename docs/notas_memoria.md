@@ -95,6 +95,7 @@ Hilo conductor de la memoria: cómo y por qué cambió el diseño.
 | 2026-09-23 | Identificador de fragmento | ID posicional por documento (`archivo#n`) → **`chunk_id` estable** (`archivo:slug-sección:ordinal`) | Reordenar o añadir secciones ya no cambia los IDs: una cita sigue apuntando al mismo texto |
 | 2026-09-28 | Despliegue | Build + push + `update-function-code` a mano desde un PC con credenciales SSO → **workflow de GitHub Actions (`workflow_dispatch`) con OIDC** | Cualquiera del equipo puede desplegar sin credenciales de AWS; no se despliega si fallan los tests; el tag por SHA dice qué commit corre en producción y permite volver atrás; la verificación del digest elimina el fallo silencioso de subir la imagen sin actualizar la función. Descartado: claves de acceso en GitHub Secrets (permanentes y compartidas) y despliegue en cada push a `main` (se optó por lanzarlo a mano para decidir cuándo se toca producción) |
 | 2026-09-28 | Vuelta atrás | `update-function-code` a mano con la imagen buena → **workflow de rollback** con modo consulta, vuelta por digest a una versión publicada y verificación | Deshacer un despliegue fallido en segundos, sin credenciales ni reconstruir la imagen, y dejando rastro (cada rollback publica una versión con su motivo). Descartado: "volver a la versión anterior" automático, porque tras un rollback la anterior es justo la versión que se deshizo; primero se consulta la tabla y luego se elige |
+| 2026-10-01 | Disponibilidad de la base de datos | RDS encendida 24 h → **encendida solo de 22:00 a 01:30 (hora de Madrid) y a demanda** con un workflow de GitHub (§8.8) | La carga es una vez al día y la API aún no está desplegada: pagar la instancia 24 h no aporta nada. Ahorro estimado de ~15,5 a ~4–5 $/mes. Descartado: DynamoDB (el acceso es analítico: rangos, agregaciones y `JOIN`, justo lo que no hace bien una base clave-valor), Aurora Serverless v2 con pausa automática (ahorro parecido pero exige migrar; queda como alternativa), programarlo con `schedule` de GitHub Actions (puede retrasarse y se desactiva tras 60 días sin actividad) y que el programador llame directamente a `StartDBInstance` (da error si la base ya está encendida) |
 
 **Decisiones abiertas que alimentarán esta tabla:** LLM local vs. servicio gestionado, SQL generado
 por el LLM vs. consultas predefinidas, y dónde se despliega el servicio RAG en producción (§13).
@@ -457,8 +458,11 @@ Los objetos se organizan con los mismos prefijos que el repositorio: `models/`, 
   20 GB de SSD de uso general y 20 GB de backups). La configuración elegida cabe entera en esos
   límites; se eligió **gp2** en lugar de gp3 precisamente porque es lo que cubre la capa gratuita.
   `[por confirmar: si la cuenta del máster sigue dentro de los 12 meses de capa gratuita]`
-- Ahorro durante el desarrollo: la instancia puede pararse (máximo 7 días seguidos) y solo se paga
-  el disco. Deja de ser posible cuando la Lambda ingiera cada 20 minutos.
+- **Encendido programado (desde el 2026-10-01, §8.8):** la instancia solo está encendida de 22:00 a
+  01:30 y cuando el equipo la enciende a mano; parada solo se paga el disco y las copias. Estimación
+  sin capa gratuita: ~3,5 h/día ≈ 106 h/mes de instancia + disco ≈ **4–5 $/mes** en lugar de 15,5
+  `[estimación: confirmar con la factura de octubre]`. Es posible porque la carga pasó a ser diaria
+  (23:45); con la ingesta cada 20 minutos prevista al principio no lo habría sido.
 
 ### 8.4 Decisión de red
 
@@ -491,8 +495,10 @@ documentada, no una configuración por defecto; la opción C queda como mejora f
   propias credenciales de AWS.
 - **Presupuesto con alertas** antes de crear recursos. Un Budget **avisa, no bloquea**.
 - **Roles:** ejecución de la Lambda (`jupiter-lambda-pipeline`), EventBridge Scheduler
-  (`jupiter-scheduler-pipeline`) y, desde el 2026-09-27, **`jupiter-github-actions-deploy`** para el
-  despliegue automático (§13). Un **usuario** tiene claves permanentes; un **rol** se asume
+  (`jupiter-scheduler-pipeline`), desde el 2026-09-27 **`jupiter-github-actions-deploy`** para el
+  despliegue automático (§13) y, desde el 2026-10-01, **`jupiter-automation-rds`** (los runbooks que
+  encienden y apagan la RDS) y **`jupiter-github-actions-entorno`** (workflow «Encender entorno»),
+  ambos limitados a `jupiter-postgres` y comprobados con el simulador de IAM (§8.8). Un **usuario** tiene claves permanentes; un **rol** se asume
   temporalmente. El propio acceso por SSO ya es un rol asumido.
 - **OIDC de GitHub Actions** (2026-09-27): proveedor de identidad
   `token.actions.githubusercontent.com` + rol `jupiter-github-actions-deploy`, sin claves de acceso
@@ -535,6 +541,39 @@ de que el programador deje de disparar o alguien desactive la función: no hay e
 no salta nada y el hueco en los datos se descubriría semanas después.
 
 La retención de los logs se baja a 14 días; por defecto no caducan nunca.
+
+### 8.8 Encendido programado de la base de datos — estado actual
+
+La RDS solo está encendida cuando hace falta: cada noche alrededor de la carga, y cuando el equipo
+la enciende a mano para trabajar o hacer una demo.
+
+| Hora de Madrid | Qué pasa | UTC en verano / invierno |
+|---|---|---|
+| 22:00 | `jupiter-rds-encender` enciende la RDS | 20:00 / 21:00 |
+| — | Ventana de copias de seguridad | 21:10–21:40 / 21:10–21:40 |
+| 23:45 | `jupiter-pipeline-diario` lanza la Lambda (sin cambios) | 21:45 / 22:45 |
+| — | Ventana de mantenimiento (domingos) | 22:00–22:30 / 22:00–22:30 |
+| 01:30 | `jupiter-rds-apagar` la apaga, también si alguien la encendió a mano | 23:30 / 00:30 |
+
+- **El cambio de hora condiciona el horario.** Las programaciones van en `Europe/Madrid`, pero las
+  ventanas de copias y mantenimiento de RDS se fijan en UTC. Con una sola hora encendida, la franja
+  de verano y la de invierno no se solapan en UTC y no habría dónde colocar las copias; con 3,5 h
+  queda un tramo común y ninguna ventana coincide con la Lambda. Se evita además la franja de 02:00
+  a 03:00, que no existe el día del cambio de hora de marzo.
+- **Idempotente.** El programador no llama a RDS directamente, sino a los runbooks gestionados por
+  AWS `AWS-StartRdsInstance` / `AWS-StopRdsInstance` (Systems Manager Automation), que primero
+  consultan el estado y no hacen nada si la base ya está encendida o apagada. Llamar directamente a
+  `StartDBInstance` habría devuelto `InvalidDBInstanceState` cada vez que alguien la hubiera
+  encendido antes. Contenido de los runbooks revisado el 2026-10-01.
+- **Pocos reintentos** (3, durante como mucho 30 min): un fallo nocturno no debe acabar encendiendo
+  la base por la mañana. La Lambda conserva su política anterior.
+- **Encendido a demanda:** workflow `encender_entorno.yml` («▶️ Encender entorno»), con rol propio
+  que solo puede consultar y encender `jupiter-postgres` (no apagarla ni borrarla). Si ya está
+  encendida, termina bien sin hacer nada. Cuando exista el servidor de la API encenderá también la
+  EC2. El apagado se deja a la programación de la 01:30.
+- **Riesgo aceptado:** el día que haya mantenimiento pendiente, si se alarga en invierno puede
+  coincidir con la Lambda (22:45 UTC) y hacerla fallar esa noche. Lo detecta la alarma de errores y
+  la carga es idempotente, así que basta con relanzarla. Ocurre pocas veces al año.
 
 ---
 
@@ -633,6 +672,11 @@ La retención de los logs se baja a 14 días; por defecto no caducan nunca.
   AWS aceptó la política sin avisar; se detectó revisando la documentación antes del primer
   despliegue y se corrigió a `sub` (2026-09-27). Lección: una *trust policy* válida
   sintácticamente no es una *trust policy* que funcione.
+- **Hora local y UTC en la misma planificación** (2026-10-01). El primer horario propuesto para
+  encender la RDS (una hora por la noche) era correcto en hora de Madrid, pero las ventanas de copias
+  y mantenimiento de RDS solo admiten UTC: con el cambio de hora de octubre la franja encendida se
+  desplaza una hora en UTC y no quedaba ningún tramo común en el que colocar las copias. Lección:
+  cuando una tarea en hora local convive con otra en UTC, hay que comprobar las dos épocas del año.
 
 ---
 
@@ -732,6 +776,15 @@ La retención de los logs se baja a 14 días; por defecto no caducan nunca.
   pasa a publicar versiones con descripción (`deploy <commit> desde <rama>`). Rol ampliado con
   `PublishVersion` y `ListVersionsByFunction`. Lógica de la tabla probada en local con los datos
   reales de la función (v1 y v2); **pendiente de la primera ejecución real** |
+| 2026-10-01 | **Encendido programado de la RDS** (Guillermo, cuenta AWS del máster): rol
+  `jupiter-automation-rds`, permisos del programador ampliados a los runbooks
+  `AWS-Start/StopRdsInstance`, programaciones `jupiter-rds-encender` (22:00) y `jupiter-rds-apagar`
+  (01:30), ventanas de copias (21:10–21:40 UTC) y mantenimiento (dom 22:00–22:30 UTC) movidas, y rol
+  `jupiter-github-actions-entorno` para el nuevo workflow «Encender entorno». Permisos comprobados
+  con el simulador de IAM: cada rol puede justo lo previsto y nada más. Prueba real del apagado con
+  el runbook el mismo día. Primer ciclo nocturno completo (encender → carga → apagar):
+  `[por confirmar el 02-10]`. Los cambios en IAM y RDS los ejecutó Guillermo con un script: el modo
+  automático del asistente bloquea por diseño conceder permisos y modificar recursos compartidos |
 
 ---
 

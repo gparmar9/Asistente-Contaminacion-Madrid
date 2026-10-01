@@ -1,0 +1,94 @@
+# Enciende el entorno del proyecto en AWS para trabajar o hacer una demo.
+#
+# Se lanza a mano: Actions → "Encender entorno" → Run workflow.
+# Hoy solo enciende la base de datos (RDS jupiter-postgres); cuando exista el servidor de la API
+# (EC2) lo encenderá después de la base de datos, que es de la que depende.
+#
+# No hace falta apagarla: la programación nocturna la apaga a las 01:30 (hora de Madrid).
+# Si ya está encendida, el workflow termina bien sin hacer nada.
+#
+# Rol propio (jupiter-github-actions-entorno), separado del de despliegue: solo puede consultar
+# y encender esta base de datos.
+name: ▶️ Encender entorno
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write   # permite pedir el token OIDC que AWS cambia por credenciales temporales
+
+concurrency:
+  group: entorno
+  cancel-in-progress: false
+
+env:
+  AWS_REGION: eu-west-1
+  DB_INSTANCE: jupiter-postgres
+
+jobs:
+  encender:
+    name: Encender la base de datos
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Credenciales de AWS (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::${{ secrets.AWS_ACCOUNT_ID }}:role/jupiter-github-actions-entorno
+          role-session-name: encender-${{ github.run_id }}
+          aws-region: ${{ env.AWS_REGION }}
+          mask-aws-account-id: true
+
+      # Estados posibles: stopped, starting, available, stopping y otros transitorios
+      # (backing-up, modifying...). Solo se pide arrancar si está parada.
+      - name: Encender la RDS
+        run: |
+          estado() {
+            aws rds describe-db-instances --db-instance-identifier "$DB_INSTANCE" \
+              --query "DBInstances[0].DBInstanceStatus" --output text
+          }
+          ESTADO=$(estado)
+          echo "Estado inicial: $ESTADO"
+          echo "INICIAL=$ESTADO" >> "$GITHUB_ENV"
+
+          # A medio apagar no se puede arrancar: hay que esperar a que termine de pararse.
+          while [ "$ESTADO" = "stopping" ]; do
+            sleep 20
+            ESTADO=$(estado)
+          done
+
+          if [ "$ESTADO" = "stopped" ]; then
+            # Si otra cosa la arranca justo entre la consulta y esta llamada, AWS da error;
+            # se acepta mientras el estado resultante sea "arrancando" o "disponible".
+            if ! aws rds start-db-instance --db-instance-identifier "$DB_INSTANCE" \
+                 --query "DBInstance.DBInstanceStatus" --output text; then
+              ESTADO=$(estado)
+              case "$ESTADO" in
+                starting|available) echo "Ya se estaba encendiendo por otra vía." ;;
+                *) echo "::error::No se pudo encender la base de datos (estado: $ESTADO)."; exit 1 ;;
+              esac
+            fi
+          elif [ "$ESTADO" = "available" ]; then
+            echo "Ya estaba encendida: no hay nada que hacer."
+          else
+            echo "Estado '$ESTADO': se espera a que quede disponible."
+          fi
+
+          # Espera hasta 30 min (60 consultas cada 30 s). Arrancar suele tardar unos minutos.
+          aws rds wait db-instance-available --db-instance-identifier "$DB_INSTANCE"
+          echo "Estado final: $(estado)"
+
+      - name: Resumen
+        run: |
+          {
+            echo "### Entorno encendido"
+            echo
+            echo "| | |"
+            echo "|---|---|"
+            echo "| Base de datos | \`$DB_INSTANCE\` |"
+            echo "| Estado al empezar | $INICIAL |"
+            echo "| Estado ahora | available |"
+            echo "| Apagado automático | 01:30 (hora de Madrid) |"
+            echo "| Lanzado por | @$GITHUB_ACTOR |"
+          } >> "$GITHUB_STEP_SUMMARY"

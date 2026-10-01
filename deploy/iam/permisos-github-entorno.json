@@ -1,0 +1,14 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "ConsultarYEncenderSoloLaBaseDeDatosDelProyecto",
+      "Effect": "Allow",
+      "Action": [
+        "rds:DescribeDBInstances",
+        "rds:StartDBInstance"
+      ],
+      "Resource": "arn:aws:rds:eu-west-1:*:db:jupiter-postgres"
+    }
+  ]
+}
