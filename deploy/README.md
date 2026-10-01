@@ -21,8 +21,8 @@ deploy/
     └── permisos-automation-rds.json
 ```
 
-El despliegue automático vive en
-[`.github/workflows/deploy_lambda.yml`](../.github/workflows/deploy_lambda.yml), y el encendido y
+El despliegue automático vive en [`desplegar.yml`](../.github/workflows/desplegar.yml) y
+[`rollback.yml`](../.github/workflows/rollback.yml) (en `.github/workflows/`), y el encendido y
 apagado a demanda en [`encender_entorno.yml`](../.github/workflows/encender_entorno.yml) y
 [`apagar_entorno.yml`](../.github/workflows/apagar_entorno.yml).
 
@@ -112,8 +112,8 @@ de datos.
 
 ### `jupiter-github-actions-deploy` — rol del despliegue automático
 
-Lo asumen los workflows [`deploy_lambda.yml`](../.github/workflows/deploy_lambda.yml) y
-[`rollback_lambda.yml`](../.github/workflows/rollback_lambda.yml) mediante
+Lo asumen los workflows [`desplegar.yml`](../.github/workflows/desplegar.yml) y
+[`rollback.yml`](../.github/workflows/rollback.yml) mediante
 **OIDC**: GitHub entrega al workflow un token firmado que dice de qué repositorio y rama viene, y
 AWS lo cambia por credenciales temporales de este rol. No hay ninguna clave de AWS guardada en
 GitHub.
@@ -145,8 +145,16 @@ que cada workflow tenga solo lo que necesita.
 
 ### Opción recomendada: desde GitHub Actions
 
-Pestaña **Actions → Desplegar Lambda → Run workflow**, eligiendo la rama en *Use workflow from*
-(lo normal es `main`; con otra rama el workflow avisa). El workflow:
+Pestaña **Actions → Desplegar → Run workflow**, eligiendo:
+
+- **La rama** en *Use workflow from*: se despliega el código de esa rama tal como está (lo normal
+  es `main`; con otra rama el workflow avisa). No hay que indicar ninguna imagen: el workflow la
+  construye. Elegir una versión anterior es cosa del rollback.
+- **El componente** en el desplegable. Hoy solo existe `lambda`; la API, el orquestador, el RAG y
+  la web se añadirán como nuevas opciones cuando se desplieguen en AWS.
+
+Dos despliegues del **mismo** componente nunca coinciden (el segundo espera); de componentes
+distintos, sí. Para la Lambda, el workflow:
 
 1. Ejecuta los tests unitarios y de integración ([`tests.yml`](../.github/workflows/tests.yml)).
    Si fallan, no despliega.
@@ -202,7 +210,8 @@ aws lambda get-function-configuration --function-name jupiter-pipeline --query "
 
 ## Volver a una versión anterior (rollback)
 
-Si un despliegue rompe algo: **Actions → Rollback Lambda → Run workflow**, en dos pasos.
+Si un despliegue rompe algo: **Actions → Rollback → Run workflow**, eligiendo el componente en el
+desplegable (hoy solo `lambda`), en dos pasos.
 
 1. **Consultar** (campos vacíos). No cambia nada: muestra en el resumen de la ejecución una tabla
    con las versiones publicadas (número, fecha, imagen, descripción) y cuál está en producción, y
