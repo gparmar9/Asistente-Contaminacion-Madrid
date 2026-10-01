@@ -682,6 +682,14 @@ la enciende a mano para trabajar o hacer una demo.
   y mantenimiento de RDS solo admiten UTC: con el cambio de hora de octubre la franja encendida se
   desplaza una hora en UTC y no quedaba ningún tramo común en el que colocar las copias. Lección:
   cuando una tarea en hora local convive con otra en UTC, hay que comprobar las dos épocas del año.
+- **El simulador de IAM solo responde a la pregunta que se le hace** (2026-10-01). La política del
+  programador permitía lanzar los runbooks sobre el ARN `automation-definition/...:$DEFAULT`, y el
+  simulador lo dio por bueno porque se le preguntó por ese mismo ARN. En la ejecución real, AWS
+  comprobó el permiso contra otro recurso, el documento (`document/AWS-StartRdsInstance`), y la
+  primera noche la base no se encendió. La prueba manual había funcionado porque se lanzó con un
+  usuario administrador, no con el rol del programador. Lecciones: probar con la **identidad real**
+  que usará la automatización y, ante un fallo, leer el `errorMessage` de CloudTrail, que dice
+  exactamente qué acción y qué recurso se denegaron.
 
 ---
 
@@ -787,8 +795,14 @@ la enciende a mano para trabajar o hacer una demo.
   (01:30), ventanas de copias (21:10–21:40 UTC) y mantenimiento (dom 22:00–22:30 UTC) movidas, y rol
   `jupiter-github-actions-entorno` para el nuevo workflow «Encender entorno». Permisos comprobados
   con el simulador de IAM: cada rol puede justo lo previsto y nada más. Prueba real del apagado con
-  el runbook el mismo día. Primer ciclo nocturno completo (encender → carga → apagar):
-  `[por confirmar el 02-10]`. Los cambios en IAM y RDS los ejecutó Guillermo con un script: el modo
+  el runbook el mismo día (`Success`). **La primera noche no encendió:** a las 22:00 el
+  programador recibió `AccessDenied` en `ssm:StartAutomationExecution`, porque AWS autoriza la
+  llamada contra el documento (`arn:aws:ssm:eu-west-1::document/AWS-StartRdsInstance`) y la
+  política solo permitía el recurso `automation-definition` (§10). Diagnosticado con CloudTrail y
+  corregido añadiendo los ARN de documento. Primer ciclo nocturno completo tras el arreglo:
+  `[por confirmar]`. **Workflow «Encender entorno» probado** esa misma noche con la base parada:
+  correcto en 4 min 44 s de principio a fin (incluye el arranque del runner y la autenticación
+  OIDC; la mayor parte es el arranque de la instancia). Los cambios en IAM y RDS los ejecutó Guillermo con un script: el modo
   automático del asistente bloquea por diseño conceder permisos y modificar recursos compartidos.
   Mismo día: workflow «Apagar entorno» y `rds:StopDBInstance` añadido al rol de entorno |
 | 2026-10-01 | **Despliegue por componente** (Guillermo): `deploy_lambda.yml` y `rollback_lambda.yml`

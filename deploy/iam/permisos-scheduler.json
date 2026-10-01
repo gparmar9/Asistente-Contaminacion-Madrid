@@ -12,6 +12,8 @@
       "Effect": "Allow",
       "Action": "ssm:StartAutomationExecution",
       "Resource": [
+        "arn:aws:ssm:eu-west-1::document/AWS-StartRdsInstance",
+        "arn:aws:ssm:eu-west-1::document/AWS-StopRdsInstance",
         "arn:aws:ssm:eu-west-1:*:automation-definition/AWS-StartRdsInstance:$DEFAULT",
         "arn:aws:ssm:eu-west-1:*:automation-definition/AWS-StopRdsInstance:$DEFAULT"
       ]
