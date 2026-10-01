@@ -1,20 +1,32 @@
-# Vuelta atrás de la Lambda del pipeline (jupiter-pipeline) a una versión anterior.
+# Vuelta atrás de una pieza del proyecto a una versión anterior.
 #
-# Se lanza a mano: Actions → "Rollback Lambda" → Run workflow.
+# Se lanza a mano: Actions → "Rollback" → Run workflow, eligiendo el componente en el desplegable.
 #   - Sin versión: modo consulta. Muestra las versiones publicadas y cuál está activa, y no cambia nada.
-#   - Con versión y motivo: apunta la función a la imagen de esa versión (por digest, sin
-#     reconstruir), publica una versión nueva que deja constancia del rollback y lo verifica.
+#   - Con versión y motivo: vuelve a esa versión sin reconstruir nada, deja constancia y lo verifica.
 #
 # No hay "volver a la anterior" automático a propósito: después de un rollback, la versión
 # anterior es justo la que estaba mal. Primero se consulta y luego se elige.
 #
-# Usa el mismo rol OIDC que deploy_lambda.yml y comparte su bloqueo: nunca coinciden un
-# despliegue y un rollback.
-name: ⏮️ Rollback Lambda
+# Componentes:
+#   lambda  apunta la función a la imagen de esa versión (por digest) y publica una versión nueva
+#           con el motivo.
+# Para añadir uno nuevo: sumarlo a `options` y crear su job con `if: inputs.componente == '<nombre>'`.
+#
+# Usa el mismo rol OIDC que desplegar.yml y comparte su bloqueo por componente: nunca coinciden
+# un despliegue y un rollback de la misma pieza.
+name: ⏮️ Rollback
+run-name: Rollback ${{ inputs.componente }} · ${{ inputs.version != '' && format('a la versión {0}', inputs.version) || 'consulta' }}
 
 on:
   workflow_dispatch:
     inputs:
+      componente:
+        description: "Qué pieza volver atrás"
+        type: choice
+        required: true
+        default: lambda
+        options:
+          - lambda
       version:
         description: "Versión a la que volver (vacío = solo consultar, no cambia nada)"
         required: false
@@ -29,18 +41,20 @@ permissions:
   id-token: write   # permite pedir el token OIDC que AWS cambia por credenciales temporales
 
 concurrency:
-  group: despliegue-lambda
+  group: despliegue-${{ inputs.componente }}
   cancel-in-progress: false
 
 env:
   AWS_REGION: eu-west-1
-  ECR_REPOSITORY: jupiter-pipeline
-  FUNCTION_NAME: jupiter-pipeline
 
 jobs:
-  rollback:
-    name: Consultar versiones o volver atrás
+  lambda:
+    name: Lambda · consultar versiones o volver atrás
+    if: inputs.componente == 'lambda'
     runs-on: ubuntu-latest
+    env:
+      ECR_REPOSITORY: jupiter-pipeline
+      FUNCTION_NAME: jupiter-pipeline
     steps:
       # Las entradas llegan por variables de entorno y no interpoladas en el script, para que un
       # motivo con comillas o $(...) no se ejecute como código.

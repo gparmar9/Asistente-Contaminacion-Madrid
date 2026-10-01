@@ -3,7 +3,7 @@ name: Tests
 on:
   push:
   pull_request:
-  # Lo reutiliza deploy_lambda.yml: no se despliega nada si los tests no pasan.
+  # Lo reutiliza desplegar.yml: no se despliega nada si los tests no pasan.
   workflow_call:
 
 jobs:
