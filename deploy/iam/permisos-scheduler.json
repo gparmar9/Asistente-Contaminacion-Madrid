@@ -19,6 +19,12 @@
       ]
     },
     {
+      "Sid": "CrearLaEjecucionDelRunbook",
+      "Effect": "Allow",
+      "Action": "ssm:StartAutomationExecution",
+      "Resource": "arn:aws:ssm:eu-west-1:*:automation-execution/*"
+    },
+    {
       "Sid": "PasarSoloElRolDeAutomatizacionASystemsManager",
       "Effect": "Allow",
       "Action": "iam:PassRole",

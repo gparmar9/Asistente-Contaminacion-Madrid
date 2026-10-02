@@ -1,0 +1,9 @@
+# Dependencias para ejecutar los tests: SIN las del RAG (torch pesa cientos de
+# MB y los tests fingen la búsqueda documental). El cliente del LLM también se
+# finge: openai se instala solo porque el código lo importa.
+fastapi>=0.115,<1.0
+httpx>=0.27,<1.0
+pydantic>=2,<3
+sqlalchemy>=2.0,<3.0
+openai>=1.40,<3.0
+pytest>=8,<9

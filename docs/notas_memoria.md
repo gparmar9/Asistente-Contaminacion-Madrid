@@ -93,14 +93,16 @@ Hilo conductor de la memoria: cómo y por qué cambió el diseño.
 | 2026-09-23 | Arquitectura del RAG | Biblioteca importable (`buscar_documentos`) → **servicio HTTP de evidencias, con el LLM fuera** | El LLM vive en la API de chat y usa el RAG como *function tool*. El RAG recupera, valida las citas que devuelve el modelo y construye la bibliografía desde el corpus (§7.2) |
 | 2026-09-23 | Metadatos del corpus | `fuente` como texto libre → **`fuentes` estructuradas (título, organismo, URL) + `revisado` / `fecha_revision`** | Permite citar cada fuente con su URL y dejar borradores versionados sin que entren en el índice |
 | 2026-09-23 | Identificador de fragmento | ID posicional por documento (`archivo#n`) → **`chunk_id` estable** (`archivo:slug-sección:ordinal`) | Reordenar o añadir secciones ya no cambia los IDs: una cita sigue apuntando al mismo texto |
+| 2026-09-27 | LLM del asistente | LLM local con Ollama, condicionado a GPU (plan v2/v3) → **API de LLM hospedada con tier gratuito**, cliente contra la interfaz OpenAI-compatible (proveedor = 3 variables de entorno; sin fijar aún) | La GPU del máster no se concedió (riesgo nº 1 del roadmap). Los free tiers de 2026 (Mistral, Groq, Gemini) ofrecen modelos de clase ≥70B con *function calling*. Anula el DoD «nada de APIs externas» de T3.1: aceptable porque los datos enviados son públicos y el chat no guarda datos personales. Volver a un LLM propio = cambiar la URL base |
+| 2026-09-27 | Arquitectura de la API (Fase 4) | Esqueleto único sin diseño cerrado → **2 servicios**: `ApiUsuario` (ligero: lecturas SQL + proxy de chat) y `LLMOrchestrator` (agente + tools + deps pesadas de RAG; pendiente). **Sin estado**: ni usuarios ni historial (se descarta el scaffold usuario/conversación). El dashboard consumirá solo la API | Separar las dependencias pesadas (torch/chromadb) del servicio de usuario, permitir el trabajo en paralelo del equipo y dejar la costura lista para un futuro LLM autoalojado. API primero, agente después: 3 de los 4 grupos de endpoints solo necesitan SQL |
 | 2026-09-28 | Despliegue | Build + push + `update-function-code` a mano desde un PC con credenciales SSO → **workflow de GitHub Actions (`workflow_dispatch`) con OIDC** | Cualquiera del equipo puede desplegar sin credenciales de AWS; no se despliega si fallan los tests; el tag por SHA dice qué commit corre en producción y permite volver atrás; la verificación del digest elimina el fallo silencioso de subir la imagen sin actualizar la función. Descartado: claves de acceso en GitHub Secrets (permanentes y compartidas) y despliegue en cada push a `main` (se optó por lanzarlo a mano para decidir cuándo se toca producción) |
 | 2026-09-28 | Vuelta atrás | `update-function-code` a mano con la imagen buena → **workflow de rollback** con modo consulta, vuelta por digest a una versión publicada y verificación | Deshacer un despliegue fallido en segundos, sin credenciales ni reconstruir la imagen, y dejando rastro (cada rollback publica una versión con su motivo). Descartado: "volver a la versión anterior" automático, porque tras un rollback la anterior es justo la versión que se deshizo; primero se consulta la tabla y luego se elige |
 | 2026-10-01 | Disponibilidad de la base de datos | RDS encendida 24 h → **encendida solo de 22:00 a 01:30 (hora de Madrid) y a demanda** con un workflow de GitHub (§8.8) | La carga es una vez al día y la API aún no está desplegada: pagar la instancia 24 h no aporta nada. Ahorro estimado de ~15,5 a ~4–5 $/mes. Descartado: DynamoDB (el acceso es analítico: rangos, agregaciones y `JOIN`, justo lo que no hace bien una base clave-valor), Aurora Serverless v2 con pausa automática (ahorro parecido pero exige migrar; queda como alternativa), programarlo con `schedule` de GitHub Actions (puede retrasarse y se desactiva tras 60 días sin actividad) y que el programador llame directamente a `StartDBInstance` (da error si la base ya está encendida) |
 | 2026-10-01 | Workflows de despliegue | «Desplegar Lambda» y «Rollback Lambda» → **«Desplegar» y «Rollback» con un desplegable de componente** (hoy solo `lambda`) | Preparar el despliegue de la API, el orquestador, el RAG y la web sin multiplicar workflows: cada pieza será una opción del desplegable y un job propio. Bloqueo por componente: piezas distintas pueden desplegarse a la vez, la misma no. Descartado: un workflow por pieza (duplica pasos y botones) y pedir la imagen a desplegar (el despliegue siempre construye el código de la rama elegida; volver a una versión concreta es tarea del rollback) |
 
-**Decisiones abiertas que alimentarán esta tabla:** LLM local vs. servicio gestionado, SQL generado
-por el LLM vs. consultas predefinidas, y dónde se despliega el servicio RAG en producción (§13).
-La opción de red en AWS ya está decidida y aplicada (opción A, §8.4).
+**Decisiones abiertas que alimentarán esta tabla:** proveedor concreto del LLM (se decidirá al
+conectar el bucle real: crear cuenta y verificar límites en consola) y dónde se despliega el
+servicio RAG en producción (§13). La opción de red en AWS ya está decidida y aplicada (opción A, §8.4).
 
 ---
 
@@ -154,7 +156,11 @@ API Madrid (tiempo real) ─▶ pipeline_tiempo_real.py ─▶ PostgreSQL: calid
 CSV histórico ─▶ notebooks 01/02/03 ─▶ modelo .joblib ─▶ PostgreSQL: resumen_datos_ml (+ anomalías)
 
 Corpus RAG (.md) ─▶ troceado + embeddings e5 ─▶ ChromaDB ─▶ servicio RAG (FastAPI)   (Fase 2)
-Usuario ─▶ API de chat: LLM + tools (query_sql, buscar_evidencias) ─▶ web        (Fases 3–4, pendiente)
+
+Usuario ─▶ ApiUsuario (FastAPI) ──▶ PostgreSQL (lecturas: estaciones, series)   (Fase 4, en curso)
+                    └─ /chat ────▶ LLMOrchestrator ─▶ LLM hospedado (OpenAI-compat)
+                                       ├─ query_sql ─────────▶ PostgreSQL       (Fase 3, implementada;
+                                       └─ buscar_evidencias ─▶ rag.api (HTTP)    proveedor pendiente)
 ```
 
 **Principio de diseño central:** los **datos de contaminación viven estructurados en SQL** y la
@@ -166,9 +172,9 @@ mediante *tool use*.
 | Fase | Contenido | Estado |
 |---|---|---|
 | 1 | Datos, detector de anomalías, pipeline en tiempo real | Hecha en local; migración a AWS en curso |
-| 2 | Vector DB y servicio de evidencias | **Reescrita** (2026-09-23) en `feature/rag-herramienta-llm`, pendiente de PR. La primera versión sigue en `development` (PR #37) |
-| 3 | LLM con *tool use* | Pendiente. El contrato de la herramienta documental ya está fijado por el servicio RAG (§7.2) |
-| 4 | Informes y dashboard | Pendiente (solo esqueleto de `ApiUsuario` con `/health`) |
+| 2 | Vector DB y servicio de evidencias | **Reescrita** (2026-09-23) como servicio de evidencias y mergeada en `development`; pendiente de pasar a `main` |
+| 3 | LLM con *tool use* | **Implementada** (2026-09-28; ruta documental por contrato HTTP el 2026-09-30): servicio `LLMOrchestrator` con bucle de agente, tools `query_sql` y `buscar_evidencias` (cliente de `rag.api`), y 45 tests. Falta solo conectar un proveedor real (crear cuenta + credenciales) |
+| 4 | Informes y dashboard | En curso: `ApiUsuario` con `/estaciones`, `/estaciones/{codigo}/series` y `/chat` (proxy con stub), tests propios y job de CI. Informes y dashboard pendientes |
 
 **Stack actual:** Python 3.12 · pandas · NumPy · scikit-learn · PostgreSQL 18 (RDS) · SQLAlchemy ·
 pyarrow · ChromaDB · sentence-transformers (`multilingual-e5-base`) · FastAPI · pytest ·
@@ -399,19 +405,85 @@ interna entre la API de chat y él.
 **Fuera de alcance declarado:** ingesta incremental, filtro por contaminante, *reranking*, historial
 de conversación, *streaming* y consulta de mediciones.
 
-### 7.3 LLM con tool use (Fase 3) — pendiente
+### 7.3 LLM con tool use (Fase 3) — implementada (falta el proveedor)
 
-- Tools previstas: `query_sql` (solo lectura sobre las tablas de §5.3) y `buscar_evidencias`
-  (§7.2, ya implementada como servicio).
-- Plan original: LLM local (Llama 3 / Mistral con Ollama o vLLM) por **privacidad**, condicionado a
-  disponer de GPU. Decisión en revisión por plazos: se valora una API gestionada tras una interfaz
-  propia fina que permita sustituirla después por un modelo local `[por confirmar]`.
-- **Hueco de contrato detectado (2026-09-24).** El esquema de salida solo admite IDs `D1..Dn` del
-  corpus documental, y la validación rechaza cualquier afirmación que cite un ID que no venga de la
-  recuperación. Una afirmación basada en `query_sql` («ayer el NO2 en Escuelas Aguirre estuvo
-  anómalo») no tiene ningún `Dn` que citar. Hay que decidir si la API de chat separa las dos rutas
-  (datos por un lado, documentos por otro) o si el esquema se extiende con IDs de medición
-  (`S1..Sn`) validados igual que las citas. Conviene resolverlo antes de implementar `query_sql`.
+**Estado (2026-09-28):** el servicio `LLMOrchestrator` (FastAPI, puerto 8100, `POST /responder`)
+implementa el bucle del agente completo. Separado de `ApiUsuario` para aislar las dependencias
+pesadas del RAG (torch/chromadb, importadas de forma perezosa: los tests y el arranque no las pagan).
+
+- **Bucle del agente** (`business/agente.py`): máx. `MAX_ITERACIONES=4` vueltas (cada vuelta = 1
+  llamada al LLM); al agotarse se fuerza un cierre sin tools — el usuario siempre recibe
+  respuesta. Las tools nunca lanzan: sus errores vuelven como `{"error": ...}` para que el
+  modelo se corrija en la siguiente vuelta.
+- **`query_sql`**: 5 consultas predefinidas (`ultimos_niveles`, `serie_bloques`, `anomalias`,
+  `comparar_estaciones`, `info_estaciones`) con parámetros validados y ligados; filtra por
+  `magnitud` (índice) y `anomalias` exige `cobertura >= 0,7` en el propio SQL (§6). Sin SQL libre
+  (ver D3 en §2).
+- **`buscar_evidencias`** (2026-09-30, sustituye a `search_documents`): paso 1 del contrato de
+  evidencias de la Fase 2, como **cliente HTTP** de `rag.api` (`POST /rag/evidencias`; única
+  fuente de verdad: umbral 0,22 del servicio, numeración `D1..Dn`). El orquestador ya no
+  arrastra torch/chromadb: `RAG_URL` + `RAG_TIMEOUT_S` en el entorno. Si el modelo llama a la
+  tool varias veces, el agente renumera los IDs para que sean únicos en la conversación.
+  La **definición de la tool** también la publica el RAG (`GET /rag/herramienta`, única fuente
+  de verdad del esquema): se pide en la primera pregunta y se cachea por proceso. Si el GET
+  falla, la tool no se ofrece en esa vuelta — el agente degrada a solo `query_sql` — y se
+  reintenta en la siguiente (2026-10-01).
+- **Ruta documental con citas verificadas** (2026-09-30): si hubo evidencias, la respuesta final
+  del modelo debe ser el JSON `{estado, afirmaciones[{texto, evidencias:[Dn]}], limitaciones}`;
+  el agente lo valida con `POST /rag/validar` (título, sección y bibliografía se resuelven en el
+  servicio desde el corpus por `chunk_id`, nunca del modelo) y devuelve el texto renderizado
+  con `[Dn]`, avisos y fuentes. Una única reparación con el `mensaje_reparacion` del servicio;
+  si tampoco, insuficiencia. `fuentes` lista solo los documentos **citados** y la `advertencia`
+  médica se activa solo con afirmaciones documentales. La ruta de solo datos sigue en texto
+  libre. Peor caso de llamadas al LLM: `MAX_ITERACIONES` + 3 (cierre + reparación + cierre de
+  datos).
+- **Cliente LLM**: SDK `openai` contra la interfaz OpenAI-compatible (chat/completions + `tools`),
+  con reintentos/backoff del propio SDK para los 429/5xx de los tiers gratuitos. Proveedor =
+  `LLM_BASE_URL` + `LLM_API_KEY` + `LLM_MODEL` (Mistral, Groq, Gemini u Ollama valen sin cambiar
+  código). **Sin decidir aún**; se elegirá creando las cuentas y verificando límites reales.
+- **Tests**: 51 (2026-10-01; eran 34 antes de la ruta documental), en ~1 s, sin red — LLM falso
+  con guion que registra las llamadas, SQLite en memoria, recuperación/validación documental
+  fingidas y transporte HTTP del puente con `httpx.MockTransport` (ni torch ni el servicio RAG
+  se instalan en CI). Cuarto job del workflow.
+- **Revisión adversarial** (2026-09-28): 4 revisores + refutación por hallazgo. Arreglos aplicados:
+  aviso explícito al LLM cuando un resultado se trunca al límite de 60 filas; filtro de distrito
+  por coincidencia parcial (el LLM no conoce los nombres compuestos como «Puente de Vallecas»);
+  presupuesto de timeouts coherente entre servicios (LLM_TIMEOUT_S=30 por intento, 2 reintentos,
+  ORCHESTRATOR_TIMEOUT_S=120, relación documentada en ambos `.env.example`); el cierre forzado ya
+  no envía `tool_choice` sin `tools` (algunos proveedores lo rechazan); `choices` vacío del
+  proveedor → 503 controlado; `ultimos_niveles` de una estación retrasada devuelve su último día
+  con datos; prompt de sistema ajustado a las limitaciones reales (hora 23 ausente, estaciones sin
+  emitir). Limitación aceptada: las consultas sin estación recorren la tabla (sin índice por
+  magnitud sola); asumible a escala de demo.
+- Finalistas evaluados (2026-09-27, documentación oficial de cada proveedor): **Mistral** plan
+  Experiment (toda la gama gratis, límites reportados ~1 req/s y 500K tokens/min `[por confirmar en
+  consola]`, mejor español), **Groq** (límites oficiales publicados: 30 RPM, 1.000 req/día; riesgo:
+  8K tokens/min con contexto RAG) y **Gemini** (límites del free tier no publicados). Descartados:
+  Cerebras (free tier eliminado en 2026), Cohere (tope de 1.000 llamadas/mes) y Hugging Face
+  (créditos insuficientes); OpenRouter solo como reserva (50 req/día en modelos `:free`).
+  Proveedor sin fijar a propósito: se decidirá al conectar el bucle real del agente.
+- Implicación operativa: los free tiers limitan peticiones/minuto y el bucle del agente hace 2–4
+  llamadas por pregunta → `MAX_ITERACIONES` bajo y reintentos con *backoff* ante 429.
+
+**Integración Fase 2 ↔ Fase 3 (detectada rota el 2026-09-30 al mergear `development`, resuelta el
+mismo día en el lado del orquestador).** `LLMOrchestrator` se escribió contra el RAG original;
+la Fase 2 reescrita lo había convertido en el servicio de evidencias (§7.2). Resolución, sin tocar
+`src/rag`: el orquestador **consume el contrato de evidencias por HTTP** (`rag.api`: POST
+`/rag/evidencias` → JSON del modelo → POST `/rag/validar`, con una reparación). Así no repite
+trabajo que el RAG ya expone, y queda **ligero** (sin torch/chromadb; solo `httpx`): el RAG se
+despliega y calienta por su cuenta (§2). Se valoró llamarlo en proceso (biblioteca) y se descartó
+el mismo día: duplicaba responsabilidades y metía las deps pesadas en el orquestador. El **hueco
+de contrato del 2026-09-24** (una afirmación basada en `query_sql` no tiene `Dn` que citar) se
+resuelve **separando las rutas**: la ruta de solo datos responde en texto libre (las cifras ya
+son deterministas por construcción, D3 en §2); en respuestas mixtas la cifra puede aparecer
+dentro de una afirmación junto a la interpretación documental que la fundamenta, y si el modelo
+declara `sin_evidencia` habiendo datos SQL el agente cierra por la ruta de datos. Descartado
+extender el esquema con IDs de medición `S1..Sn` (exigiría cambiar la Fase 2 y un mecanismo de
+resolución de mediciones equivalente al corpus). Verificado de punta a punta contra `rag.api`
+real: cita correcta → `valida` con texto `[D1]` y bibliografía; salida inválida → reparación;
+índice desfasado → 503 tipado legible por el modelo. Queda reindexar `data/chroma/` con e5 en
+cada entorno (el índice local es de la era MiniLM) y el aviso operativo: la primera petición al
+servicio recién arrancado carga el modelo (~1,1 GB) — calentarlo tras el despliegue.
 
 ---
 
@@ -686,10 +758,14 @@ la enciende a mano para trabajar o hacer una demo.
   programador permitía lanzar los runbooks sobre el ARN `automation-definition/...:$DEFAULT`, y el
   simulador lo dio por bueno porque se le preguntó por ese mismo ARN. En la ejecución real, AWS
   comprobó el permiso contra otro recurso, el documento (`document/AWS-StartRdsInstance`), y la
-  primera noche la base no se encendió. La prueba manual había funcionado porque se lanzó con un
-  usuario administrador, no con el rol del programador. Lecciones: probar con la **identidad real**
-  que usará la automatización y, ante un fallo, leer el `errorMessage` de CloudTrail, que dice
-  exactamente qué acción y qué recurso se denegaron.
+  primera noche la base no se encendió. Tras corregirlo, la noche siguiente falló por un tercer
+  recurso: `ssm:StartAutomationExecution` se autoriza a la vez contra el documento **y** contra la
+  ejecución que crea (`automation-execution/*`), y cada error de CloudTrail solo muestra el primer
+  recurso denegado. La prueba manual había funcionado porque se lanzó con un usuario administrador,
+  no con el rol del programador. Lecciones: probar con la **identidad real** que usará la
+  automatización (por ejemplo, con una programación de un solo uso dentro de unos minutos) en vez
+  de esperar a la noche, y leer el `errorMessage` de CloudTrail, que dice exactamente qué acción y
+  qué recurso se denegaron.
 
 ---
 
@@ -778,6 +854,7 @@ la enciende a mano para trabajar o hacer una demo.
   `jupiter-pipeline`. La primera *trust policy* (por `job_workflow_ref`) era inasumible y se
   corrigió a `sub` del repositorio (§10). Workflow `deploy_lambda.yml` escrito: tests → build →
   push a ECR con tag por SHA → `update-function-code` → verificación del digest |
+| 2026-09-27 | Diseño de la capa de API cerrado: 2 servicios (`ApiUsuario` + `LLMOrchestrator`), sin estado, LLM hospedado gratuito con cliente OpenAI-compatible en vez de Ollama/GPU. `ApiUsuario` implementado: `/estaciones`, `/estaciones/{codigo}/series` (bloques + anomalías) y `/chat` (proxy al orquestador con stub), con 18 tests sobre SQLite en memoria y job propio en CI (Sheila) |
 | 2026-09-28 | **Primer despliegue automático correcto** (Guillermo, desde `main`, commit `2778132`):
   2 min 26 s en total (tests unitarios 41 s e integración 57 s en paralelo; build 24 s, push 26 s,
   actualización 20 s). Verificado fuera del workflow: la Lambda ejecuta la imagen con tag
@@ -799,10 +876,15 @@ la enciende a mano para trabajar o hacer una demo.
   programador recibió `AccessDenied` en `ssm:StartAutomationExecution`, porque AWS autoriza la
   llamada contra el documento (`arn:aws:ssm:eu-west-1::document/AWS-StartRdsInstance`) y la
   política solo permitía el recurso `automation-definition` (§10). Diagnosticado con CloudTrail y
-  corregido añadiendo los ARN de documento. Primer ciclo nocturno completo tras el arreglo:
-  `[por confirmar]`. **Workflow «Encender entorno» probado** esa misma noche con la base parada:
+  corregido añadiendo los ARN de documento. **El apagado de la 01:30 volvió a fallar**, ya con otro
+  mensaje: la misma acción exige también permiso sobre la ejecución que crea
+  (`automation-execution/*`). Corregido el 02-10 y **probado ese mismo día** con una programación
+  de un solo uso a las 19:47 con el rol real del programador: el runbook de apagado se lanzó y
+  terminó en `Success`. Primer ciclo nocturno completo (22:00 → 23:45 → 01:30):
+  `[por confirmar el 03-10]`. **Workflow «Encender entorno» probado** esa misma noche con la base parada:
   correcto en 4 min 44 s de principio a fin (incluye el arranque del runner y la autenticación
-  OIDC; la mayor parte es el arranque de la instancia). Los cambios en IAM y RDS los ejecutó Guillermo con un script: el modo
+  OIDC; la mayor parte es el arranque de la instancia). **Workflow «Apagar entorno» probado** el
+  02-10 con la base encendida: correcto. Los cambios en IAM y RDS los ejecutó Guillermo con un script: el modo
   automático del asistente bloquea por diseño conceder permisos y modificar recursos compartidos.
   Mismo día: workflow «Apagar entorno» y `rds:StopDBInstance` añadido al rol de entorno |
 | 2026-10-01 | **Despliegue por componente** (Guillermo): `deploy_lambda.yml` y `rollback_lambda.yml`
@@ -822,10 +904,17 @@ la enciende a mano para trabajar o hacer una demo.
   `jupiter-pipeline` (bitácora 2026-09-16). Queda por comprobar si también se puede crear el
   **proveedor de identidad OIDC** que necesita GitHub Actions, que es un recurso distinto (ver el
   punto de CI/CD más abajo).
-- [ ] LLM de la Fase 3: ¿local con GPU o servicio gestionado? ¿SQL generado o consultas predefinidas?
-- [ ] **¿Cómo se citan los datos de SQL?** El esquema de respuesta del RAG solo admite evidencias
-  documentales `D1..Dn`; hay que decidir cómo encajan las afirmaciones basadas en mediciones antes
-  de implementar `query_sql` (§7.3).
+- [x] LLM de la Fase 3: ¿local con GPU o servicio gestionado? ¿SQL generado o consultas
+  predefinidas? **Resueltas** (ver §2): LLM hospedado OpenAI-compatible (2026-09-27) y 5 consultas
+  predefinidas parametrizadas (2026-09-28). Queda solo elegir el proveedor concreto.
+- [x] **¿Cómo se citan los datos de SQL?** → resuelto el 2026-09-30 separando rutas: los datos
+  responden en texto libre (deterministas por construcción) y lo documental pasa por el flujo
+  evidencias/validar; en respuestas mixtas la cifra va dentro de la afirmación (§7.3, §2).
+- [x] Reconciliar `LLMOrchestrator` con la Fase 2 reescrita → hecho el 2026-09-30: el orquestador
+  adopta el contrato de evidencias en proceso (tool `buscar_evidencias` + validación en el
+  cierre); el umbral y las fuentes son ya los del servicio (§7.3).
+- [ ] Reindexar `data/chroma/` con e5 en cada entorno de trabajo (`python -m rag.indexar`): el
+  índice construido antes de la reescritura no tiene metadatos de modelo y la búsqueda lo rechaza.
 - [ ] ¿Dónde se despliega el servicio RAG en producción? (§7.2: modelo de ~1,1 GB)
 - [ ] ¿Se valoró Azure Functions para la ingesta programada? La rama `feature/azure-functions`
   existe en el repositorio (ingesta a CSV), así que se llegó a probar algo, pero no queda anotado
