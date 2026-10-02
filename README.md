@@ -1,8 +1,8 @@
 # TFM – Sistema Inteligente de Monitorización de Calidad del Aire (Madrid)
 
 Sistema basado en Machine Learning que analiza los datos de calidad del aire de Madrid, **detecta
-anomalías automáticamente** y (fase futura) permite consultarlos mediante informes y un asistente
-conversacional con LLM.
+anomalías automáticamente** y permite consultarlos en lenguaje natural mediante un asistente
+conversacional con LLM y *tool use*. Los informes y el dashboard quedan pendientes.
 
 > **Diseño completo y decisiones**: [`docs/plan_arquitectura_v3.html`](docs/plan_arquitectura_v3.html)
 > (ábrelo en el navegador). Es la referencia viva de la arquitectura.
@@ -49,7 +49,12 @@ CSV histórico 2018-2026 ──▶ Notebooks 01/02/03 (en local) ──▶ model
 
 data/rag/*.md ──▶ rag.indexar (embeddings e5) ──▶ ChromaDB: corpus_rag ──▶ rag.api: evidencias D1..Dn   (Fase 2)
 
-RDS + servicio RAG ──▶ LLM con tool use ──▶ Dashboard   (Fases 3-4)
+Usuario ──▶ ApiUsuario (FastAPI) ──▶ RDS: /estaciones, /series          (Fase 4, en curso)
+                 └── /chat ──▶ LLMOrchestrator ──▶ LLM hospedado (OpenAI-compatible)
+                                     ├── query_sql ─────────▶ RDS PostgreSQL   (Fase 3)
+                                     └── buscar_evidencias ─▶ servicio RAG (rag.api, HTTP)
+
+Dashboard e informes ──▶ pendientes (consumirán solo la API)
 ```
 
 Los **datos de contaminación viven estructurados en PostgreSQL**. La Vector DB solo contiene
@@ -225,9 +230,19 @@ forma normal de actualizarlo. Detalles, variables de entorno y contrato HTTP en
 ### Comprobar los tests
 
 ```bash
-# Tests unitarios (rápidos, sin base de datos):
+# Tests unitarios del ETL/ML (rápidos, sin base de datos):
 pytest tests/ --ignore=tests/test_integracion_db.py -v
+
+# Tests de ApiUsuario (SQLite en memoria, sin BBDD externa):
+pytest ApiUsuario/tests/ -v
+
+# Tests del orquestador LLM (LLM falso con guion, sin red ni torch):
+pytest LLMOrchestrator/tests/ -v
 ```
+
+Cada servicio instala sus dependencias de test aparte
+(`ApiUsuario/requirements-dev.txt`, `LLMOrchestrator/requirements-dev.txt`).
+En CI los tres corren como jobs independientes.
 
 ---
 
@@ -292,6 +307,16 @@ aws logs tail /aws/lambda/jupiter-pipeline --since 1d --format short
 │       ├── evidencias.py                   # evidencias D1..Dn, validación de citas y bibliografía
 │       ├── api.py                          # servicio FastAPI (tool `buscar_evidencias` para el LLM)
 │       └── errores.py                      # excepciones tipadas
+├── ApiUsuario/                              # servicio FastAPI de usuario (Fase 4)
+│   ├── src/api_usuario/                     # routers / entities / data_access / shared
+│   └── tests/                               # tests con SQLite en memoria (sin BBDD externa)
+├── LLMOrchestrator/                         # servicio del agente LLM (Fase 3)
+│   ├── src/llm_orchestrator/
+│   │   ├── business/agente.py               # bucle del agente (LLM ↔ tools)
+│   │   ├── tools/sql_tool.py                # query_sql: 5 consultas predefinidas
+│   │   ├── tools/rag_tool.py                # buscar_evidencias: cliente HTTP del servicio RAG
+│   │   └── integrations/llm_client.py       # cliente OpenAI-compatible (proveedor por entorno)
+│   └── tests/                               # LLM falso con guion, sin red ni torch
 ├── deploy/                                  # infraestructura AWS (imagen Lambda + roles IAM)
 ├── tests/                                   # tests unitarios y de integración
 ├── docker-compose.yml                       # PostgreSQL 18 + volumen
@@ -375,7 +400,7 @@ data/rag/*.md ──▶ rag.corpus ──▶ rag.embeddings ──▶ ChromaDB (
 | [`indexar.py`](src/rag/indexar.py) | `python -m rag.indexar`: reconstruye el índice entero (**idempotente**). Calcula los embeddings antes de borrar el índice anterior y guarda modelo, commit del corpus y fecha. |
 | [`buscar.py`](src/rag/buscar.py) | `buscar(consulta, k, tema)`: los *k* fragmentos más cercanos. Rechaza un índice construido con otro modelo. |
 | [`evidencias.py`](src/rag/evidencias.py) | Filtra por umbral de distancia (0,22, provisional), numera `D1..Dn`, valida que cada afirmación del modelo cite IDs existentes y añade avisos y bibliografía. |
-| [`api.py`](src/rag/api.py) | Servicio FastAPI: `/rag/evidencias`, `/rag/validar`, `/rag/herramienta` y `/salud`. |
+| [`api.py`](src/rag/api.py) | Servicio FastAPI: `/rag/evidencias`, `/rag/validar`, `/rag/herramienta` y `/salud`. Es lo que consume `LLMOrchestrator` por HTTP (tool `buscar_evidencias` de la Fase 3). |
 
 El contrato completo para la API de chat (flujo en tres pasos, esquema de salida del modelo,
 reparación) está en [`src/rag/README.md`](src/rag/README.md).
@@ -461,5 +486,6 @@ enchufable, así que añadir un detector nuevo no toca el resto del sistema.
 
 Python · pandas / NumPy · scikit-learn · PostgreSQL 18 (RDS en AWS, Docker en local) ·
 SQLAlchemy + psycopg2 · pyarrow · pytest · GitHub Actions · ChromaDB + sentence-transformers + FastAPI (RAG) ·
-**AWS**: Lambda, ECR, S3, RDS, EventBridge Scheduler, SSM Parameter Store, CloudWatch y SNS ·
-(futuro: LLM)
+FastAPI (`ApiUsuario`: estaciones, series y chat — ver [ApiUsuario/README.md](ApiUsuario/README.md);
+`LLMOrchestrator`: agente LLM con tool use — ver [LLMOrchestrator/README.md](LLMOrchestrator/README.md)) ·
+**AWS**: Lambda, ECR, S3, RDS, EventBridge Scheduler, SSM Parameter Store, CloudWatch y SNS
