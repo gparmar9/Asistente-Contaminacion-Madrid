@@ -685,10 +685,14 @@ la enciende a mano para trabajar o hacer una demo.
   programador permitía lanzar los runbooks sobre el ARN `automation-definition/...:$DEFAULT`, y el
   simulador lo dio por bueno porque se le preguntó por ese mismo ARN. En la ejecución real, AWS
   comprobó el permiso contra otro recurso, el documento (`document/AWS-StartRdsInstance`), y la
-  primera noche la base no se encendió. La prueba manual había funcionado porque se lanzó con un
-  usuario administrador, no con el rol del programador. Lecciones: probar con la **identidad real**
-  que usará la automatización y, ante un fallo, leer el `errorMessage` de CloudTrail, que dice
-  exactamente qué acción y qué recurso se denegaron.
+  primera noche la base no se encendió. Tras corregirlo, la noche siguiente falló por un tercer
+  recurso: `ssm:StartAutomationExecution` se autoriza a la vez contra el documento **y** contra la
+  ejecución que crea (`automation-execution/*`), y cada error de CloudTrail solo muestra el primer
+  recurso denegado. La prueba manual había funcionado porque se lanzó con un usuario administrador,
+  no con el rol del programador. Lecciones: probar con la **identidad real** que usará la
+  automatización (por ejemplo, con una programación de un solo uso dentro de unos minutos) en vez
+  de esperar a la noche, y leer el `errorMessage` de CloudTrail, que dice exactamente qué acción y
+  qué recurso se denegaron.
 
 ---
 
@@ -798,10 +802,15 @@ la enciende a mano para trabajar o hacer una demo.
   programador recibió `AccessDenied` en `ssm:StartAutomationExecution`, porque AWS autoriza la
   llamada contra el documento (`arn:aws:ssm:eu-west-1::document/AWS-StartRdsInstance`) y la
   política solo permitía el recurso `automation-definition` (§10). Diagnosticado con CloudTrail y
-  corregido añadiendo los ARN de documento. Primer ciclo nocturno completo tras el arreglo:
-  `[por confirmar]`. **Workflow «Encender entorno» probado** esa misma noche con la base parada:
+  corregido añadiendo los ARN de documento. **El apagado de la 01:30 volvió a fallar**, ya con otro
+  mensaje: la misma acción exige también permiso sobre la ejecución que crea
+  (`automation-execution/*`). Corregido el 02-10 y **probado ese mismo día** con una programación
+  de un solo uso a las 19:47 con el rol real del programador: el runbook de apagado se lanzó y
+  terminó en `Success`. Primer ciclo nocturno completo (22:00 → 23:45 → 01:30):
+  `[por confirmar el 03-10]`. **Workflow «Encender entorno» probado** esa misma noche con la base parada:
   correcto en 4 min 44 s de principio a fin (incluye el arranque del runner y la autenticación
-  OIDC; la mayor parte es el arranque de la instancia). Los cambios en IAM y RDS los ejecutó Guillermo con un script: el modo
+  OIDC; la mayor parte es el arranque de la instancia). **Workflow «Apagar entorno» probado** el
+  02-10 con la base encendida: correcto. Los cambios en IAM y RDS los ejecutó Guillermo con un script: el modo
   automático del asistente bloquea por diseño conceder permisos y modificar recursos compartidos.
   Mismo día: workflow «Apagar entorno» y `rds:StopDBInstance` añadido al rol de entorno |
 
