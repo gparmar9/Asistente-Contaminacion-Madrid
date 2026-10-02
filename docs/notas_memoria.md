@@ -97,10 +97,8 @@ Hilo conductor de la memoria: cómo y por qué cambió el diseño.
 | 2026-09-27 | Arquitectura de la API (Fase 4) | Esqueleto único sin diseño cerrado → **2 servicios**: `ApiUsuario` (ligero: lecturas SQL + proxy de chat) y `LLMOrchestrator` (agente + tools + deps pesadas de RAG; pendiente). **Sin estado**: ni usuarios ni historial (se descarta el scaffold usuario/conversación). El dashboard consumirá solo la API | Separar las dependencias pesadas (torch/chromadb) del servicio de usuario, permitir el trabajo en paralelo del equipo y dejar la costura lista para un futuro LLM autoalojado. API primero, agente después: 3 de los 4 grupos de endpoints solo necesitan SQL |
 | 2026-09-28 | Despliegue | Build + push + `update-function-code` a mano desde un PC con credenciales SSO → **workflow de GitHub Actions (`workflow_dispatch`) con OIDC** | Cualquiera del equipo puede desplegar sin credenciales de AWS; no se despliega si fallan los tests; el tag por SHA dice qué commit corre en producción y permite volver atrás; la verificación del digest elimina el fallo silencioso de subir la imagen sin actualizar la función. Descartado: claves de acceso en GitHub Secrets (permanentes y compartidas) y despliegue en cada push a `main` (se optó por lanzarlo a mano para decidir cuándo se toca producción) |
 | 2026-09-28 | Vuelta atrás | `update-function-code` a mano con la imagen buena → **workflow de rollback** con modo consulta, vuelta por digest a una versión publicada y verificación | Deshacer un despliegue fallido en segundos, sin credenciales ni reconstruir la imagen, y dejando rastro (cada rollback publica una versión con su motivo). Descartado: "volver a la versión anterior" automático, porque tras un rollback la anterior es justo la versión que se deshizo; primero se consulta la tabla y luego se elige |
-| 2026-09-28 | Tool de datos del asistente | SQL libre generado por el LLM con validación *read-only* (opción grande de D3) → **5 consultas predefinidas parametrizadas**: el LLM rellena enums/fechas validados y el módulo construye el único SELECT posible con parámetros ligados | Inyección SQL imposible por construcción, resultados deterministas y defendibles; los modelos de los tiers gratuitos fallan más generando SQL correcto que rellenando 5 parámetros. Resuelve la decisión D3 del roadmap |
-| 2026-09-30 | Ruta documental del agente | Tool `search_documents` con umbral propio (0,8) y citas por confianza en el modelo → **contrato de evidencias de la Fase 2 por HTTP**: tool `buscar_evidencias` (`POST /rag/evidencias`, umbral 0,22 del servicio), respuesta del modelo en JSON `{estado, afirmaciones[Dn], limitaciones}`, validación con `POST /rag/validar` y render con `[Dn]` + bibliografía; 1 reparación | Las citas se comprueban, no se creen: la trazabilidad no depende de la conducta del LLM (argumento central de §7.2). Cierra el hueco de contrato de 2026-09-24 separando rutas (datos en texto libre; en mixtas, la cifra va dentro de la afirmación). Descartado: extender el esquema con `S1..Sn` |
-| 2026-09-30 | Arquitectura de servicios | 2 servicios con el RAG embebido en el orquestador (torch/chromadb en proceso) → **3 servicios**: `ApiUsuario` + `LLMOrchestrator` (ligero) + `rag.api` (:8010, evidencias) | El orquestador no repite trabajo que el RAG ya expone por API; sin torch/chromadb queda ligero para desplegar. El RAG (modelo ~1,1 GB) se despliega, escala y calienta por su cuenta. Se valoró en proceso el mismo día y se descartó: duplicaba responsabilidades y dependencias |
-| 2026-10-01 | Definición de la tool `buscar_evidencias` | Copia duplicada a propósito en el orquestador → **se consume `GET /rag/herramienta`** (caché por proceso), sin copia local | Una sola fuente de verdad del esquema: una copia local puede divergir del servicio en silencio. Si el GET falla, la tool no se ofrece en esa vuelta (el agente sigue con `query_sql`) y se reintenta en la siguiente. Descartada una copia local de respaldo (primera versión del mismo día): era precisamente la duplicación que se quería eliminar |
+| 2026-10-01 | Disponibilidad de la base de datos | RDS encendida 24 h → **encendida solo de 22:00 a 01:30 (hora de Madrid) y a demanda** con un workflow de GitHub (§8.8) | La carga es una vez al día y la API aún no está desplegada: pagar la instancia 24 h no aporta nada. Ahorro estimado de ~15,5 a ~4–5 $/mes. Descartado: DynamoDB (el acceso es analítico: rangos, agregaciones y `JOIN`, justo lo que no hace bien una base clave-valor), Aurora Serverless v2 con pausa automática (ahorro parecido pero exige migrar; queda como alternativa), programarlo con `schedule` de GitHub Actions (puede retrasarse y se desactiva tras 60 días sin actividad) y que el programador llame directamente a `StartDBInstance` (da error si la base ya está encendida) |
+| 2026-10-01 | Workflows de despliegue | «Desplegar Lambda» y «Rollback Lambda» → **«Desplegar» y «Rollback» con un desplegable de componente** (hoy solo `lambda`) | Preparar el despliegue de la API, el orquestador, el RAG y la web sin multiplicar workflows: cada pieza será una opción del desplegable y un job propio. Bloqueo por componente: piezas distintas pueden desplegarse a la vez, la misma no. Descartado: un workflow por pieza (duplica pasos y botones) y pedir la imagen a desplegar (el despliegue siempre construye el código de la rama elegida; volver a una versión concreta es tarea del rollback) |
 
 **Decisiones abiertas que alimentarán esta tabla:** proveedor concreto del LLM (se decidirá al
 conectar el bucle real: crear cuenta y verificar límites en consola) y dónde se despliega el
@@ -533,8 +531,11 @@ Los objetos se organizan con los mismos prefijos que el repositorio: `models/`, 
   20 GB de SSD de uso general y 20 GB de backups). La configuración elegida cabe entera en esos
   límites; se eligió **gp2** en lugar de gp3 precisamente porque es lo que cubre la capa gratuita.
   `[por confirmar: si la cuenta del máster sigue dentro de los 12 meses de capa gratuita]`
-- Ahorro durante el desarrollo: la instancia puede pararse (máximo 7 días seguidos) y solo se paga
-  el disco. Deja de ser posible cuando la Lambda ingiera cada 20 minutos.
+- **Encendido programado (desde el 2026-10-01, §8.8):** la instancia solo está encendida de 22:00 a
+  01:30 y cuando el equipo la enciende a mano; parada solo se paga el disco y las copias. Estimación
+  sin capa gratuita: ~3,5 h/día ≈ 106 h/mes de instancia + disco ≈ **4–5 $/mes** en lugar de 15,5
+  `[estimación: confirmar con la factura de octubre]`. Es posible porque la carga pasó a ser diaria
+  (23:45); con la ingesta cada 20 minutos prevista al principio no lo habría sido.
 
 ### 8.4 Decisión de red
 
@@ -567,8 +568,11 @@ documentada, no una configuración por defecto; la opción C queda como mejora f
   propias credenciales de AWS.
 - **Presupuesto con alertas** antes de crear recursos. Un Budget **avisa, no bloquea**.
 - **Roles:** ejecución de la Lambda (`jupiter-lambda-pipeline`), EventBridge Scheduler
-  (`jupiter-scheduler-pipeline`) y, desde el 2026-09-27, **`jupiter-github-actions-deploy`** para el
-  despliegue automático (§13). Un **usuario** tiene claves permanentes; un **rol** se asume
+  (`jupiter-scheduler-pipeline`), desde el 2026-09-27 **`jupiter-github-actions-deploy`** para el
+  despliegue automático (§13) y, desde el 2026-10-01, **`jupiter-automation-rds`** (los runbooks que
+  encienden y apagan la RDS) y **`jupiter-github-actions-entorno`** (workflows «Encender entorno» y
+  «Apagar entorno»),
+  ambos limitados a `jupiter-postgres` y comprobados con el simulador de IAM (§8.8). Un **usuario** tiene claves permanentes; un **rol** se asume
   temporalmente. El propio acceso por SSO ya es un rol asumido.
 - **OIDC de GitHub Actions** (2026-09-27): proveedor de identidad
   `token.actions.githubusercontent.com` + rol `jupiter-github-actions-deploy`, sin claves de acceso
@@ -611,6 +615,42 @@ de que el programador deje de disparar o alguien desactive la función: no hay e
 no salta nada y el hueco en los datos se descubriría semanas después.
 
 La retención de los logs se baja a 14 días; por defecto no caducan nunca.
+
+### 8.8 Encendido programado de la base de datos — estado actual
+
+La RDS solo está encendida cuando hace falta: cada noche alrededor de la carga, y cuando el equipo
+la enciende a mano para trabajar o hacer una demo.
+
+| Hora de Madrid | Qué pasa | UTC en verano / invierno |
+|---|---|---|
+| 22:00 | `jupiter-rds-encender` enciende la RDS | 20:00 / 21:00 |
+| — | Ventana de copias de seguridad | 21:10–21:40 / 21:10–21:40 |
+| 23:45 | `jupiter-pipeline-diario` lanza la Lambda (sin cambios) | 21:45 / 22:45 |
+| — | Ventana de mantenimiento (domingos) | 22:00–22:30 / 22:00–22:30 |
+| 01:30 | `jupiter-rds-apagar` la apaga, también si alguien la encendió a mano | 23:30 / 00:30 |
+
+- **El cambio de hora condiciona el horario.** Las programaciones van en `Europe/Madrid`, pero las
+  ventanas de copias y mantenimiento de RDS se fijan en UTC. Con una sola hora encendida, la franja
+  de verano y la de invierno no se solapan en UTC y no habría dónde colocar las copias; con 3,5 h
+  queda un tramo común y ninguna ventana coincide con la Lambda. Se evita además la franja de 02:00
+  a 03:00, que no existe el día del cambio de hora de marzo.
+- **Idempotente.** El programador no llama a RDS directamente, sino a los runbooks gestionados por
+  AWS `AWS-StartRdsInstance` / `AWS-StopRdsInstance` (Systems Manager Automation), que primero
+  consultan el estado y no hacen nada si la base ya está encendida o apagada. Llamar directamente a
+  `StartDBInstance` habría devuelto `InvalidDBInstanceState` cada vez que alguien la hubiera
+  encendido antes. Contenido de los runbooks revisado el 2026-10-01.
+- **Pocos reintentos** (3, durante como mucho 30 min): un fallo nocturno no debe acabar encendiendo
+  la base por la mañana. La Lambda conserva su política anterior.
+- **Encendido y apagado a demanda:** workflows `encender_entorno.yml` («▶️ Encender entorno») y
+  `apagar_entorno.yml` («⏹️ Apagar entorno»), con un rol propio que solo puede consultar, encender
+  y apagar `jupiter-postgres` (no borrarla ni modificarla). Los dos terminan bien si la base ya está
+  en el estado pedido y comparten bloqueo para no solaparse. El de apagar **se niega entre las 22:00
+  y las 00:00** (hora de Madrid) para no dejar sin base de datos la carga de las 23:45; apagar a
+  mano es opcional, porque la programación de la 01:30 la apaga igualmente. Cuando exista el
+  servidor de la API, ambos gestionarán también la EC2.
+- **Riesgo aceptado:** el día que haya mantenimiento pendiente, si se alarga en invierno puede
+  coincidir con la Lambda (22:45 UTC) y hacerla fallar esa noche. Lo detecta la alarma de errores y
+  la carga es idempotente, así que basta con relanzarla. Ocurre pocas veces al año.
 
 ---
 
@@ -709,6 +749,19 @@ La retención de los logs se baja a 14 días; por defecto no caducan nunca.
   AWS aceptó la política sin avisar; se detectó revisando la documentación antes del primer
   despliegue y se corrigió a `sub` (2026-09-27). Lección: una *trust policy* válida
   sintácticamente no es una *trust policy* que funcione.
+- **Hora local y UTC en la misma planificación** (2026-10-01). El primer horario propuesto para
+  encender la RDS (una hora por la noche) era correcto en hora de Madrid, pero las ventanas de copias
+  y mantenimiento de RDS solo admiten UTC: con el cambio de hora de octubre la franja encendida se
+  desplaza una hora en UTC y no quedaba ningún tramo común en el que colocar las copias. Lección:
+  cuando una tarea en hora local convive con otra en UTC, hay que comprobar las dos épocas del año.
+- **El simulador de IAM solo responde a la pregunta que se le hace** (2026-10-01). La política del
+  programador permitía lanzar los runbooks sobre el ARN `automation-definition/...:$DEFAULT`, y el
+  simulador lo dio por bueno porque se le preguntó por ese mismo ARN. En la ejecución real, AWS
+  comprobó el permiso contra otro recurso, el documento (`document/AWS-StartRdsInstance`), y la
+  primera noche la base no se encendió. La prueba manual había funcionado porque se lanzó con un
+  usuario administrador, no con el rol del programador. Lecciones: probar con la **identidad real**
+  que usará la automatización y, ante un fallo, leer el `errorMessage` de CloudTrail, que dice
+  exactamente qué acción y qué recurso se denegaron.
 
 ---
 
@@ -809,20 +862,27 @@ La retención de los logs se baja a 14 días; por defecto no caducan nunca.
   pasa a publicar versiones con descripción (`deploy <commit> desde <rama>`). Rol ampliado con
   `PublishVersion` y `ListVersionsByFunction`. Lógica de la tabla probada en local con los datos
   reales de la función (v1 y v2); **pendiente de la primera ejecución real** |
-| 2026-09-28 | `LLMOrchestrator` implementado (Fase 3): bucle de agente sobre LLM OpenAI-compatible, tool `query_sql` con 5 consultas predefinidas parametrizadas (resuelve D3: sin SQL libre), tool `search_documents` reutilizando el RAG de la Fase 2, prompt de sistema con aviso médico, 34 tests sin red (LLM falso con guion + SQLite en memoria) y cuarto job de CI. Revisión adversarial multiagente con 7 arreglos aplicados (ver §7.3) (Sheila) |
-| 2026-09-30 | Merge de `development` en `feature/api-usuario` (Sheila): incorpora la Fase 2
-  reescrita (servicio de evidencias) y el CI/CD de la Lambda. Detectado que `LLMOrchestrator`
-  importa `buscar_documentos()`, renombrado a `buscar()` en la reescritura del RAG: integración
-  pendiente de reconciliar (§7.3) |
-| 2026-09-30 | `LLMOrchestrator` adopta el contrato de evidencias de la Fase 2 **por HTTP**
-  (Sheila): tool `buscar_evidencias` contra `rag.api` + validación de citas y render en el
-  cierre, con una reparación y cierre por la ruta de datos si `sin_evidencia` con SQL. Resuelve
-  el hueco de contrato de 2026-09-24 separando rutas y deja al orquestador sin torch/chromadb
-  (3 servicios, §2 y §7.3). Suite del orquestador: 45 tests; verificado de punta a punta contra
-  `rag.api` real (validación correcta, reparación y 503 tipado con índice desfasado) |
-| 2026-10-01 | La definición de la tool `buscar_evidencias` deja de estar duplicada: el orquestador
-  la pide a `GET /rag/herramienta` (caché por proceso); si el RAG no responde, la tool no se
-  ofrece en esa vuelta y se reintenta en la siguiente. Suite del orquestador: 51 tests (Sheila) |
+| 2026-10-01 | **Encendido programado de la RDS** (Guillermo, cuenta AWS del máster): rol
+  `jupiter-automation-rds`, permisos del programador ampliados a los runbooks
+  `AWS-Start/StopRdsInstance`, programaciones `jupiter-rds-encender` (22:00) y `jupiter-rds-apagar`
+  (01:30), ventanas de copias (21:10–21:40 UTC) y mantenimiento (dom 22:00–22:30 UTC) movidas, y rol
+  `jupiter-github-actions-entorno` para el nuevo workflow «Encender entorno». Permisos comprobados
+  con el simulador de IAM: cada rol puede justo lo previsto y nada más. Prueba real del apagado con
+  el runbook el mismo día (`Success`). **La primera noche no encendió:** a las 22:00 el
+  programador recibió `AccessDenied` en `ssm:StartAutomationExecution`, porque AWS autoriza la
+  llamada contra el documento (`arn:aws:ssm:eu-west-1::document/AWS-StartRdsInstance`) y la
+  política solo permitía el recurso `automation-definition` (§10). Diagnosticado con CloudTrail y
+  corregido añadiendo los ARN de documento. Primer ciclo nocturno completo tras el arreglo:
+  `[por confirmar]`. **Workflow «Encender entorno» probado** esa misma noche con la base parada:
+  correcto en 4 min 44 s de principio a fin (incluye el arranque del runner y la autenticación
+  OIDC; la mayor parte es el arranque de la instancia). Los cambios en IAM y RDS los ejecutó Guillermo con un script: el modo
+  automático del asistente bloquea por diseño conceder permisos y modificar recursos compartidos.
+  Mismo día: workflow «Apagar entorno» y `rds:StopDBInstance` añadido al rol de entorno |
+| 2026-10-01 | **Despliegue por componente** (Guillermo): `deploy_lambda.yml` y `rollback_lambda.yml`
+  pasan a `desplegar.yml` («🚀 Desplegar») y `rollback.yml` («⏮️ Rollback»), con un desplegable de
+  componente (hoy solo `lambda`), un job por componente y bloqueo por componente. Sin cambios en
+  AWS: la confianza del rol de despliegue no depende del nombre del fichero del workflow (§10).
+  Pendiente de la primera ejecución real tras el merge a `main` |
 
 ---
 
