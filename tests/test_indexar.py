@@ -30,6 +30,18 @@ def test_metadatos_chroma_ida_y_vuelta():
     assert indexar.metadatos_desde_chroma({"contaminantes": ""})["contaminantes"] == []
 
 
+def test_commit_corpus_usa_rag_commit_si_esta_definido(monkeypatch):
+    # Dentro de la imagen Docker no hay git: el commit llega por variable de entorno.
+    monkeypatch.setenv("RAG_COMMIT", "abc1234")
+    assert indexar.commit_corpus() == "abc1234"
+
+
+def test_commit_corpus_sin_git_ni_variable_es_desconocido(monkeypatch):
+    monkeypatch.delenv("RAG_COMMIT", raising=False)
+    monkeypatch.setattr(indexar, "BASE_DIR", Path("/ruta/que/no/existe"))
+    assert indexar.commit_corpus() == "desconocido"
+
+
 def test_si_fallan_los_embeddings_el_indice_anterior_sigue_intacto(tmp_path, monkeypatch):
     # Índice "anterior" con un documento.
     col = embeddings.recrear_coleccion({"modelo_embeddings": embeddings.MODELO_EMBEDDINGS}, ruta=tmp_path)

@@ -1,13 +1,22 @@
-# Base de datos PostgreSQL del proyecto (calidad del aire de Madrid).
+# Entorno local del proyecto (calidad del aire de Madrid).
 #
-# Los datos se guardan en un VOLUMEN NOMBRADO (postgres_data), no dentro del
-# contenedor: así el contenedor se puede parar, actualizar o recrear sin perder
-# la base de datos. Las credenciales se leen de .env (no versionado en git).
+# Por defecto solo levanta la base de datos PostgreSQL. Los datos se guardan en un VOLUMEN
+# NOMBRADO (postgres_data), no dentro del contenedor: así el contenedor se puede parar,
+# actualizar o recrear sin perder la base de datos. Las credenciales se leen de .env (no
+# versionado en git).
 #
-# Uso:
 #   docker compose up -d      # levantar la base de datos
 #   docker compose down       # parar (los datos siguen en el volumen)
 #   docker compose down -v    # parar Y BORRAR los datos (cuidado)
+#
+# Con el perfil "api" levanta además la API completa, cada servicio en su contenedor, igual
+# que irá en la EC2 (ver la sección "La API en contenedores" del README):
+#
+#   docker compose --profile api up -d --build
+#   docker compose --profile api down
+#
+# Los servicios se encuentran por su nombre dentro de la red de Docker (http://rag:8010).
+# Los puertos se publican solo en 127.0.0.1: accesibles desde este equipo, no desde la red.
 
 services:
   db:
@@ -29,6 +38,60 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
+
+  # Servicio de evidencias (src/rag). La imagen lleva el modelo y el índice dentro: el
+  # primer build tarda (descarga torch de CPU y el modelo, ~2,5-3 GB en total).
+  rag:
+    profiles: ["api"]
+    build:
+      context: .
+      dockerfile: deploy/Dockerfile.rag
+      args:
+        COMMIT: ${COMMIT:-local}
+    image: jupiter-rag:local
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8010:8010"
+
+  # Agente: LLM + tools. Las claves del LLM salen de LLMOrchestrator/.env (LLM_BASE_URL,
+  # LLM_API_KEY, LLM_MODEL); lo de `environment` tiene prioridad sobre ese fichero.
+  orquestador:
+    profiles: ["api"]
+    build: ./LLMOrchestrator
+    image: jupiter-orquestador:local
+    restart: unless-stopped
+    env_file:
+      - path: LLMOrchestrator/.env
+        required: false
+    environment:
+      RAG_URL: http://rag:8010
+      # Por defecto, la base de datos del contenedor `db`. Para usar otra (p. ej. RDS con
+      # los datos reales), define DATABASE_URL_API en el .env de la raíz.
+      DATABASE_URL: ${DATABASE_URL_API:-postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@db:5432/${POSTGRES_DB:-postgres}}
+    depends_on:
+      db:
+        condition: service_healthy
+      rag:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:8100:8100"
+
+  # La API que consume la web: estaciones, series y /chat (proxy al orquestador).
+  api-usuario:
+    profiles: ["api"]
+    build: ./ApiUsuario
+    image: jupiter-api-usuario:local
+    restart: unless-stopped
+    environment:
+      ORCHESTRATOR_URL: http://orquestador:8100
+      DATABASE_URL: ${DATABASE_URL_API:-postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@db:5432/${POSTGRES_DB:-postgres}}
+    depends_on:
+      db:
+        condition: service_healthy
+      orquestador:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:8000:8000"
 
 volumes:
   postgres_data:
