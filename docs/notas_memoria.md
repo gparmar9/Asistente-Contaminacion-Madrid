@@ -100,6 +100,7 @@ Hilo conductor de la memoria: cómo y por qué cambió el diseño.
 | 2026-10-01 | Disponibilidad de la base de datos | RDS encendida 24 h → **encendida solo de 22:00 a 01:30 (hora de Madrid) y a demanda** con un workflow de GitHub (§8.8) | La carga es una vez al día y la API aún no está desplegada: pagar la instancia 24 h no aporta nada. Ahorro estimado de ~15,5 a ~4–5 $/mes. Descartado: DynamoDB (el acceso es analítico: rangos, agregaciones y `JOIN`, justo lo que no hace bien una base clave-valor), Aurora Serverless v2 con pausa automática (ahorro parecido pero exige migrar; queda como alternativa), programarlo con `schedule` de GitHub Actions (puede retrasarse y se desactiva tras 60 días sin actividad) y que el programador llame directamente a `StartDBInstance` (da error si la base ya está encendida) |
 | 2026-10-04 | Umbral de evidencia del RAG | 0,22 fijado a ojo con preguntas lejanas al dominio → **0,1754**, punto medio entre la peor documental (0,1750) y la mejor ajena (0,1759) en 30 casos de evaluación (§7.2) | Con 0,22 las 7 ajenas cercanas al dominio (tiempo, tráfico, transporte) recibían evidencias y llegaban al LLM (3/10 rechazadas). Con 0,1754 se rechazan 10/10 a costa de una documental (13/15 en vez de 14/15): se prefiere que el asistente se abstenga de más a que responda fuera del dominio. Descartado: mantener 0,22, que era lo que dictaba la regla fijada antes de medir (no cambiar con un hueco menor de 0,01; aquí es de 0,001) y cambiar a `multilingual-e5-small` (mejor MRR, pero solapa documentales y ajenas y no hay punto medio) |
 | 2026-10-01 | Workflows de despliegue | «Desplegar Lambda» y «Rollback Lambda» → **«Desplegar» y «Rollback» con un desplegable de componente** (hoy solo `lambda`) | Preparar el despliegue de la API, el orquestador, el RAG y la web sin multiplicar workflows: cada pieza será una opción del desplegable y un job propio. Bloqueo por componente: piezas distintas pueden desplegarse a la vez, la misma no. Descartado: un workflow por pieza (duplica pasos y botones) y pedir la imagen a desplegar (el despliegue siempre construye el código de la rama elegida; volver a una versión concreta es tarea del rollback) |
+| 2026-10-02 | Empaquetado de la API | Servicios arrancados a mano con `uvicorn` y `python -m rag.api` → **una imagen Docker por servicio** (`api-usuario`, `orquestador`, `rag`), levantadas juntas con el perfil `api` de `docker-compose` | Es como irán en la EC2 y permite desplegar cada pieza por separado. La imagen del RAG lleva **dentro el modelo y el índice** construido en el propio build, con el commit del corpus en sus metadatos: arranca sin descargar nada y cada imagen corresponde a un corpus concreto. Descartado: una sola imagen con todo (obliga a redesplegar el RAG, de ~3 GB, por cualquier cambio en la API) y construir el índice al arrancar el contenedor (arranque lento y sin garantía de que todas las réplicas usen el mismo índice) |
 
 **Decisiones abiertas que alimentarán esta tabla:** proveedor concreto del LLM (se decidirá al
 conectar el bucle real: crear cuenta y verificar límites en consola) y dónde se despliega el
@@ -842,10 +843,14 @@ la enciende a mano para trabajar o hacer una demo.
   programador permitía lanzar los runbooks sobre el ARN `automation-definition/...:$DEFAULT`, y el
   simulador lo dio por bueno porque se le preguntó por ese mismo ARN. En la ejecución real, AWS
   comprobó el permiso contra otro recurso, el documento (`document/AWS-StartRdsInstance`), y la
-  primera noche la base no se encendió. La prueba manual había funcionado porque se lanzó con un
-  usuario administrador, no con el rol del programador. Lecciones: probar con la **identidad real**
-  que usará la automatización y, ante un fallo, leer el `errorMessage` de CloudTrail, que dice
-  exactamente qué acción y qué recurso se denegaron.
+  primera noche la base no se encendió. Tras corregirlo, la noche siguiente falló por un tercer
+  recurso: `ssm:StartAutomationExecution` se autoriza a la vez contra el documento **y** contra la
+  ejecución que crea (`automation-execution/*`), y cada error de CloudTrail solo muestra el primer
+  recurso denegado. La prueba manual había funcionado porque se lanzó con un usuario administrador,
+  no con el rol del programador. Lecciones: probar con la **identidad real** que usará la
+  automatización (por ejemplo, con una programación de un solo uso dentro de unos minutos) en vez
+  de esperar a la noche, y leer el `errorMessage` de CloudTrail, que dice exactamente qué acción y
+  qué recurso se denegaron.
 
 ---
 
@@ -970,10 +975,16 @@ la enciende a mano para trabajar o hacer una demo.
   programador recibió `AccessDenied` en `ssm:StartAutomationExecution`, porque AWS autoriza la
   llamada contra el documento (`arn:aws:ssm:eu-west-1::document/AWS-StartRdsInstance`) y la
   política solo permitía el recurso `automation-definition` (§10). Diagnosticado con CloudTrail y
-  corregido añadiendo los ARN de documento. Primer ciclo nocturno completo tras el arreglo:
-  `[por confirmar]`. **Workflow «Encender entorno» probado** esa misma noche con la base parada:
+  corregido añadiendo los ARN de documento. **El apagado de la 01:30 volvió a fallar**, ya con otro
+  mensaje: la misma acción exige también permiso sobre la ejecución que crea
+  (`automation-execution/*`). Corregido el 02-10 y **probado ese mismo día** con una programación
+  de un solo uso a las 19:47 con el rol real del programador: el runbook de apagado se lanzó y
+  terminó en `Success`. **Ciclo nocturno confirmado** las noches del 02-10 y del 03-10: los runbooks
+  de encendido (22:00:27) y apagado (01:30:08) terminaron en `Success` las dos noches.
+  **Workflow «Encender entorno» probado** esa misma noche con la base parada:
   correcto en 4 min 44 s de principio a fin (incluye el arranque del runner y la autenticación
-  OIDC; la mayor parte es el arranque de la instancia). Los cambios en IAM y RDS los ejecutó Guillermo con un script: el modo
+  OIDC; la mayor parte es el arranque de la instancia). **Workflow «Apagar entorno» probado** el
+  02-10 con la base encendida: correcto. Los cambios en IAM y RDS los ejecutó Guillermo con un script: el modo
   automático del asistente bloquea por diseño conceder permisos y modificar recursos compartidos.
   Mismo día: workflow «Apagar entorno» y `rds:StopDBInstance` añadido al rol de entorno |
 | 2026-10-01 | **Despliegue por componente** (Guillermo): `deploy_lambda.yml` y `rollback_lambda.yml`
@@ -989,6 +1000,25 @@ la enciende a mano para trabajar o hacer una demo.
   priorizar la abstención pese a un hueco de 0,001. Medido también `multilingual-e5-small`
   (MRR 0,796, pero solape documental/ajena de 0,023): se mantiene e5-base. Índice reconstruido
   antes de medir (el anterior era de una copia sin commit, mismas cifras) |
+  Primera ejecución tras el merge a `main` (04-10): «Rollback» en modo consulta, correcto |
+| 2026-10-02 | **API en contenedores** (Guillermo, rama `feature/contenedores-api`): Dockerfile por
+  servicio (`ApiUsuario/`, `LLMOrchestrator/`, `deploy/Dockerfile.rag`), perfil `api` en
+  `docker-compose.yml` y `RAG_COMMIT` en `rag.indexar` para conservar el commit del corpus sin git
+  dentro de la imagen (2 tests nuevos). Compose validado; 97 tests del proyecto, 18 de ApiUsuario
+  y 51 del orquestador en verde. **Primer build en local** (Guillermo): los cuatro contenedores
+  sanos; el RAG construyó su índice dentro de la imagen (50 fragmentos, modelo e5 coincidente) y
+  responde en ~2 s (pregunta sobre NO2 y asma → 4 evidencias con distancias 0,12–0,16; «capital de
+  Francia» → `sin_evidencia`). **La prueba destapó un fallo que los tests no veían:** `/estaciones`
+  daba 500 porque ApiUsuario y el orquestador no fijaban `sqlalchemy` y la versión nueva elige
+  psycopg 3 (el mismo problema que en CI el 27-09, §10); los tests usan SQLite y no lo detectan.
+  Corregido fijando `SQLAlchemy==2.0.49` y `psycopg2-binary==2.9.12`; después `/estaciones` y
+  `/series` responden con datos reales. `/chat` devuelve 503 controlado: aún no hay proveedor de
+  LLM elegido. Prueba de principio a fin con LLM: `[por confirmar]` |
+| 2026-10-04 | **Tests de la API en CI** (Guillermo): `tests.yml` suma los jobs `api-usuario` (18 tests)
+  y `orquestador` (51), cada uno con su `requirements-dev.txt`. Hasta ahora solo corrían en local
+  aunque el README decía lo contrario. Reproducidos antes en entornos virtuales limpios. Como
+  `desplegar.yml` reutiliza `tests.yml`, ningún despliegue sale ya sin que pasen también estos |
+
 
 ---
 

@@ -1,6 +1,9 @@
-# Todo lo que NO debe viajar al construir la imagen de Lambda.
+# Todo lo que NO debe viajar al construir la imagen de Lambda (deploy/Dockerfile.lambda).
 # Sin esto, Docker enviaría el histórico (78 MB), los parquet (80 MB) y el venv
 # entero como contexto de construcción en cada `docker build`.
+#
+# El nombre importa: Docker usa "<Dockerfile>.dockerignore" junto al Dockerfile (o, si no
+# existe, el .dockerignore de la raíz del contexto). Un deploy/.dockerignore se ignoraría.
 
 venv/
 .git/
