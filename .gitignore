@@ -45,6 +45,8 @@ __pycache__/
 # no aplica a ficheros ya seguidos. Para añadir un .html nuevo a proposito: git add -f
 docs/*.html
 docs/arquitectura_estado_actual.md
+# Planes de trabajo de cada feature: son de uso personal durante el desarrollo, no se versionan.
+docs/**/plan_*.md
 
 # Metadatos de empaquetado (pip install -e .)
 *.egg-info/

@@ -98,6 +98,7 @@ Hilo conductor de la memoria: cómo y por qué cambió el diseño.
 | 2026-09-28 | Despliegue | Build + push + `update-function-code` a mano desde un PC con credenciales SSO → **workflow de GitHub Actions (`workflow_dispatch`) con OIDC** | Cualquiera del equipo puede desplegar sin credenciales de AWS; no se despliega si fallan los tests; el tag por SHA dice qué commit corre en producción y permite volver atrás; la verificación del digest elimina el fallo silencioso de subir la imagen sin actualizar la función. Descartado: claves de acceso en GitHub Secrets (permanentes y compartidas) y despliegue en cada push a `main` (se optó por lanzarlo a mano para decidir cuándo se toca producción) |
 | 2026-09-28 | Vuelta atrás | `update-function-code` a mano con la imagen buena → **workflow de rollback** con modo consulta, vuelta por digest a una versión publicada y verificación | Deshacer un despliegue fallido en segundos, sin credenciales ni reconstruir la imagen, y dejando rastro (cada rollback publica una versión con su motivo). Descartado: "volver a la versión anterior" automático, porque tras un rollback la anterior es justo la versión que se deshizo; primero se consulta la tabla y luego se elige |
 | 2026-10-01 | Disponibilidad de la base de datos | RDS encendida 24 h → **encendida solo de 22:00 a 01:30 (hora de Madrid) y a demanda** con un workflow de GitHub (§8.8) | La carga es una vez al día y la API aún no está desplegada: pagar la instancia 24 h no aporta nada. Ahorro estimado de ~15,5 a ~4–5 $/mes. Descartado: DynamoDB (el acceso es analítico: rangos, agregaciones y `JOIN`, justo lo que no hace bien una base clave-valor), Aurora Serverless v2 con pausa automática (ahorro parecido pero exige migrar; queda como alternativa), programarlo con `schedule` de GitHub Actions (puede retrasarse y se desactiva tras 60 días sin actividad) y que el programador llame directamente a `StartDBInstance` (da error si la base ya está encendida) |
+| 2026-10-04 | Umbral de evidencia del RAG | 0,22 fijado a ojo con preguntas lejanas al dominio → **0,1754**, punto medio entre la peor documental (0,1750) y la mejor ajena (0,1759) en 30 casos de evaluación (§7.2) | Con 0,22 las 7 ajenas cercanas al dominio (tiempo, tráfico, transporte) recibían evidencias y llegaban al LLM (3/10 rechazadas). Con 0,1754 se rechazan 10/10 a costa de una documental (13/15 en vez de 14/15): se prefiere que el asistente se abstenga de más a que responda fuera del dominio. Descartado: mantener 0,22, que era lo que dictaba la regla fijada antes de medir (no cambiar con un hueco menor de 0,01; aquí es de 0,001) y cambiar a `multilingual-e5-small` (mejor MRR, pero solapa documentales y ajenas y no hay punto medio) |
 | 2026-10-01 | Workflows de despliegue | «Desplegar Lambda» y «Rollback Lambda» → **«Desplegar» y «Rollback» con un desplegable de componente** (hoy solo `lambda`) | Preparar el despliegue de la API, el orquestador, el RAG y la web sin multiplicar workflows: cada pieza será una opción del desplegable y un job propio. Bloqueo por componente: piezas distintas pueden desplegarse a la vez, la misma no. Descartado: un workflow por pieza (duplica pasos y botones) y pedir la imagen a desplegar (el despliegue siempre construye el código de la rama elegida; volver a una versión concreta es tarea del rollback) |
 
 **Decisiones abiertas que alimentarán esta tabla:** proveedor concreto del LLM (se decidirá al
@@ -343,12 +344,20 @@ limitación permanente ya documentada — no un resto del bug.
   sección, de modo que reordenar el documento no invalida las citas ya emitidas.
 - **Guardia de tokens**: una sección que supera el presupuesto del modelo se parte por párrafos
   conservando título y sección. Se cuenta con el tokenizer real del modelo, no por palabras.
+- **Modelo de embeddings:** `intfloat/multilingual-e5-base` (768 dimensiones, ventana de 512
+  tokens, presupuesto de 504 por fragmento contando el prefijo y los tokens especiales). Exige los
+  prefijos `query:` en la pregunta y `passage:` en el fragmento; vectores normalizados y distancia
+  coseno. El índice guarda el modelo con el que se construyó y la búsqueda rechaza un índice de
+  otro modelo. Índice local comprobado el 2026-10-01: e5-base, 11 documentos, 50 fragmentos.
+  Alternativa más ligera medida el 2026-10-04: `multilingual-e5-small` (~470 MB frente a ~1,1 GB);
+  resultados en §7.2.
 
 ### 7.2 Servicio de evidencias con citas verificables (Fase 2) — estado actual
 
 **Estado:** reescrito el 2026-09-23 por Carlos Fernández en `feature/rag-herramienta-llm` (fases A y
-B de un plan propio de tres). Sustituye a `trocear_corpus.py` e `ingesta_vector.py`. Pendiente de PR
-y de la fase C (evaluación reproducible).
+B de un plan propio de tres). Sustituye a `trocear_corpus.py` e `ingesta_vector.py`. Mergeado a
+`development` y `main` el 2026-09-27 (PR #42). Fase C (medición de la recuperación y calibración del
+umbral) ejecutada el 2026-10-04 en `feature/rag-metricas`.
 
 **Principio de diseño: el LLM vive fuera.** El paquete `rag` no llama a ningún modelo de lenguaje.
 Se expone como servicio HTTP (FastAPI) y el LLM, que vive en la API de chat, lo usa como
@@ -377,11 +386,86 @@ afirmaciones de 700 caracteres, cada una con al menos un ID **de esa petición**
 limitaciones, coherencia entre estado y número de afirmaciones, y existencia real de cada
 `chunk_id` en el corpus.
 
-**Umbral de evidencia: 0,22 de distancia coseno, provisional.** Medido con e5-base, `k=4` y el
-corpus actual (11 documentos, 50 fragmentos): las preguntas documentales dan 0,11–0,20 en su mejor
-fragmento y las ajenas al corpus («capital de Francia») 0,24–0,25. El margen es estrecho y la
-calibración con casos de evaluación es la fase C. Si nada baja del umbral, el estado es
-`sin_evidencia` y la API de chat puede responder insuficiencia **sin llamar al modelo**.
+**Evaluación de la recuperación (fase C).** Juego fijo de 30 casos en `tests/evals/rag_casos.jsonl`:
+15 documentales (al menos una por cada uno de los 11 documentos, etiquetadas por
+`documento:seccion`), 10 ajenas (7 cercanas al dominio: lluvia, atasco en la M-30, polen, metro,
+aparcamiento, abono transporte, parques de Barcelona; 3 lejanas: capital de Francia, tortilla,
+Quijote) y 5 adversarias que parecen del corpus pero no tienen respuesta en él (predicción de ozono,
+protocolo de Barcelona, SO2 en 2030, guía OMS del benceno, multa de la ZBE). El tipo de cada caso se
+fijó antes de ver ninguna distancia. Sin LLM: `python -m rag.evaluar` hace una búsqueda con `k=10`
+por caso y mide sobre los 4 primeros, que es lo que recibe el LLM. Un test de CI comprueba que cada
+sección etiquetada sigue existiendo en el corpus.
+
+Resultados (e5-base, índice del 2026-10-04 con 50 fragmentos; dos ejecuciones dan cifras idénticas):
+
+| Medida | Umbral 0,1754 (vigente) | Umbral 0,22 (anterior) |
+|-|-|-|
+| hit@4, sección esperada entre los 4 primeros (documentales) | 14/15 | 14/15 |
+| MRR@10 (documentales) | 0,740 | 0,740 |
+| hit@4 con distancia bajo el umbral, lo que llega al LLM (documentales) | 13/15 | 14/15 |
+| Ajenas rechazadas | 10/10 | 3/10 |
+| Adversarias con evidencias (informativo) | 5/5 | 5/5 |
+
+- **El fallo documental es real, no de etiqueta:** doc-05 pregunta qué significa una lectura alta
+  de **NO** junto al tráfico; la sección que lo explica sale en la posición 10 (0,190) y por delante
+  quedan fragmentos de NO2, alergias y el protocolo. El modelo no separa NO de NO2. No se corrigió
+  ninguna etiqueta tras ver resultados.
+- **Mejores distancias por tipo:** documentales 0,109–0,175; ajenas 0,176–0,285; adversarias
+  0,126–0,163. Con 0,22 las 7 ajenas cercanas al dominio (0,176–0,211) recibían evidencias: solo se
+  rechazaban las lejanas. La estimación de septiembre («ajenas 0,24–0,25») se hizo solo con
+  preguntas lejanas.
+- **Calibración:** punto medio entre la peor documental (doc-10, Plaza Elíptica, 0,1750) y la mejor
+  ajena (aje-01, «¿va a llover mañana?», 0,1759): **0,1754**. El hueco es de 0,001. La regla fijada
+  antes de medir era no cambiar con un hueco menor de 0,01; se cambió igualmente por un criterio de
+  producto: **mejor abstenerse de más que responder fuera del dominio**. El coste es una documental
+  (doc-12, «¿me puede diagnosticar el asistente?», cuya sección queda a 0,188 y no llega al LLM).
+  Con una milésima de margen, una pregunta ajena nueva puede caer por debajo: el valor está
+  ajustado a estos 30 casos.
+- **Las adversarias no se distinguen por distancia:** las 5 caen dentro del rango de las
+  documentales (0,126–0,163, todas por debajo de la peor documental). Un umbral absoluto no puede
+  rechazarlas; depende de que el LLM declare `sin_evidencia` o `parcial` al leer los fragmentos.
+- **Limitación cualitativa:** bajo el umbral entran fragmentos vecinos poco pertinentes («¿Qué
+  efectos tiene el ozono en la salud?» trae también `oxidos_nitrogeno_salud:efectos-en-la-salud`).
+  No se mide con una «precisión de evidencias» porque no hay etiquetado exhaustivo de relevancia.
+- **Advertencia de método:** calibración y medida usan los mismos 30 casos; las cifras describen
+  este conjunto, no una generalización.
+
+**Comparación con `multilingual-e5-small`** (mismo corpus y casos, índice aparte; dos ejecuciones
+idénticas; indexación en 56 s en CPU):
+
+| Medida | e5-base, 0,1754 | e5-small, 0,1754 | e5-small, 0,144 |
+|-|-|-|-|
+| hit@4 (documentales) | 14/15 | 14/15 | 14/15 |
+| MRR@10 (documentales) | 0,740 | 0,796 | 0,796 |
+| hit@4 bajo el umbral (documentales) | 13/15 | 14/15 | 13/15 |
+| Ajenas rechazadas | 10/10 | 5/10 | 10/10 |
+| Adversarias con evidencias | 5/5 | 5/5 | 4/5 |
+
+- e5-small **ordena mejor** (MRR 0,796; falla el mismo caso NO/NO2, doc-05) y pesa menos de la mitad.
+- Pero **documentales y ajenas se solapan**: la peor documental (doc-10, 0,171) queda por encima de
+  la mejor ajena (aje-01, 0,148); hueco de −0,023, con 6 casos al otro lado. El punto medio no
+  aplica.
+- El umbral de e5-base **no sirve** para e5-small (rechaza 5/10 ajenas): las distancias dependen
+  del modelo.
+- 0,144 se eligió **después** de ver los datos, entre doc-12 (0,140) y aje-01 (0,148), para igualar
+  el compromiso de e5-base. Da las mismas cifras de abstención, pero pierde doc-10 en vez de doc-12
+  y no es una calibración: es un ajuste a posteriori.
+- **Decisión: se mantiene e5-base.** e5-small queda como opción de despliegue si el tamaño del
+  modelo es un problema (§11), con la condición de recalibrar con `python -m rag.evaluar`.
+
+Figuras: `docs/rag/figuras/distancias_por_tipo.png` (e5-base, umbrales 0,1754 y 0,22) y
+`docs/rag/figuras/distancias_por_tipo_e5_small.png` (e5-small, con el solape). Mejor distancia por
+caso en una franja por tipo. Se generan con `python -m rag.evaluar --figura [ruta]`.
+
+**Umbral de evidencia: 0,1754 de distancia coseno** (`RAG_UMBRAL_DISTANCIA`), calibrado para
+e5-base. Si nada baja del umbral, el estado es `sin_evidencia` y la API de chat puede responder
+insuficiencia **sin llamar al modelo**; ahora ocurre también con las preguntas cercanas al dominio
+pero ajenas al corpus (tiempo, tráfico, transporte).
+
+**Alternativa descartada: Phoenix con proyección UMAP** para inspeccionar corpus y preguntas.
+Son pocos puntos (50 fragmentos y 30 preguntas) y las distancias caen en un rango de unas 0,18
+(0,11–0,29) con huecos de milésimas, que una proyección 2D no conserva. La tabla ordenada por
+distancia y la figura de franjas responden con cifras lo que la proyección mostraría borroso.
 
 **Avisos fijos en código, no en el corpus.** El aviso sanitario se añade si la pregunta contiene
 términos de salud o si alguna evidencia citada es de `tema: salud`; la limitación de actualidad, si
@@ -421,7 +505,7 @@ pesadas del RAG (torch/chromadb, importadas de forma perezosa: los tests y el ar
   (ver D3 en §2).
 - **`buscar_evidencias`** (2026-09-30, sustituye a `search_documents`): paso 1 del contrato de
   evidencias de la Fase 2, como **cliente HTTP** de `rag.api` (`POST /rag/evidencias`; única
-  fuente de verdad: umbral 0,22 del servicio, numeración `D1..Dn`). El orquestador ya no
+  fuente de verdad: umbral 0,1754 del servicio, numeración `D1..Dn`). El orquestador ya no
   arrastra torch/chromadb: `RAG_URL` + `RAG_TIMEOUT_S` en el entorno. Si el modelo llama a la
   tool varias veces, el agente renumera los IDs para que sean únicos en la conversación.
   La **definición de la tool** también la publica el RAG (`GET /rag/herramienta`, única fuente
@@ -780,16 +864,30 @@ la enciende a mano para trabajar o hacer una demo.
 - **El asistente documental no consulta mediciones.** El RAG responde sobre documentación revisada,
   no sobre la situación de hoy; por eso añade automáticamente una limitación de actualidad cuando
   la pregunta habla del presente. Unir ambas fuentes es la Fase 3 (§7.3).
-- **El umbral de evidencia está calibrado a ojo** (0,22) con un margen estrecho entre las preguntas
-  del corpus y las ajenas, y sin casos de evaluación todavía.
+- **El umbral de evidencia tiene un margen de una milésima** (§7.2). 0,1754 rechaza las 10 ajenas
+  del juego de casos a costa de una documental, pero el hueco entre ambos grupos es de 0,001: una
+  pregunta ajena nueva puede colarse. Ninguna adversaria se rechaza por distancia; ahí la
+  abstención depende del LLM.
+- **El umbral está atado al modelo de embeddings:** con e5-small el mismo valor rechaza 5/10
+  ajenas. Cambiar de modelo obliga a reindexar y recalibrar.
+- **Recuperación NO/NO2:** el modelo de embeddings no distingue bien NO de NO2 (14/15 documentales
+  con hit@4; el fallo es ese caso).
 
 **Trabajo futuro**
 - LSTM Autoencoder o PCA para anomalías de forma del perfil horario.
 - Baseline ponderado por recencia y ajustado solo con el periodo de entrenamiento.
 - Módulo de *forecasting* para las preguntas de planificación.
 - Opción de red C en AWS (RDS sin exposición pública a coste cero).
-- **Evaluación del RAG (fase C):** 20–30 casos (documentales, sin evidencia y adversarios) con
-  recall@k, validez de citas y acierto de abstención, y recalibrado del umbral con esos datos.
+- **Medir el comportamiento del LLM** con los mismos 30 casos cuando haya proveedor: respuestas
+  con fuentes, válidas tras reparación y de insuficiencia por tipo de caso. La evaluación de la
+  recuperación ya está hecha (§7.2).
+- **Abstención más allá del umbral absoluto:** un criterio relativo al mejor fragmento, un
+  *reranker* o un clasificador de tema antes de buscar. Sin ello, las ajenas cercanas llegan al LLM.
+- **`multilingual-e5-small` para el despliegue** si el modelo de ~1,1 GB no cabe: ya medido
+  (§7.2), ordena mejor pero solapa documentales y ajenas; haría falta recalibrar y, probablemente,
+  un criterio de abstención adicional.
+- **Ampliar el juego de casos** y separar casos de calibración y de medida, para que el umbral no
+  se ajuste y se mida con las mismas preguntas.
 - **Decidir dónde se despliega el servicio RAG.** El modelo de embeddings (~1,1 GB) y su carga en
   la primera petición no encajan bien en Lambda; habrá que valorar otra opción de cómputo.
 
@@ -883,6 +981,14 @@ la enciende a mano para trabajar o hacer una demo.
   componente (hoy solo `lambda`), un job por componente y bloqueo por componente. Sin cambios en
   AWS: la confianza del rol de despliegue no depende del nombre del fichero del workflow (§10).
   Pendiente de la primera ejecución real tras el merge a `main` |
+| 2026-10-02 | Notas del modelo de embeddings puestas al día (e5-base, presupuesto de tokens, índice
+  local comprobado) y distancias reales medidas frente al umbral 0,22 (Carlos Fernández) |
+| 2026-10-04 | **Evaluación de la recuperación del RAG** (Carlos Fernández, `feature/rag-metricas`): 30 casos
+  fijos y `python -m rag.evaluar`. Con e5-base: hit@4 14/15, MRR@10 0,740. **Umbral 0,22 → 0,1754**
+  (ajenas rechazadas 3/10 → 10/10, documentales bajo el umbral 14/15 → 13/15), por decisión de
+  priorizar la abstención pese a un hueco de 0,001. Medido también `multilingual-e5-small`
+  (MRR 0,796, pero solape documental/ajena de 0,023): se mantiene e5-base. Índice reconstruido
+  antes de medir (el anterior era de una copia sin commit, mismas cifras) |
 
 ---
 
@@ -906,6 +1012,7 @@ la enciende a mano para trabajar o hacer una demo.
   cierre); el umbral y las fuentes son ya los del servicio (§7.3).
 - [ ] Reindexar `data/chroma/` con e5 en cada entorno de trabajo (`python -m rag.indexar`): el
   índice construido antes de la reescritura no tiene metadatos de modelo y la búsqueda lo rechaza.
+  Comprobado en el entorno de Carlos el 2026-10-01 (e5-base, 50 fragmentos); falta el resto.
 - [ ] ¿Dónde se despliega el servicio RAG en producción? (§7.2: modelo de ~1,1 GB)
 - [ ] ¿Se valoró Azure Functions para la ingesta programada? La rama `feature/azure-functions`
   existe en el repositorio (ingesta a CSV), así que se llegó a probar algo, pero no queda anotado

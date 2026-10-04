@@ -29,9 +29,13 @@ Medidas. Una búsqueda por caso con `k=K_BUSQUEDA`; las de posición miran los
 Calibración exploratoria: punto medio del hueco entre la peor mejor-distancia
 documental y la mejor mejor-distancia ajena (`punto_medio`).
 
-Este módulo contiene las funciones puras (sin torch ni Chroma), probadas en CI con
-resultados fabricados (`tests/test_evaluar.py`). La ejecución con el índice real
-se añade como `main()` con sus importaciones dentro, para no cargarlas en los tests.
+Las funciones puras (sin torch ni Chroma) se prueban en CI con resultados
+fabricados (`tests/test_evaluar.py`). La ejecución con el índice real está en `main()` con sus importaciones dentro, para no cargarlas en los tests.
+
+Uso:
+    python -m rag.evaluar                          # umbral de RAG_UMBRAL_DISTANCIA
+    python -m rag.evaluar --umbral 0.22 0.1754
+    python -m rag.evaluar --figura                 # además, docs/rag/figuras/distancias_por_tipo.png
 """
 from __future__ import annotations
 
@@ -225,11 +229,11 @@ def informe_markdown(meta_indice: dict, umbrales: list[float], filas: list[FilaC
         f"Casos: {len(filas)} ({n_tipo['documental']} documentales, {n_tipo['ajena']} ajenas, "
         f"{n_tipo['adversaria']} adversarias). Búsqueda con k={K_BUSQUEDA}; posición medida "
         f"sobre los {K_METRICA} primeros.",
-        "Umbrales: " + ", ".join(_num(u) for u in umbrales),
+        "Umbrales: " + ", ".join(_num(u, 4) for u in umbrales),
         "",
         "## Resumen",
         "",
-        "| Medida | " + " | ".join(_num(u) for u in umbrales) + " |",
+        "| Medida | " + " | ".join(_num(u, 4) for u in umbrales) + " |",
         "|-|" + "-|" * len(umbrales),
     ]
     medidas = [
@@ -248,16 +252,16 @@ def informe_markdown(meta_indice: dict, umbrales: list[float], filas: list[FilaC
             "",
             "## Calibración (punto medio del hueco)",
             "",
-            f"Peor documental: {_num(c.peor_documental)} ({c.id_peor_documental}). "
-            f"Mejor ajena: {_num(c.mejor_ajena)} ({c.id_mejor_ajena}). "
-            f"Hueco: {_num(c.hueco)}. Umbral propuesto: {_num(c.umbral_propuesto)}.",
+            f"Peor documental: {_num(c.peor_documental, 4)} ({c.id_peor_documental}). "
+            f"Mejor ajena: {_num(c.mejor_ajena, 4)} ({c.id_mejor_ajena}). "
+            f"Hueco: {_num(c.hueco, 4)}. Umbral propuesto: {_num(c.umbral_propuesto, 4)}.",
         ]
         if c.solapados:
             lineas.append("Casos que se solapan: " + ", ".join(c.solapados) + ".")
 
     lineas += [
         "",
-        f"## Casos (umbral {_num(umbrales[0])}, ordenados por mejor distancia)",
+        f"## Casos (umbral {_num(umbrales[0], 4)}, ordenados por mejor distancia)",
         "",
         f"| id | tipo | mejor distancia | posición esperada | distancia esperada | hit@{K_METRICA} "
         f"| hit@{K_METRICA} umbral | rechazada |",
@@ -273,3 +277,104 @@ def informe_markdown(meta_indice: dict, umbrales: list[float], filas: list[FilaC
             f"{_sino(f.rechazada) if not documental else '—'} |"
         )
     return "\n".join(lineas) + "\n"
+
+
+# --------------------------------------------------------------------------- figura
+
+RUTA_FIGURA = BASE_DIR / "docs" / "rag" / "figuras" / "distancias_por_tipo.png"
+
+
+def dibujar_figura(filas: list[FilaCaso], meta_indice: dict, umbrales: list[float],
+                   calibracion: Calibracion | None, ruta: Path = RUTA_FIGURA) -> Path:
+    """Mejor distancia de cada caso en una franja por tipo, con los umbrales pedidos y
+    el punto medio propuesto (si no coincide con ninguno de ellos). Documentales sin
+    hit@k con marcador hueco. Llevan su id los casos que
+    delimitan el hueco, los solapados y las documentales sin hit@k.
+
+    matplotlib se importa aquí: es un dibujo de desarrollo, no entra en CI.
+    """
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    ruta = Path(ruta)
+    ruta.parent.mkdir(parents=True, exist_ok=True)
+    etiquetados = {f.id for f in filas if f.tipo == "documental" and not f.hit}
+    if calibracion is not None:
+        etiquetados |= {calibracion.id_peor_documental, calibracion.id_mejor_ajena, *calibracion.solapados}
+    colores = {"documental": "#1f77b4", "ajena": "#d62728", "adversaria": "#ff7f0e"}
+    fig, ax = plt.subplots(figsize=(8, 3.2))
+    for y, tipo in enumerate(reversed(TIPOS)):
+        grupo = [f for f in filas if f.tipo == tipo and f.mejor_distancia is not None]
+        for i, f in enumerate(sorted(grupo, key=lambda f: f.mejor_distancia)):
+            dy = (i % 3 - 1) * 0.12  # separa puntos casi coincidentes
+            hueco = tipo == "documental" and not f.hit
+            ax.scatter(f.mejor_distancia, y + dy, s=36, zorder=3,
+                       facecolors="none" if hueco else colores[tipo], edgecolors=colores[tipo])
+            if f.id in etiquetados:
+                arriba = dy >= 0  # la etiqueta se aleja de la fila para no tapar puntos
+                ax.annotate(f.id, (f.mejor_distancia, y + dy), xytext=(0, 7 if arriba else -7),
+                            textcoords="offset points", ha="center",
+                            va="bottom" if arriba else "top", fontsize=7)
+    for u, estilo in zip(umbrales, ["--", ":", "-."]):
+        ax.axvline(u, color="grey", linestyle=estilo, linewidth=1, label=f"umbral {u:.4f}")
+    if calibracion is not None and all(abs(calibracion.umbral_propuesto - u) >= 5e-5 for u in umbrales):
+        ax.axvline(calibracion.umbral_propuesto, color="black", linewidth=1,
+                   label=f"punto medio {calibracion.umbral_propuesto:.4f}")
+    ax.set_yticks(range(len(TIPOS)), list(reversed(TIPOS)))
+    ax.set_ylim(-0.6, len(TIPOS) - 0.4)
+    ax.set_xlabel("mejor distancia coseno del caso (menor = más parecido)")
+    fecha = str(meta_indice.get("fecha_indexado") or "")[:10]
+    ax.set_title(f"{meta_indice.get('modelo_embeddings')} · índice {fecha}", fontsize=9)
+    ax.grid(axis="x", alpha=0.3)
+    ax.legend(fontsize=8, loc="lower right")
+    fig.tight_layout()
+    fig.savefig(ruta, dpi=150)
+    plt.close(fig)
+    return ruta
+
+
+# --------------------------------------------------------------------------- ejecución
+
+def _meta_indice() -> dict:
+    from rag import embeddings
+
+    coleccion = embeddings.obtener_coleccion()
+    meta = dict(coleccion.metadata or {})
+    return {
+        "modelo_embeddings": meta.get("modelo_embeddings"),
+        "commit": meta.get("commit"),
+        "fecha_indexado": meta.get("fecha_indexado"),
+        "n_fragmentos": coleccion.count(),
+    }
+
+
+def main() -> None:
+    import argparse
+
+    # Importaciones con torch y Chroma aquí, para que los tests de las funciones puras no las paguen.
+    from rag.buscar import buscar
+    from rag.evidencias import umbral_distancia
+
+    parser = argparse.ArgumentParser(description="Evaluación de la recuperación del RAG.")
+    parser.add_argument("--casos", type=Path, default=RUTA_CASOS)
+    parser.add_argument("--umbral", type=float, nargs="+", action="extend",
+                        help="uno o varios; por defecto el de RAG_UMBRAL_DISTANCIA")
+    parser.add_argument("--figura", type=Path, nargs="?", const=RUTA_FIGURA, default=None,
+                        help=f"guarda la figura de distancias por tipo (por defecto {RUTA_FIGURA.relative_to(BASE_DIR)})")
+    args = parser.parse_args()
+
+    umbrales = args.umbral or [umbral_distancia()]
+    casos = cargar_casos(args.casos)
+    resultados = {c.id: buscar(c.pregunta, k=K_BUSQUEDA, tema=None) for c in casos}
+    filas_por_umbral = [[evaluar_caso(c, resultados[c.id], u) for c in casos] for u in umbrales]
+    calibracion = punto_medio(filas_por_umbral[0])
+    meta = _meta_indice()
+    print(informe_markdown(meta, umbrales, filas_por_umbral[0],
+                           [resumir(f) for f in filas_por_umbral], calibracion))
+    if args.figura is not None:
+        print(f"Figura: {dibujar_figura(filas_por_umbral[0], meta, umbrales, calibracion, args.figura)}")
+
+
+if __name__ == "__main__":
+    main()

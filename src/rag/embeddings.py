@@ -1,6 +1,5 @@
 """Modelo de embeddings, recuento de tokens y acceso a la colección ChromaDB.
 
-Un solo modelo y un solo motor (principio "un motor, un modelo, un proveedor").
 La ingesta (`indexar.py`) y la búsqueda (`buscar.py`) comparten estos ajustes para
 no desincronizarse; además el índice guarda el nombre del modelo con el que se
 construyó y `buscar` se niega a consultar si no coincide con el configurado.

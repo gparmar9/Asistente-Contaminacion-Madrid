@@ -399,7 +399,7 @@ data/rag/*.md ──▶ rag.corpus ──▶ rag.embeddings ──▶ ChromaDB (
 | [`embeddings.py`](src/rag/embeddings.py) | Modelo `intfloat/multilingual-e5-base` (512 tokens), recuento con el tokenizer real y colección Chroma con métrica **coseno**. |
 | [`indexar.py`](src/rag/indexar.py) | `python -m rag.indexar`: reconstruye el índice entero (**idempotente**). Calcula los embeddings antes de borrar el índice anterior y guarda modelo, commit del corpus y fecha. |
 | [`buscar.py`](src/rag/buscar.py) | `buscar(consulta, k, tema)`: los *k* fragmentos más cercanos. Rechaza un índice construido con otro modelo. |
-| [`evidencias.py`](src/rag/evidencias.py) | Filtra por umbral de distancia (0,22, provisional), numera `D1..Dn`, valida que cada afirmación del modelo cite IDs existentes y añade avisos y bibliografía. |
+| [`evidencias.py`](src/rag/evidencias.py) | Filtra por umbral de distancia (0,1754, calibrado con `rag.evaluar`), numera `D1..Dn`, valida que cada afirmación del modelo cite IDs existentes y añade avisos y bibliografía. |
 | [`api.py`](src/rag/api.py) | Servicio FastAPI: `/rag/evidencias`, `/rag/validar`, `/rag/herramienta` y `/salud`. Es lo que consume `LLMOrchestrator` por HTTP (tool `buscar_evidencias` de la Fase 3). |
 
 El contrato completo para la API de chat (flujo en tres pasos, esquema de salida del modelo,
