@@ -7,6 +7,9 @@ lógica del proyecto sigue en [`src/`](../src/).
 ```
 deploy/
 ├── Dockerfile.lambda          # imagen que ejecuta Lambda
+├── Dockerfile.lambda.dockerignore   # qué NO viaja al construirla (Docker lo asocia por el nombre)
+├── Dockerfile.rag             # imagen del servicio RAG (modelo e índice dentro)
+├── Dockerfile.rag.dockerignore
 ├── lambda_handler.py          # punto de entrada de la función
 ├── requirements-lambda.txt    # dependencias de esa imagen (solo las que usa el pipeline)
 └── iam/                       # permisos, versionados para poder revisarlos en un PR
