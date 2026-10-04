@@ -1,0 +1,30 @@
+{"id": "doc-01", "tipo": "documental", "pregunta": "¿Qué síntomas puede empeorar el ozono?", "esperados": ["ozono_salud:efectos-en-la-salud"]}
+{"id": "doc-02", "tipo": "documental", "pregunta": "¿Por qué el ozono puede ser peor por la tarde aunque haya menos tráfico?", "esperados": ["ozono_salud:que-es-y-su-patron-particular"]}
+{"id": "doc-03", "tipo": "documental", "pregunta": "¿En qué se diferencia el PM10 del PM2.5 en términos de riesgo para la salud?", "esperados": ["particulas_salud:que-son", "particulas_salud:efectos-en-la-salud"]}
+{"id": "doc-04", "tipo": "documental", "pregunta": "Hay una intrusión de polvo sahariano y soy asmático, ¿qué precauciones tomo?", "esperados": ["particulas_salud:episodios-tipicos-en-madrid-la-calima"]}
+{"id": "doc-05", "tipo": "documental", "pregunta": "¿Qué significa una lectura alta de NO para una persona que está junto al tráfico?", "esperados": ["oxidos_nitrogeno_salud:que-son-y-de-donde-vienen"]}
+{"id": "doc-06", "tipo": "documental", "pregunta": "Con 150 µg/m³ de dióxido de nitrógeno, ¿puede salir a correr una persona con EPOC?", "esperados": ["oxidos_nitrogeno_salud:niveles-orientativos-de-no2-media-horaria-o-de-bloque", "recomendaciones_por_perfil:personas-con-asma-o-epoc"]}
+{"id": "doc-07", "tipo": "documental", "pregunta": "¿Cuándo pasa Madrid de preaviso a aviso por dióxido de nitrógeno y cuántas estaciones hacen falta?", "esperados": ["protocolo_episodios_madrid:niveles-del-protocolo-no2"]}
+{"id": "doc-08", "tipo": "documental", "pregunta": "¿Qué valor anual de NO2 exige la normativa europea hoy y cuál exigirá en 2030?", "esperados": ["limites_legales_ue:limites-vigentes-directiva-2008-50-ce", "limites_legales_ue:nuevos-limites-2030-directiva-2024-2881"]}
+{"id": "doc-09", "tipo": "documental", "pregunta": "¿Qué concentración media diaria de PM2.5 considera aceptable la Organización Mundial de la Salud?", "esperados": ["guias_oms_2021:niveles-recomendados-por-contaminante", "glosario_magnitudes:codigos-de-magnitud-contaminantes-del-proyecto"]}
+{"id": "doc-10", "tipo": "documental", "pregunta": "¿Qué tipo de estación es la de Plaza Elíptica y en qué barrio está?", "esperados": ["estaciones_y_zonas:catalogo-de-estaciones"]}
+{"id": "doc-11", "tipo": "documental", "pregunta": "¿Por qué con el mismo polen tengo más síntomas en una calle con coches que en un parque?", "esperados": ["alergias_y_contaminacion:la-interaccion-polen-contaminacion", "alergias_y_contaminacion:recomendaciones-practicas-para-dias-con-alergia"]}
+{"id": "doc-12", "tipo": "documental", "pregunta": "¿Este asistente me puede diagnosticar o sustituye la visita a mi médico?", "esperados": ["aviso_medico:naturaleza-de-la-informacion"]}
+{"id": "doc-13", "tipo": "documental", "pregunta": "¿En qué tramos horarios se agrupan las mediciones y cuál suele ser el más limpio de NO2?", "esperados": ["glosario_magnitudes:bloques-del-dia"]}
+{"id": "doc-14", "tipo": "documental", "pregunta": "Estoy embarazada, ¿qué debo tener en cuenta un día con alerta por contaminación?", "esperados": ["recomendaciones_por_perfil:ninos-embarazadas-y-personas-mayores"]}
+{"id": "doc-15", "tipo": "documental", "pregunta": "Si el modelo marca un bloque como anómalo, ¿quiere decir que el aire es peligroso?", "esperados": ["glosario_magnitudes:como-interpretar-una-anomalia-para-el-usuario", "recomendaciones_por_perfil:como-usar-el-modelo-de-anomalias-en-las-recomendaciones"]}
+{"id": "aje-01", "tipo": "ajena", "pregunta": "¿Va a llover mañana en Madrid?", "esperados": []}
+{"id": "aje-02", "tipo": "ajena", "pregunta": "¿Hay atasco ahora mismo en la M-30?", "esperados": []}
+{"id": "aje-03", "tipo": "ajena", "pregunta": "¿Cuándo empieza la temporada de polen de las gramíneas en Madrid?", "esperados": []}
+{"id": "aje-04", "tipo": "ajena", "pregunta": "¿Cómo llego en metro desde Sol hasta el Retiro?", "esperados": []}
+{"id": "aje-05", "tipo": "ajena", "pregunta": "¿Qué parques de Barcelona son buenos para salir a correr?", "esperados": []}
+{"id": "aje-06", "tipo": "ajena", "pregunta": "¿Dónde puedo aparcar gratis cerca del estadio Bernabéu?", "esperados": []}
+{"id": "aje-07", "tipo": "ajena", "pregunta": "¿Cuánto cuesta el abono transporte mensual de Madrid?", "esperados": []}
+{"id": "aje-08", "tipo": "ajena", "pregunta": "¿Cuál es la capital de Francia?", "esperados": []}
+{"id": "aje-09", "tipo": "ajena", "pregunta": "¿Cómo se hace una tortilla de patatas?", "esperados": []}
+{"id": "aje-10", "tipo": "ajena", "pregunta": "¿Quién escribió El Quijote?", "esperados": []}
+{"id": "adv-01", "tipo": "adversaria", "pregunta": "¿Habrá pico de ozono este fin de semana?", "esperados": []}
+{"id": "adv-02", "tipo": "adversaria", "pregunta": "¿Qué umbral de NO2 activa el protocolo anticontaminación de Barcelona?", "esperados": []}
+{"id": "adv-03", "tipo": "adversaria", "pregunta": "¿Qué límite de dióxido de azufre fija la directiva europea para 2030?", "esperados": []}
+{"id": "adv-04", "tipo": "adversaria", "pregunta": "¿Cuál es el nivel guía de la OMS para el benceno?", "esperados": []}
+{"id": "adv-05", "tipo": "adversaria", "pregunta": "¿Qué multa me ponen por entrar en la Zona de Bajas Emisiones sin etiqueta?", "esperados": []}
