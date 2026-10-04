@@ -1,0 +1,22 @@
+[
+  {"pregunta": "¿Qué síntomas puede empeorar el ozono?", "intencion": "DOCUMENTAL", "tema": "salud"},
+  {"pregunta": "¿En qué se diferencia el PM10 del PM2.5 en términos de riesgo para la salud?", "intencion": "DOCUMENTAL", "tema": "salud"},
+  {"pregunta": "¿Qué contaminante es el más preocupante para el riesgo cardiovascular a largo plazo?", "intencion": "DOCUMENTAL", "tema": "salud"},
+  {"pregunta": "¿Qué contaminante debería vigilar primero si tengo asma inducida por el ejercicio?", "intencion": "DOCUMENTAL", "tema": "salud"},
+  {"pregunta": "¿Qué significa una lectura alta de NO para una persona que está junto al tráfico?", "intencion": "DOCUMENTAL", "tema": "salud"},
+  {"pregunta": "¿Por qué el ozono puede ser peor por la tarde aunque haya menos tráfico?", "intencion": "DOCUMENTAL"},
+  {"pregunta": "¿Qué estación de Madrid tiene la peor calidad del aire ahora mismo?", "intencion": "DATOS"},
+  {"pregunta": "¿Está Madrid en aviso / preaviso / alerta por contaminación en este momento?", "intencion": "DATOS"},
+  {"pregunta": "¿Qué distrito tuvo la mejor calidad del aire el mes pasado?", "intencion": "DATOS"},
+  {"pregunta": "¿Ha empeorado el ozono en Madrid durante los últimos cinco veranos?", "intencion": "DATOS"},
+  {"pregunta": "¿Qué zona de Madrid me recomendarías para vivir si tengo alergias?", "intencion": "DATOS"},
+  {"pregunta": "¿Habrá pico de ozono este fin de semana?", "intencion": "PREDICCION"},
+  {"pregunta": "Probabilidad de que se declare un episodio de contaminación en las próximas 48 h.", "intencion": "PREDICCION"},
+  {"pregunta": "¿Mañana será un mal día para las personas con rinitis alérgica?", "intencion": "PREDICCION"},
+  {"pregunta": "Mejor ventana de 3 horas para salir en bici mañana en la zona de la M-30.", "intencion": "PREDICCION"},
+  {"pregunta": "Hola, ¿qué sabes hacer?", "intencion": "CHARLA", "nueva": true},
+  {"pregunta": "Gracias, me ha sido muy útil.", "intencion": "CHARLA", "nueva": true},
+  {"pregunta": "¿Me recomiendas un restaurante en Malasaña?", "intencion": "FUERA_DE_ALCANCE", "nueva": true},
+  {"pregunta": "¿Quién ganó la Liga el año pasado?", "intencion": "FUERA_DE_ALCANCE", "nueva": true},
+  {"pregunta": "Escríbeme un correo para pedir un día libre en el trabajo.", "intencion": "FUERA_DE_ALCANCE", "nueva": true}
+]

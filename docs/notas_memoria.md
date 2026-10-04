@@ -101,6 +101,8 @@ Hilo conductor de la memoria: cómo y por qué cambió el diseño.
 | 2026-10-01 | Workflows de despliegue | «Desplegar Lambda» y «Rollback Lambda» → **«Desplegar» y «Rollback» con un desplegable de componente** (hoy solo `lambda`) | Preparar el despliegue de la API, el orquestador, el RAG y la web sin multiplicar workflows: cada pieza será una opción del desplegable y un job propio. Bloqueo por componente: piezas distintas pueden desplegarse a la vez, la misma no. Descartado: un workflow por pieza (duplica pasos y botones) y pedir la imagen a desplegar (el despliegue siempre construye el código de la rama elegida; volver a una versión concreta es tarea del rollback) |
 | 2026-10-02 | Empaquetado de la API | Servicios arrancados a mano con `uvicorn` y `python -m rag.api` → **una imagen Docker por servicio** (`api-usuario`, `orquestador`, `rag`), levantadas juntas con el perfil `api` de `docker-compose` | Es como irán en la EC2 y permite desplegar cada pieza por separado. La imagen del RAG lleva **dentro el modelo y el índice** construido en el propio build, con el commit del corpus en sus metadatos: arranca sin descargar nada y cada imagen corresponde a un corpus concreto. Descartado: una sola imagen con todo (obliga a redesplegar el RAG, de ~3 GB, por cualquier cambio en la API) y construir el índice al arrancar el contenedor (arranque lento y sin garantía de que todas las réplicas usen el mismo índice) |
 
+| 2026-10-04 | Agente LLM | `LLMOrchestrator` como único agente → **nuevo servicio `Agente`** (puerto 8200), diseñado desde cero con un **bucle de herramientas escrito a mano**; **LlamaIndex solo como cliente del LLM** (`OpenAILike` para APIs OpenAI-compatibles y `BedrockConverse` para Amazon Bedrock, elegibles por variable de entorno) y, más adelante, como almacén del chat. Ambos servicios conviven sin código ni dependencias compartidas; `ApiUsuario` elegirá uno por configuración | Principios tomados de las clases del máster y de un diseño de agente empresarial: pocas piezas, el modelo clasifica y el código decide, fases pequeñas con salida tipada y valor seguro, síntesis final sin herramientas, lo determinista lo entrega el código. **Descartado un framework de agentes completo** (ReAct/`AgentWorkflow` de LlamaIndex, LangGraph): esconde el bucle que precisamente se quiere controlar (vetar u obligar herramientas, cerrar el turno sin modelo, validar la salida con el RAG) y arrastra abstracciones que no se usan. Descartado también ampliar `LLMOrchestrator`: su bucle no tiene puntos de intervención en código y rehacerlo dentro equivalía a reescribirlo. Bedrock entra como proveedor de producción porque la cuenta del máster da acceso; el modelo concreto en `eu-west-1` con *tool use* y *streaming* queda `[por confirmar]` |
+
 **Decisiones abiertas que alimentarán esta tabla:** proveedor concreto del LLM (se decidirá al
 conectar el bucle real: crear cuenta y verificar límites en consola) y dónde se despliega el
 servicio RAG en producción (§13). La opción de red en AWS ya está decidida y aplicada (opción A, §8.4).
@@ -159,9 +161,12 @@ CSV histórico ─▶ notebooks 01/02/03 ─▶ modelo .joblib ─▶ PostgreSQL
 Corpus RAG (.md) ─▶ troceado + embeddings e5 ─▶ ChromaDB ─▶ servicio RAG (FastAPI)   (Fase 2)
 
 Usuario ─▶ ApiUsuario (FastAPI) ──▶ PostgreSQL (lecturas: estaciones, series)   (Fase 4, en curso)
-                    └─ /chat ────▶ LLMOrchestrator ─▶ LLM hospedado (OpenAI-compat)
-                                       ├─ query_sql ─────────▶ PostgreSQL       (Fase 3, implementada;
-                                       └─ buscar_evidencias ─▶ rag.api (HTTP)    proveedor pendiente)
+                    └─ /chat ──┬─▶ LLMOrchestrator ─▶ LLM hospedado (OpenAI-compat)
+                               │       ├─ query_sql ─────────▶ PostgreSQL       (Fase 3, primer agente;
+                               │       └─ buscar_evidencias ─▶ rag.api (HTTP)    proveedor pendiente)
+                               └─▶ Agente ─▶ LLM vía LlamaIndex (OpenAI-compat | Bedrock)
+                                       └─ buscar_evidencias ─▶ rag.api (HTTP)   (Fase 3 bis, en construcción;
+                                                                                  ApiUsuario elegirá por configuración)
 ```
 
 **Principio de diseño central:** los **datos de contaminación viven estructurados en SQL** y la
@@ -174,7 +179,7 @@ mediante *tool use*.
 |---|---|---|
 | 1 | Datos, detector de anomalías, pipeline en tiempo real | Hecha en local; migración a AWS en curso |
 | 2 | Vector DB y servicio de evidencias | **Reescrita** (2026-09-23) como servicio de evidencias y mergeada en `development`; pendiente de pasar a `main` |
-| 3 | LLM con *tool use* | **Implementada** (2026-09-28; ruta documental por contrato HTTP el 2026-09-30): servicio `LLMOrchestrator` con bucle de agente, tools `query_sql` y `buscar_evidencias` (cliente de `rag.api`), y 45 tests. Falta solo conectar un proveedor real (crear cuenta + credenciales) |
+| 3 | LLM con *tool use* | **Dos servicios** (§7.3): `LLMOrchestrator`, implementado (2026-09-28; ruta documental por contrato HTTP el 2026-09-30) con `query_sql` y `buscar_evidencias`, 51 tests, sin proveedor conectado; y `Agente` (2026-10-04), rediseño por fases con bucle propio y LlamaIndex como cliente: fases 1 a 3 de 7 hechas (esqueleto, herramienta documental, ruta documental validada, clasificador de intención, 20 tests). Falta conectar un proveedor real |
 | 4 | Informes y dashboard | En curso: `ApiUsuario` con `/estaciones`, `/estaciones/{codigo}/series` y `/chat` (proxy con stub), tests propios y job de CI. Informes y dashboard pendientes |
 
 **Stack actual:** Python 3.12 · pandas · NumPy · scikit-learn · PostgreSQL 18 (RDS) · SQLAlchemy ·
@@ -406,85 +411,141 @@ interna entre la API de chat y él.
 **Fuera de alcance declarado:** ingesta incremental, filtro por contaminante, *reranking*, historial
 de conversación, *streaming* y consulta de mediciones.
 
-### 7.3 LLM con tool use (Fase 3) — implementada (falta el proveedor)
+### 7.3 LLM con tool use (Fase 3) — dos servicios, proveedor pendiente
 
-**Estado (2026-09-28):** el servicio `LLMOrchestrator` (FastAPI, puerto 8100, `POST /responder`)
-implementa el bucle del agente completo. Separado de `ApiUsuario` para aislar las dependencias
-pesadas del RAG (torch/chromadb, importadas de forma perezosa: los tests y el arranque no las pagan).
+Hay dos implementaciones del agente, independientes entre sí (sin código, dependencias ni imágenes
+compartidas). `ApiUsuario` reenvía `/chat` a una u otra por configuración (hoy `ORCHESTRATOR_URL`;
+el agente nuevo añadirá `AGENTE_URL`). Ninguna tiene aún proveedor de LLM conectado.
 
-- **Bucle del agente** (`business/agente.py`): máx. `MAX_ITERACIONES=4` vueltas (cada vuelta = 1
-  llamada al LLM); al agotarse se fuerza un cierre sin tools — el usuario siempre recibe
-  respuesta. Las tools nunca lanzan: sus errores vuelven como `{"error": ...}` para que el
-  modelo se corrija en la siguiente vuelta.
+#### 7.3.1 `Agente` — rediseño por fases (en construcción)
+
+**Estado (2026-10-04): fases 1 a 3 de 7 hechas** (rama `feature/Agente`). Servicio FastAPI en `Agente/`
+(paquete `agente`, puerto 8200, `GET /salud`, `POST /responder` con el mismo contrato que reenvía
+`ApiUsuario`), misma convención por capas que `ApiUsuario`.
+
+**Diseño.** Un solo agente con el **bucle de herramientas escrito a mano**; LlamaIndex
+(`llama-index-core` 0.14) aporta solo el cliente del LLM: `OpenAILike` (Mistral API, Groq,
+Ollama…) o `BedrockConverse` (Amazon Bedrock, credenciales por rol de instancia o perfil), elegidos
+con `LLM_PROVEEDOR`. El resto del código ve una única interfaz (`FunctionCallingLLM`). Principios:
+el modelo clasifica y el código decide; fases pequeñas con salida tipada y valor seguro; la síntesis
+final no tiene herramientas; lo determinista (texto con citas y bibliografía) lo entrega el código,
+no lo reescribe el modelo; el estado entre turnos se guarda como datos tipados; las comprobaciones
+nuevas empiezan en modo observación. Alternativas descartadas en §2 (2026-10-04); el detalle de
+cada decisión y de la elección de LlamaIndex está en `docs/agente/decisiones_agente.md`.
+
+**Lo que hace hoy (fases 1 a 3).**
+- **Herramientas**: contrato propio (`definicion()` en formato OpenAI y `ejecutar()` que **nunca
+  lanza**: devuelve `{ok, datos | error}` y el error llega al modelo como resultado). Un adaptador
+  mínimo las presenta a LlamaIndex con el esquema JSON crudo; LlamaIndex nunca las ejecuta.
+- **`buscar_evidencias`**: cliente HTTP de `rag.api`. La definición la publica el RAG
+  (`GET /rag/herramienta`, cacheada por proceso); si el GET falla, la herramienta **no se ofrece en
+  ese turno** y se reintenta en el siguiente. `POST /rag/evidencias` → el modelo recibe
+  `para_el_modelo` (sin `chunk_id` ni internos); el estado y los `chunk_id` se guardan aparte para
+  el código.
+- **Bucle**: máx. `MAX_VUELTAS=3` llamadas al LLM con herramientas; si el modelo sigue pidiendo
+  herramientas, **síntesis forzada sin herramientas** (peor caso: 4 llamadas). Herramienta
+  desconocida → mensaje `tool` de error y se sigue. Cualquier fallo del proveedor → 503 controlado.
+  El stream del LLM ya se drena (`astream_chat_with_tools`): el streaming de la fase 4 no cambiará
+  la forma del bucle.
+- **Ruta documental determinista (fase 2)**: si el turno tuvo evidencias, cuando el modelo deja de
+  pedir herramientas su texto libre se descarta y una llamada aparte, **sin herramientas** y con
+  mensajes nuevos (pregunta + evidencias), devuelve el JSON `{estado, afirmaciones[{texto,
+  evidencias}], limitaciones}` cuyo esquema publica el RAG. `POST /rag/validar` lo comprueba: si
+  falla, **una reparación** con el mensaje del RAG; si vuelve a fallar, frase fija de insuficiencia.
+  Si es válido, **passthrough íntegro** del texto que renderiza el RAG; `fuentes` = solo documentos
+  citados; `advertencia` sanitaria solo si el RAG la activa (hay afirmaciones de salud). Se eligió
+  dejar seguir el bucle en vez de cortarlo al llegar evidencias porque el RAG será una herramienta
+  entre varias (SQL, ML); coste: una llamada más (3 por pregunta documental, 4 con reparación).
+  - **Intervención**: si una búsqueda devuelve `sin_evidencia` y el turno no tiene evidencias, el
+    código cierra el turno con frase fija **sin volver a llamar al modelo** (1 sola llamada).
+  - **Renumeración**: cada búsqueda del RAG numera desde D1; el agente reasigna D1..Dn por orden de
+    llegada, sin repetir fragmentos, antes de que el modelo vea el resultado.
+  - Probado con el `rag.api` real y el LLM falso: válida, reparada, doble fallo y `sin_evidencia`
+    se comportan como se espera.
+- **Clasificador de intención y decisión en código (fase 3)**: antes del bucle, una llamada corta
+  (mismo modelo, temperatura 0, tiempo límite propio de 10 s) responde dos líneas: intención
+  (`DOCUMENTAL`, `DATOS`, `PREDICCION`, `CHARLA`, `FUERA_DE_ALCANCE`) y tema (salud, normativa,
+  proyecto, ninguno). Parser estricto: error, tiempo agotado o formato inválido dan el valor seguro
+  `DESCONOCIDA`, que ofrece todas las herramientas y no usa frases fijas (un clasificador caído no
+  debe quitar herramientas). Una tabla en código decide:
+  - `DATOS`, `PREDICCION` y `FUERA_DE_ALCANCE` → frase fija, sin llamar más al modelo (el agente aún
+    no consulta mediciones ni predice).
+  - `CHARLA` → sin herramientas, prompt corto con lo que sabe hacer el asistente y sus límites.
+  - `DOCUMENTAL` → solo `buscar_evidencias`, obligatoria. Si el modelo no la pide, la lanza el código
+    con la pregunta literal y el tema del clasificador y pasa directo a la ruta documental. Si el RAG
+    está caído → frase fija sin modelo, para no responder sobre salud sin evidencias.
+  - Una herramienta no permitida no se ofrece; si el modelo la pide igualmente, recibe un error y no
+    se ejecuta.
+  - Descartado: buscar siempre antes del modelo (ahorra una llamada, pero pierde la reformulación de
+    la búsqueda) y responder en libre con el RAG caído. La intención `REPETIR` se deja para la
+    fase 5, cuando haya historial.
+  - Coste en llamadas al LLM: frase fija 1; charla 2; documental 4 (5 con reparación; 3 si busca el
+    código).
+  - Guion de medición fuera de CI (`Agente/evaluacion/`): 20 preguntas etiquetadas a mano, 15 de
+    `Preguntas.txt` y 5 nuevas para charla y fuera de alcance. **Sin ejecutar** hasta tener
+    proveedor: precisión del clasificador `[por confirmar]`.
+- **Tests**: 20, sin red, sin claves y sin torch: LLM falso con guion que hereda de
+  `FunctionCallingLLM` (mismo camino que un proveedor real) y RAG fingido con
+  `httpx.MockTransport`. **Política de tests mínima** (decisión del 2026-10-04): solo los casos
+  que fija el plan de cada fase (bucle con 0, 1 y 2 llamadas, límite de vueltas, RAG caído,
+  contrato HTTP; en la fase 2, JSON válido, reparación, doble fallo y `sin_evidencia`; en la fase 3,
+  cada intención, clasificador caído, herramienta vetada y RAG caído con intención documental), sin tests de detalle interno; se partió de 25 y se recortaron. Verificado además, sin red, que `OpenAILike` serializa la herramienta cruda
+  y los mensajes `assistant(tool_calls)`/`tool` como espera la API. Quinto job del workflow de CI.
+- **Sin probar aún**: `BedrockConverse` contra AWS (fase 7) y cualquier proveedor real.
+- **Modelo en Bedrock: dos candidatos a comparar** (decisión del 2026-10-04): **Ministral 14B 3.0**
+  ($0,24 / $0,24 por 1M de tokens de entrada / salida en Irlanda) y **gpt-oss-120b** ($0,18 / $0,70).
+  Ministral 14B es el Mistral actual más parecido a Mistral Small 3.2 24B, que era la referencia del
+  equipo. gpt-oss-120b tiene una arquitectura parecida a la de Mistral Small 4.
+  - Descartados: Small 3.2 (no está en Bedrock ni se puede importar); Magistral Small 1.2 (razonamiento:
+    unas 3 veces más caro y más lento); Mistral Large 3 (no está en regiones de la UE).
+  - Coste estimado de los dos: unos $0,003 por pregunta documental. Decidirá la calidad medida
+    (herramientas, JSON a la primera, español, latencia) `[por medir]`.
+  - Hallazgo: `BedrockConverse` 0.15.3 rechaza los IDs de modelo que no conoce, como el de Ministral
+    14B. Hay que declarar sus metadatos en la fábrica.
+
+**Fases pendientes** (4–7): streaming SSE y sesión (`session_id` opaco, un turno a
+la vez); memoria con `turn_state` tipado; comprobaciones posteriores en modo observación con
+evaluación sobre 20 preguntas etiquetadas; Bedrock y despliegue junto al orquestador.
+
+#### 7.3.2 `LLMOrchestrator` — primer agente (implementado el 2026-09-28; convive)
+
+Servicio FastAPI, puerto 8100, `POST /responder`. Ligero: el RAG se consume por HTTP (sin
+torch/chromadb). Se mantiene tal cual mientras el agente nuevo no lo sustituya.
+
+- **Bucle**: máx. `MAX_ITERACIONES=4` vueltas; al agotarse, cierre forzado sin tools. Las tools
+  nunca lanzan: sus errores vuelven como `{"error": ...}`.
 - **`query_sql`**: 5 consultas predefinidas (`ultimos_niveles`, `serie_bloques`, `anomalias`,
-  `comparar_estaciones`, `info_estaciones`) con parámetros validados y ligados; filtra por
-  `magnitud` (índice) y `anomalias` exige `cobertura >= 0,7` en el propio SQL (§6). Sin SQL libre
-  (ver D3 en §2).
-- **`buscar_evidencias`** (2026-09-30, sustituye a `search_documents`): paso 1 del contrato de
-  evidencias de la Fase 2, como **cliente HTTP** de `rag.api` (`POST /rag/evidencias`; única
-  fuente de verdad: umbral 0,22 del servicio, numeración `D1..Dn`). El orquestador ya no
-  arrastra torch/chromadb: `RAG_URL` + `RAG_TIMEOUT_S` en el entorno. Si el modelo llama a la
-  tool varias veces, el agente renumera los IDs para que sean únicos en la conversación.
-  La **definición de la tool** también la publica el RAG (`GET /rag/herramienta`, única fuente
-  de verdad del esquema): se pide en la primera pregunta y se cachea por proceso. Si el GET
-  falla, la tool no se ofrece en esa vuelta — el agente degrada a solo `query_sql` — y se
-  reintenta en la siguiente (2026-10-01).
-- **Ruta documental con citas verificadas** (2026-09-30): si hubo evidencias, la respuesta final
-  del modelo debe ser el JSON `{estado, afirmaciones[{texto, evidencias:[Dn]}], limitaciones}`;
-  el agente lo valida con `POST /rag/validar` (título, sección y bibliografía se resuelven en el
-  servicio desde el corpus por `chunk_id`, nunca del modelo) y devuelve el texto renderizado
-  con `[Dn]`, avisos y fuentes. Una única reparación con el `mensaje_reparacion` del servicio;
-  si tampoco, insuficiencia. `fuentes` lista solo los documentos **citados** y la `advertencia`
-  médica se activa solo con afirmaciones documentales. La ruta de solo datos sigue en texto
-  libre. Peor caso de llamadas al LLM: `MAX_ITERACIONES` + 3 (cierre + reparación + cierre de
-  datos).
-- **Cliente LLM**: SDK `openai` contra la interfaz OpenAI-compatible (chat/completions + `tools`),
-  con reintentos/backoff del propio SDK para los 429/5xx de los tiers gratuitos. Proveedor =
-  `LLM_BASE_URL` + `LLM_API_KEY` + `LLM_MODEL` (Mistral, Groq, Gemini u Ollama valen sin cambiar
-  código). **Sin decidir aún**; se elegirá creando las cuentas y verificando límites reales.
-- **Tests**: 51 (2026-10-01; eran 34 antes de la ruta documental), en ~1 s, sin red — LLM falso
-  con guion que registra las llamadas, SQLite en memoria, recuperación/validación documental
-  fingidas y transporte HTTP del puente con `httpx.MockTransport` (ni torch ni el servicio RAG
-  se instalan en CI). Cuarto job del workflow.
-- **Revisión adversarial** (2026-09-28): 4 revisores + refutación por hallazgo. Arreglos aplicados:
-  aviso explícito al LLM cuando un resultado se trunca al límite de 60 filas; filtro de distrito
-  por coincidencia parcial (el LLM no conoce los nombres compuestos como «Puente de Vallecas»);
-  presupuesto de timeouts coherente entre servicios (LLM_TIMEOUT_S=30 por intento, 2 reintentos,
-  ORCHESTRATOR_TIMEOUT_S=120, relación documentada en ambos `.env.example`); el cierre forzado ya
-  no envía `tool_choice` sin `tools` (algunos proveedores lo rechazan); `choices` vacío del
-  proveedor → 503 controlado; `ultimos_niveles` de una estación retrasada devuelve su último día
-  con datos; prompt de sistema ajustado a las limitaciones reales (hora 23 ausente, estaciones sin
-  emitir). Limitación aceptada: las consultas sin estación recorren la tabla (sin índice por
-  magnitud sola); asumible a escala de demo.
-- Finalistas evaluados (2026-09-27, documentación oficial de cada proveedor): **Mistral** plan
-  Experiment (toda la gama gratis, límites reportados ~1 req/s y 500K tokens/min `[por confirmar en
-  consola]`, mejor español), **Groq** (límites oficiales publicados: 30 RPM, 1.000 req/día; riesgo:
-  8K tokens/min con contexto RAG) y **Gemini** (límites del free tier no publicados). Descartados:
-  Cerebras (free tier eliminado en 2026), Cohere (tope de 1.000 llamadas/mes) y Hugging Face
-  (créditos insuficientes); OpenRouter solo como reserva (50 req/día en modelos `:free`).
-  Proveedor sin fijar a propósito: se decidirá al conectar el bucle real del agente.
-- Implicación operativa: los free tiers limitan peticiones/minuto y el bucle del agente hace 2–4
-  llamadas por pregunta → `MAX_ITERACIONES` bajo y reintentos con *backoff* ante 429.
+  `comparar_estaciones`, `info_estaciones`) con parámetros validados y ligados; `anomalias` exige
+  `cobertura >= 0,7` en el SQL. Sin SQL libre (D3 en §2).
+- **`buscar_evidencias`** (2026-09-30): cliente HTTP de `rag.api`; definición pedida al RAG y
+  cacheada; si falla, degrada a solo `query_sql`. Renumera `Dn` si hay varias llamadas.
+- **Ruta documental con citas verificadas** (2026-09-30): JSON `{estado, afirmaciones, limitaciones}`
+  validado con `POST /rag/validar`, una reparación, texto renderizado con `[Dn]`; `fuentes` solo con
+  documentos citados y advertencia médica solo con afirmaciones documentales. La ruta de solo datos
+  responde en texto libre. Peor caso: `MAX_ITERACIONES` + 3 llamadas.
+- **Cliente LLM**: SDK `openai` (chat/completions + `tools`) con reintentos del propio SDK;
+  proveedor = `LLM_BASE_URL` + `LLM_API_KEY` + `LLM_MODEL`.
+- **Tests**: 51 (2026-10-01), ~1 s, sin red. Cuarto job de CI.
+- **Revisión adversarial** (2026-09-28, 4 revisores + refutación): aviso al LLM cuando un resultado
+  se trunca a 60 filas; filtro de distrito por coincidencia parcial; presupuesto de timeouts
+  coherente entre servicios (`LLM_TIMEOUT_S=30` × 2 reintentos ≤ `ORCHESTRATOR_TIMEOUT_S=120`); el
+  cierre forzado no envía `tool_choice` sin `tools`; `choices` vacío → 503; prompt ajustado a las
+  limitaciones reales de los datos. Limitación aceptada: consultas sin estación recorren la tabla.
+- **Integración con la Fase 2** (rota al mergear `development` el 2026-09-30, resuelta el mismo
+  día): el orquestador adopta el contrato de evidencias por HTTP en lugar de llamar al RAG en
+  proceso (duplicaba responsabilidades y metía las deps pesadas). El hueco «una afirmación basada
+  en SQL no tiene `Dn`» se resuelve separando rutas; descartado extender el esquema con IDs `S1..Sn`.
+  Verificado de punta a punta contra `rag.api` real.
 
-**Integración Fase 2 ↔ Fase 3 (detectada rota el 2026-09-30 al mergear `development`, resuelta el
-mismo día en el lado del orquestador).** `LLMOrchestrator` se escribió contra el RAG original;
-la Fase 2 reescrita lo había convertido en el servicio de evidencias (§7.2). Resolución, sin tocar
-`src/rag`: el orquestador **consume el contrato de evidencias por HTTP** (`rag.api`: POST
-`/rag/evidencias` → JSON del modelo → POST `/rag/validar`, con una reparación). Así no repite
-trabajo que el RAG ya expone, y queda **ligero** (sin torch/chromadb; solo `httpx`): el RAG se
-despliega y calienta por su cuenta (§2). Se valoró llamarlo en proceso (biblioteca) y se descartó
-el mismo día: duplicaba responsabilidades y metía las deps pesadas en el orquestador. El **hueco
-de contrato del 2026-09-24** (una afirmación basada en `query_sql` no tiene `Dn` que citar) se
-resuelve **separando las rutas**: la ruta de solo datos responde en texto libre (las cifras ya
-son deterministas por construcción, D3 en §2); en respuestas mixtas la cifra puede aparecer
-dentro de una afirmación junto a la interpretación documental que la fundamenta, y si el modelo
-declara `sin_evidencia` habiendo datos SQL el agente cierra por la ruta de datos. Descartado
-extender el esquema con IDs de medición `S1..Sn` (exigiría cambiar la Fase 2 y un mecanismo de
-resolución de mediciones equivalente al corpus). Verificado de punta a punta contra `rag.api`
-real: cita correcta → `valida` con texto `[D1]` y bibliografía; salida inválida → reparación;
-índice desfasado → 503 tipado legible por el modelo. Queda reindexar `data/chroma/` con e5 en
-cada entorno (el índice local es de la era MiniLM) y el aviso operativo: la primera petición al
-servicio recién arrancado carga el modelo (~1,1 GB) — calentarlo tras el despliegue.
+**Proveedor del LLM (común a ambos, sin decidir).** Finalistas evaluados el 2026-09-27 con la
+documentación oficial: **Mistral** plan Experiment (toda la gama gratis, límites reportados
+~1 req/s y 500K tokens/min `[por confirmar en consola]`, mejor español), **Groq** (30 RPM,
+1.000 req/día; riesgo: 8K tokens/min con contexto RAG) y **Gemini** (límites del free tier no
+publicados). Descartados: Cerebras (free tier eliminado en 2026), Cohere (1.000 llamadas/mes),
+Hugging Face (créditos insuficientes); OpenRouter solo como reserva. Desde el 2026-10-04 se suma
+**Amazon Bedrock** para producción (acceso con la cuenta del máster). Para el agente nuevo se
+compararán Ministral 14B 3.0 y gpt-oss-120b en `eu-west-1` (§7.3.1). Implicación operativa: los free tiers limitan
+peticiones/minuto y cada pregunta cuesta 2–4 llamadas → pocas vueltas y reintentos con *backoff*.
 
 ---
 
@@ -911,6 +972,10 @@ la enciende a mano para trabajar o hacer una demo.
   y `orquestador` (51), cada uno con su `requirements-dev.txt`. Hasta ahora solo corrían en local
   aunque el README decía lo contrario. Reproducidos antes en entornos virtuales limpios. Como
   `desplegar.yml` reutiliza `tests.yml`, ningún despliegue sale ya sin que pasen también estos |
+| 2026-10-04 | **Agente LLM, fase 1 de 7** (Carlos, rama `feature/Agente`): nuevo servicio `Agente/` independiente de `LLMOrchestrator`: FastAPI (`/salud`, `/responder`, puerto 8200), fábrica de LLM con LlamaIndex (`OpenAILike` | `BedrockConverse`), contrato de herramienta y `buscar_evidencias` como cliente HTTP de `rag.api`, bucle a mano con 3 vueltas y síntesis forzada, LLM falso con guion. 8 tests sin red (política mínima: solo los casos del plan), Dockerfile, `.env.example` y quinto job de CI «Tests del agente». Diseño completo (7 fases) anotado en §7.3.1 y §2. Sin proveedor real probado todavía |
+| 2026-10-04 | **Agente LLM, fase 2 de 7** (Carlos, rama `feature/Agente`): ruta documental determinista. Síntesis JSON sin herramientas, validación con `POST /rag/validar`, una reparación y frase de insuficiencia; passthrough del texto del RAG; `fuentes` solo citadas y advertencia sanitaria solo con afirmaciones de salud; `sin_evidencia` cierra el turno sin modelo; renumeración de evidencias entre búsquedas. 11 tests. Probada contra el `rag.api` real con el LLM falso |
+| 2026-10-04 | **Agente LLM, fase 3 de 7** (Carlos, rama `feature/Agente`): clasificador de intención (temperatura 0, tiempo límite propio, parser estricto, valor seguro `DESCONOCIDA`) y tabla de decisión en código: frase fija para datos, predicción y fuera de alcance; charla sin herramientas; búsqueda documental obligatoria que lanza el código si el modelo no la pide; frase fija si el RAG está caído; herramientas vetadas rechazadas. Guion de 20 preguntas etiquetadas para medir el clasificador (sin ejecutar: falta proveedor). 20 tests |
+| 2026-10-04 | **Agente LLM: candidatos de Bedrock** (Carlos): se compararán Ministral 14B 3.0 y gpt-oss-120b en `eu-west-1`. Descartados Mistral Small 3.2 (no está en Bedrock), Magistral Small 1.2 (caro y lento por el razonamiento) y Mistral Large 3 (no está en la UE). Detectado que `BedrockConverse` 0.15.3 no admite el ID de Ministral 14B sin ajustar la fábrica. Sin credenciales ni pruebas contra AWS todavía |
 
 
 ---
@@ -918,6 +983,10 @@ la enciende a mano para trabajar o hacer una demo.
 ## 13. Preguntas abiertas
 
 - [ ] ¿Qué límite de gasto o créditos tiene la cuenta AWS del máster?
+- [ ] Agente nuevo: ¿Ministral 14B 3.0 o gpt-oss-120b en Bedrock? Hay que comparar la calidad y
+  confirmar que Ministral 14B usa herramientas por Converse. (§7.3.1)
+- [ ] Agente nuevo: precisión del clasificador de intención con un proveedor real (guion de 20
+  preguntas en `Agente/evaluacion/`). (§7.3.1)
 - [x] Confirmar la opción de red en AWS → **opción A aplicada** desde el 2026-09-16 (RDS público +
   TLS forzado), ver §8.4.
 - [x] ¿Permite la organización crear roles IAM? → sí: se creó el rol de ejecución de la Lambda

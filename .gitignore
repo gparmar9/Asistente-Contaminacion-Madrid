@@ -38,6 +38,9 @@ __pycache__/
 #APiusuario
 /ApiUsuario/.venv/
 
+#Agente
+/Agente/.venv/
+
 #documentación
 # Informes, revisiones y estados generados a partir del código: no son fuente, se
 # regeneran y quedan obsoletos en cuanto cambia el codigo. No se versionan.

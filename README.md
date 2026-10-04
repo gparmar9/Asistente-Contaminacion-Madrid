@@ -238,10 +238,13 @@ pytest ApiUsuario/tests/ -v
 
 # Tests del orquestador LLM (LLM falso con guion, sin red ni torch):
 pytest LLMOrchestrator/tests/ -v
+
+# Tests del agente nuevo (LLM falso con guion y RAG fingido, sin red):
+pytest Agente/tests/ -v
 ```
 
 Cada servicio instala sus dependencias de test aparte
-(`ApiUsuario/requirements-dev.txt`, `LLMOrchestrator/requirements-dev.txt`).
+(`ApiUsuario/requirements-dev.txt`, `LLMOrchestrator/requirements-dev.txt`, `Agente/requirements-dev.txt`).
 En CI los tres corren como jobs independientes.
 
 ### La API en contenedores (como irá en la EC2)

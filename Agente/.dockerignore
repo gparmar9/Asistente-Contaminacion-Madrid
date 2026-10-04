@@ -1,0 +1,7 @@
+# Solo viajan al build requirements.txt y src/: ni secretos, ni tests, ni cachés.
+.env
+tests/
+**/__pycache__/
+*.pyc
+.pytest_cache/
+.venv/

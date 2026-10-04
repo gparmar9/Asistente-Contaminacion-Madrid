@@ -1,0 +1,10 @@
+# Dependencias de ejecución del agente. Versiones fijadas: LlamaIndex cambia a menudo.
+# LlamaIndex solo aporta el cliente del LLM (y, en fases posteriores, el almacén del chat):
+# el bucle de herramientas es propio. El RAG se consume por HTTP: sin torch ni chromadb.
+fastapi==0.142.2
+uvicorn[standard]==0.54.0
+pydantic==2.13.5
+httpx==0.28.1
+llama-index-core==0.14.25
+llama-index-llms-openai-like==0.8.1
+llama-index-llms-bedrock-converse==0.15.3
