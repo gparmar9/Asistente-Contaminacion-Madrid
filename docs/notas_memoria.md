@@ -99,6 +99,7 @@ Hilo conductor de la memoria: cómo y por qué cambió el diseño.
 | 2026-09-28 | Vuelta atrás | `update-function-code` a mano con la imagen buena → **workflow de rollback** con modo consulta, vuelta por digest a una versión publicada y verificación | Deshacer un despliegue fallido en segundos, sin credenciales ni reconstruir la imagen, y dejando rastro (cada rollback publica una versión con su motivo). Descartado: "volver a la versión anterior" automático, porque tras un rollback la anterior es justo la versión que se deshizo; primero se consulta la tabla y luego se elige |
 | 2026-10-01 | Disponibilidad de la base de datos | RDS encendida 24 h → **encendida solo de 22:00 a 01:30 (hora de Madrid) y a demanda** con un workflow de GitHub (§8.8) | La carga es una vez al día y la API aún no está desplegada: pagar la instancia 24 h no aporta nada. Ahorro estimado de ~15,5 a ~4–5 $/mes. Descartado: DynamoDB (el acceso es analítico: rangos, agregaciones y `JOIN`, justo lo que no hace bien una base clave-valor), Aurora Serverless v2 con pausa automática (ahorro parecido pero exige migrar; queda como alternativa), programarlo con `schedule` de GitHub Actions (puede retrasarse y se desactiva tras 60 días sin actividad) y que el programador llame directamente a `StartDBInstance` (da error si la base ya está encendida) |
 | 2026-10-01 | Workflows de despliegue | «Desplegar Lambda» y «Rollback Lambda» → **«Desplegar» y «Rollback» con un desplegable de componente** (hoy solo `lambda`) | Preparar el despliegue de la API, el orquestador, el RAG y la web sin multiplicar workflows: cada pieza será una opción del desplegable y un job propio. Bloqueo por componente: piezas distintas pueden desplegarse a la vez, la misma no. Descartado: un workflow por pieza (duplica pasos y botones) y pedir la imagen a desplegar (el despliegue siempre construye el código de la rama elegida; volver a una versión concreta es tarea del rollback) |
+| 2026-10-02 | Empaquetado de la API | Servicios arrancados a mano con `uvicorn` y `python -m rag.api` → **una imagen Docker por servicio** (`api-usuario`, `orquestador`, `rag`), levantadas juntas con el perfil `api` de `docker-compose` | Es como irán en la EC2 y permite desplegar cada pieza por separado. La imagen del RAG lleva **dentro el modelo y el índice** construido en el propio build, con el commit del corpus en sus metadatos: arranca sin descargar nada y cada imagen corresponde a un corpus concreto. Descartado: una sola imagen con todo (obliga a redesplegar el RAG, de ~3 GB, por cualquier cambio en la API) y construir el índice al arrancar el contenedor (arranque lento y sin garantía de que todas las réplicas usen el mismo índice) |
 
 **Decisiones abiertas que alimentarán esta tabla:** proveedor concreto del LLM (se decidirá al
 conectar el bucle real: crear cuenta y verificar límites en consola) y dónde se despliega el
@@ -892,6 +893,19 @@ la enciende a mano para trabajar o hacer una demo.
   componente (hoy solo `lambda`), un job por componente y bloqueo por componente. Sin cambios en
   AWS: la confianza del rol de despliegue no depende del nombre del fichero del workflow (§10).
   Pendiente de la primera ejecución real tras el merge a `main` |
+| 2026-10-02 | **API en contenedores** (Guillermo, rama `feature/contenedores-api`): Dockerfile por
+  servicio (`ApiUsuario/`, `LLMOrchestrator/`, `deploy/Dockerfile.rag`), perfil `api` en
+  `docker-compose.yml` y `RAG_COMMIT` en `rag.indexar` para conservar el commit del corpus sin git
+  dentro de la imagen (2 tests nuevos). Compose validado; 97 tests del proyecto, 18 de ApiUsuario
+  y 51 del orquestador en verde. **Primer build en local** (Guillermo): los cuatro contenedores
+  sanos; el RAG construyó su índice dentro de la imagen (50 fragmentos, modelo e5 coincidente) y
+  responde en ~2 s (pregunta sobre NO2 y asma → 4 evidencias con distancias 0,12–0,16; «capital de
+  Francia» → `sin_evidencia`). **La prueba destapó un fallo que los tests no veían:** `/estaciones`
+  daba 500 porque ApiUsuario y el orquestador no fijaban `sqlalchemy` y la versión nueva elige
+  psycopg 3 (el mismo problema que en CI el 27-09, §10); los tests usan SQLite y no lo detectan.
+  Corregido fijando `SQLAlchemy==2.0.49` y `psycopg2-binary==2.9.12`; después `/estaciones` y
+  `/series` responden con datos reales. `/chat` devuelve 503 controlado: aún no hay proveedor de
+  LLM elegido. Prueba de principio a fin con LLM: `[por confirmar]` |
 
 ---
 

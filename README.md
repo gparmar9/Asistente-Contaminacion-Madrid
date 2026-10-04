@@ -244,6 +244,41 @@ Cada servicio instala sus dependencias de test aparte
 (`ApiUsuario/requirements-dev.txt`, `LLMOrchestrator/requirements-dev.txt`).
 En CI los tres corren como jobs independientes.
 
+### La API en contenedores (como irá en la EC2)
+
+Cada servicio tiene su propia imagen, para poder desplegarlos por separado:
+
+| Servicio | Imagen | Puerto | Habla con |
+|---|---|---|---|
+| `api-usuario` | [`ApiUsuario/Dockerfile`](ApiUsuario/Dockerfile) | 8000 | base de datos, `orquestador` |
+| `orquestador` | [`LLMOrchestrator/Dockerfile`](LLMOrchestrator/Dockerfile) | 8100 | base de datos, `rag`, proveedor del LLM |
+| `rag` | [`deploy/Dockerfile.rag`](deploy/Dockerfile.rag) | 8010 | nadie: lleva el modelo y el índice dentro |
+
+Levantarlo todo en local (necesita Docker Desktop arrancado):
+
+```bash
+# 1. Claves del LLM: copiar LLMOrchestrator/.env.example a LLMOrchestrator/.env
+#    y rellenar LLM_BASE_URL, LLM_API_KEY y LLM_MODEL.
+# 2. Construir y arrancar (la primera vez tarda: la imagen del RAG ocupa ~2,5-3 GB):
+docker compose --profile api up -d --build
+
+# 3. Probar:
+curl http://localhost:8000/health
+curl -X POST http://localhost:8000/chat -H "Content-Type: application/json" \
+     -d '{"pregunta": "¿Qué efectos tiene el NO2 en la salud?"}'
+
+# Parar:
+docker compose --profile api down
+```
+
+- Sin `--profile api`, `docker compose up -d` sigue levantando **solo la base de datos**.
+- Por defecto la API usa la base de datos del contenedor `db`. Para usar la de RDS (con los datos
+  reales), define `DATABASE_URL_API` en el `.env` de la raíz y enciende la RDS antes.
+- Los puertos solo se abren en `127.0.0.1`. Dentro de Docker, los servicios se encuentran por
+  su nombre (`http://rag:8010`), que es justo lo que se repetirá en la EC2.
+- La primera pregunta que use documentos tarda unos segundos más: el RAG carga el modelo en
+  memoria en la primera búsqueda.
+
 ---
 
 ## Infraestructura en AWS
@@ -308,18 +343,20 @@ aws logs tail /aws/lambda/jupiter-pipeline --since 1d --format short
 │       ├── api.py                          # servicio FastAPI (tool `buscar_evidencias` para el LLM)
 │       └── errores.py                      # excepciones tipadas
 ├── ApiUsuario/                              # servicio FastAPI de usuario (Fase 4)
+│   ├── Dockerfile                           # imagen del servicio
 │   ├── src/api_usuario/                     # routers / entities / data_access / shared
 │   └── tests/                               # tests con SQLite en memoria (sin BBDD externa)
 ├── LLMOrchestrator/                         # servicio del agente LLM (Fase 3)
+│   ├── Dockerfile                           # imagen del servicio (sin torch: el RAG va aparte)
 │   ├── src/llm_orchestrator/
 │   │   ├── business/agente.py               # bucle del agente (LLM ↔ tools)
 │   │   ├── tools/sql_tool.py                # query_sql: 5 consultas predefinidas
 │   │   ├── tools/rag_tool.py                # buscar_evidencias: cliente HTTP del servicio RAG
 │   │   └── integrations/llm_client.py       # cliente OpenAI-compatible (proveedor por entorno)
 │   └── tests/                               # LLM falso con guion, sin red ni torch
-├── deploy/                                  # infraestructura AWS (imagen Lambda + roles IAM)
+├── deploy/                                  # infraestructura AWS (imágenes Lambda y RAG + roles IAM)
 ├── tests/                                   # tests unitarios y de integración
-├── docker-compose.yml                       # PostgreSQL 18 + volumen
+├── docker-compose.yml                       # PostgreSQL 18; con --profile api, la API completa
 ├── .env.example                             # plantilla de variables de entorno
 ├── requirements.txt
 ├── requirements-rag.txt                     # dependencias extra de la Fase 2 (RAG), versiones fijadas

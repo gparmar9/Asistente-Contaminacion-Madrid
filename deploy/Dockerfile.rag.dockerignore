@@ -1,0 +1,10 @@
+# Contexto de construcción de deploy/Dockerfile.rag (Docker lo usa en lugar del
+# .dockerignore de la raíz porque se llama igual que el Dockerfile + .dockerignore).
+# Se excluye todo y se permite solo lo que la imagen necesita.
+*
+!pyproject.toml
+!requirements-rag.txt
+!src/rag/
+!data/rag/
+**/__pycache__
+**/*.pyc
