@@ -71,3 +71,52 @@ jobs:
           DATABASE_URL: postgresql://postgres:postgres@localhost:5432/postgres
           RUN_DB_TESTS: "1"
         run: pytest tests/test_integracion_db.py -v
+
+  # Servicios de la API: cada uno con sus propias dependencias de test (requirements-dev.txt),
+  # igual que se instalan en local. Sin base de datos externa (SQLite en memoria) ni red.
+  api-usuario:
+    name: Tests de ApiUsuario
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ApiUsuario
+    steps:
+      - name: Checkout repositorio
+        uses: actions/checkout@v4
+
+      - name: Configurar Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+          cache-dependency-path: ApiUsuario/requirements*.txt
+
+      - name: Instalar dependencias
+        run: pip install -r requirements-dev.txt
+
+      - name: Ejecutar tests
+        run: pytest tests -v
+
+  # El LLM y el servicio RAG se sustituyen por dobles en los tests: sin red, sin claves y sin torch.
+  orquestador:
+    name: Tests del orquestador
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: LLMOrchestrator
+    steps:
+      - name: Checkout repositorio
+        uses: actions/checkout@v4
+
+      - name: Configurar Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+          cache-dependency-path: LLMOrchestrator/requirements*.txt
+
+      - name: Instalar dependencias
+        run: pip install -r requirements-dev.txt
+
+      - name: Ejecutar tests
+        run: pytest tests -v
