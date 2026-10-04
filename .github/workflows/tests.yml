@@ -1,7 +1,11 @@
 name: Tests
 
 on:
+  # push solo en las ramas largas: en una rama feature con PR abierto, `push` y `pull_request`
+  # ejecutarían los mismos jobs dos veces. Así un PR los corre una vez y, tras el merge, se
+  # vuelven a correr sobre el resultado en development o main.
   push:
+    branches: [main, development]
   pull_request:
   # Lo reutiliza desplegar.yml: no se despliega nada si los tests no pasan.
   workflow_call:
