@@ -881,8 +881,9 @@ la enciende a mano para trabajar o hacer una demo.
   mensaje: la misma acción exige también permiso sobre la ejecución que crea
   (`automation-execution/*`). Corregido el 02-10 y **probado ese mismo día** con una programación
   de un solo uso a las 19:47 con el rol real del programador: el runbook de apagado se lanzó y
-  terminó en `Success`. Primer ciclo nocturno completo (22:00 → 23:45 → 01:30):
-  `[por confirmar el 03-10]`. **Workflow «Encender entorno» probado** esa misma noche con la base parada:
+  terminó en `Success`. **Ciclo nocturno confirmado** las noches del 02-10 y del 03-10: los runbooks
+  de encendido (22:00:27) y apagado (01:30:08) terminaron en `Success` las dos noches.
+  **Workflow «Encender entorno» probado** esa misma noche con la base parada:
   correcto en 4 min 44 s de principio a fin (incluye el arranque del runner y la autenticación
   OIDC; la mayor parte es el arranque de la instancia). **Workflow «Apagar entorno» probado** el
   02-10 con la base encendida: correcto. Los cambios en IAM y RDS los ejecutó Guillermo con un script: el modo
@@ -892,7 +893,7 @@ la enciende a mano para trabajar o hacer una demo.
   pasan a `desplegar.yml` («🚀 Desplegar») y `rollback.yml` («⏮️ Rollback»), con un desplegable de
   componente (hoy solo `lambda`), un job por componente y bloqueo por componente. Sin cambios en
   AWS: la confianza del rol de despliegue no depende del nombre del fichero del workflow (§10).
-  Pendiente de la primera ejecución real tras el merge a `main` |
+  Primera ejecución tras el merge a `main` (04-10): «Rollback» en modo consulta, correcto |
 | 2026-10-02 | **API en contenedores** (Guillermo, rama `feature/contenedores-api`): Dockerfile por
   servicio (`ApiUsuario/`, `LLMOrchestrator/`, `deploy/Dockerfile.rag`), perfil `api` en
   `docker-compose.yml` y `RAG_COMMIT` en `rag.indexar` para conservar el commit del corpus sin git
@@ -906,6 +907,11 @@ la enciende a mano para trabajar o hacer una demo.
   Corregido fijando `SQLAlchemy==2.0.49` y `psycopg2-binary==2.9.12`; después `/estaciones` y
   `/series` responden con datos reales. `/chat` devuelve 503 controlado: aún no hay proveedor de
   LLM elegido. Prueba de principio a fin con LLM: `[por confirmar]` |
+| 2026-10-04 | **Tests de la API en CI** (Guillermo): `tests.yml` suma los jobs `api-usuario` (18 tests)
+  y `orquestador` (51), cada uno con su `requirements-dev.txt`. Hasta ahora solo corrían en local
+  aunque el README decía lo contrario. Reproducidos antes en entornos virtuales limpios. Como
+  `desplegar.yml` reutiliza `tests.yml`, ningún despliegue sale ya sin que pasen también estos |
+
 
 ---
 
