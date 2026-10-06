@@ -247,6 +247,42 @@ Cada servicio instala sus dependencias de test aparte
 (`ApiUsuario/requirements-dev.txt`, `LLMOrchestrator/requirements-dev.txt`, `Agente/requirements-dev.txt`).
 En CI los tres corren como jobs independientes.
 
+### Entorno de pruebas local (todo con un comando)
+
+[`entorno_local.sh`](entorno_local.sh) levanta el RAG, Phoenix, el agente y `ApiUsuario` sin
+construir imágenes, cada uno en un panel de una sesión de **tmux**, más un panel libre para las
+consultas. El modelo y la configuración del agente salen siempre de `Agente/.env`.
+
+Requisitos: `tmux`, el entorno `env-pontia-ml`, `Agente/.venv` y `Agente/.env` rellenado. Docker
+Desktop es opcional (sin él no hay Phoenix y las trazas solo van al JSONL). Con Bedrock, las
+credenciales del perfil de `Agente/.env` vivas: el script lo comprueba antes de arrancar.
+
+```bash
+./entorno_local.sh            # levantar todo y entrar en la sesión (el RAG tarda ~1 min)
+./entorno_local.sh estado     # qué responde
+./entorno_local.sh preguntar "¿Qué efectos tiene el NO2 en la salud?"
+./entorno_local.sh preguntar "¿Y en los niños?" <session_id>   # seguir la conversación
+./entorno_local.sh preguntar "Hola" --crudo                    # el SSE tal cual
+./entorno_local.sh parar      # parar todo (también Phoenix)
+```
+
+| Panel | Qué corre | Puerto |
+|-|-|-|
+| arriba izquierda | RAG (`rag.api`, umbral 0,1754) | 8010 |
+| arriba derecha | Agente (espera a que el RAG responda) | 8200 |
+| abajo izquierda | `ApiUsuario` con `AGENTE_URL` (espera al agente) | 8000 |
+| abajo derecha | consultas: al estar todo listo muestra `estado` | |
+
+Tmux en tres atajos: **clic** en un panel para moverse (o `Ctrl+b` y una flecha); `Ctrl+b` y `z`
+amplía o recupera el panel actual; `Ctrl+b` y `d` sale **sin parar nada** (`./entorno_local.sh`
+vuelve a entrar). Para desplazarse por el log, la rueda del ratón (`q` para volver).
+Si un servicio se cae o quieres reiniciarlo tras cambiar código: en su panel, `Ctrl+C`, flecha
+arriba y Enter.
+
+- `ApiUsuario` arranca sin base de datos (`/estaciones` fallará). Para darle una:
+  `DATABASE_URL=postgresql://... ./entorno_local.sh`.
+- Si dice «puertos ocupados», queda un servicio de otra sesión: `ss -ltnp` dice cuál.
+
 ### La API en contenedores (como irá en la EC2)
 
 Cada servicio tiene su propia imagen, para poder desplegarlos por separado:
@@ -360,6 +396,7 @@ aws logs tail /aws/lambda/jupiter-pipeline --since 1d --format short
 ├── deploy/                                  # infraestructura AWS (imágenes Lambda y RAG + roles IAM)
 ├── tests/                                   # tests unitarios y de integración
 ├── docker-compose.yml                       # PostgreSQL 18; con --profile api, la API completa
+├── entorno_local.sh                         # RAG + Phoenix + Agente + ApiUsuario en tmux, para pruebas
 ├── .env.example                             # plantilla de variables de entorno
 ├── requirements.txt
 ├── requirements-rag.txt                     # dependencias extra de la Fase 2 (RAG), versiones fijadas
