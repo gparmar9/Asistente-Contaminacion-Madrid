@@ -30,6 +30,7 @@ def test_responder_devuelve_el_contrato(cliente):
     assert r.status_code == 200
     cuerpo = r.json()
     assert len(cuerpo.pop("traza_id")) == 32  # id de la traza, para buscar el turno en Phoenix
+    cuerpo.pop("session_id")
     assert cuerpo == {
         "respuesta": TEXTO_NO2,
         "fuentes": [{"tipo": "documento", "referencia": "Efectos del NO2 en la salud"}],
@@ -37,9 +38,18 @@ def test_responder_devuelve_el_contrato(cliente):
     }
 
 
+def test_responder_genera_o_conserva_la_sesion(cliente):
+    llm = LLMFalso(guion=[texto("Hola."), texto("Hola otra vez.")])
+    app.dependency_overrides[get_bucle] = lambda: Bucle(llm, [])
+
+    generada = cliente.post("/responder", json={"pregunta": "Hola"}).json()["session_id"]
+    recibida = cliente.post("/responder", json={"pregunta": "Hola", "session_id": generada}).json()
+    assert len(generada) == 32 and recibida["session_id"] == generada
+
+
 def test_llm_caido_devuelve_503(cliente):
     class _BucleRoto:
-        async def responder(self, pregunta):
+        async def responder(self, pregunta, emitir=None):
             raise LLMNoDisponible("sin red")
 
     app.dependency_overrides[get_bucle] = lambda: _BucleRoto()

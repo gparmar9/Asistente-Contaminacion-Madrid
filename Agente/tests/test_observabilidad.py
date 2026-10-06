@@ -1,4 +1,4 @@
-"""Spans del turno con un exportador en memoria: sin red, sin Phoenix."""
+"""Spans del turno con un exportador en memoria (fixture `spans`): sin red, sin Phoenix."""
 import asyncio
 import json
 from collections import defaultdict
@@ -7,7 +7,6 @@ import httpx
 import pytest
 from openinference.instrumentation import TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
-from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 from opentelemetry.trace import StatusCode, format_trace_id
 
 from agente import observabilidad
@@ -22,16 +21,6 @@ pytestmark = pytest.mark.anyio
 PREGUNTA = "¿Qué efectos tiene el NO2 en el asma?"
 JSON_NO2 = json.dumps(SALIDA_NO2, ensure_ascii=False)
 LIBRE = texto("Texto libre que la ruta documental descarta.")
-
-
-@pytest.fixture
-def spans():
-    exportador = InMemorySpanExporter()
-    proveedor = TracerProvider()
-    proveedor.add_span_processor(SimpleSpanProcessor(exportador))
-    observabilidad.usar_proveedor(proveedor)
-    yield exportador
-    observabilidad.usar_proveedor(TracerProvider())
 
 
 def _rag(rag: RagFingido, espera_s: float = 0.0) -> HerramientaRag:

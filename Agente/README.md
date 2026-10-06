@@ -14,9 +14,37 @@ Decisiones de diseño, alternativas descartadas y estado por fases:
 | Método | Ruta | Qué devuelve |
 |-|-|-|
 | GET | `/salud` | Estado del servicio, proveedor y modelo configurados |
-| POST | `/responder` | `{pregunta}` → `{respuesta, fuentes[{tipo, referencia}], advertencia, traza_id}` (mismo contrato que reenvía `ApiUsuario` desde `/chat`; `traza_id` es opcional y sirve para buscar el turno en las trazas) |
+| POST | `/responder` | `{pregunta, session_id?}` → `{respuesta, fuentes[{tipo, referencia}], advertencia, traza_id, session_id}` (mismo contrato que reenvía `ApiUsuario` desde `/chat`; `traza_id` sirve para buscar el turno en las trazas) |
+| POST | `/responder/stream` | La misma entrada; respuesta en Server-Sent Events (ver abajo). `ApiUsuario` la reenvía desde `/chat/stream` |
 
 Documentación interactiva en `/docs`.
+
+**Sesión.** `session_id` es opaco (1–64 caracteres `[A-Za-z0-9_-]`); si no llega, se genera.
+Un turno a la vez por sesión: una segunda pregunta de la misma sesión espera a que termine la
+primera (en el stream, recibiendo `status` con `en_espera`). El bloqueo vive en memoria del
+proceso: con varios procesos del agente haría falta otra coordinación.
+
+### Streaming (`/responder/stream`)
+
+Cada evento es `event: <tipo>\ndata: <json>\n\n`, con `Cache-Control: no-cache` y
+`X-Accel-Buffering: no`.
+
+| Evento | `data` | Cuándo |
+|-|-|-|
+| `status` | `{fase, herramienta?}`: `en_espera`, `clasificando`, `buscando`, `redactando`, `validando` | Al cambiar de fase, y repetido cada `STREAM_HEARTBEAT_S` si no sale nada |
+| `token` | `{texto}` | Solo respuestas definitivas: la llamada sin herramientas ofrecidas (charla) y la síntesis forzada |
+| `passthrough` | `{texto, fuentes, advertencia, traza_id}` | El resto, íntegro al final: ruta documental (el JSON se valida antes de mostrarse), frases fijas, `sin_evidencia` |
+| `error` | `{detalle}` | Fallo con el stream ya abierto; cierra sin `done`. Antes de abrirlo, código HTTP (503) |
+| `done` | `{session_id, traza_id}` | Turno completado |
+
+Si el cliente corta la conexión, el turno se cancela (sin más llamadas al LLM ni al RAG, y el
+span del turno lleva `agente.cancelado=true`). Eso no garantiza que Bedrock deje de procesar y
+cobrar una inferencia ya iniciada.
+
+```bash
+curl -N -X POST localhost:8200/responder/stream -H 'Content-Type: application/json' \
+  -d '{"pregunta": "Hola, ¿qué sabes hacer?", "session_id": "prueba-1"}'
+```
 
 ## Cómo responde un turno
 

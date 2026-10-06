@@ -3,7 +3,7 @@ import json
 
 import httpx
 import pytest
-from llama_index.core.base.llms.types import MessageRole
+from llama_index.core.base.llms.types import MessageRole, ToolCallBlock
 
 from agente.business import frases
 from agente.business.bucle import Bucle
@@ -101,6 +101,21 @@ async def test_limite_de_vueltas_cierra_sin_herramientas():
     r = await bucle.responder(PREGUNTA)
     assert r.respuesta == TEXTO_NO2
     assert [ll["herramientas"] for ll in llm.registro] == [["buscar_evidencias"]] * 3 + [[]]
+
+
+async def test_sintesis_forzada_va_sin_historial_de_herramientas():
+    # Sin evidencias al agotar las vueltas: Bedrock rechaza bloques de herramienta sin toolConfig.
+    rag = RagFingido()
+    pedir = llamada("consultar_mediciones", {"estacion": "Plaza de España"})
+    llm, bucle = _bucle([pedir, pedir, texto("No puedo consultar mediciones.")], rag, max_vueltas=2)
+    r = await bucle.responder("¿Cuánto NO2 hay ahora en Plaza de España?")
+
+    assert r.respuesta == "No puedo consultar mediciones." and r.sintesis_forzada
+    ultima = llm.registro[-1]
+    assert ultima["herramientas"] == []
+    assert [m.role for m in ultima["mensajes"]] == [MessageRole.SYSTEM, MessageRole.USER]
+    assert not any(isinstance(b, ToolCallBlock) for m in ultima["mensajes"] for b in m.blocks)
+    assert "consultar_mediciones" in ultima["mensajes"][1].content  # el resultado va en texto
 
 
 async def test_rag_caido_no_ofrece_la_herramienta():

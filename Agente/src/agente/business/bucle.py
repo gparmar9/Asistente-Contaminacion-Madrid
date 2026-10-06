@@ -17,9 +17,14 @@ Las fases de sesión y comprobaciones se añaden encima de este esqueleto sin ca
 
 Cada paso deja un span (ver `agente.observabilidad`): turno > clasificar | bucle |
 busqueda_forzada | sintesis_documental | sintesis_forzada > llm y herramientas.
+
+Con un emisor (stream), el turno avisa de cada fase y entrega como tokens solo las respuestas
+definitivas: la llamada del bucle sin herramientas ofrecidas y la síntesis forzada. El resto
+(frases fijas, ruta documental, texto libre tras ofrecer herramientas) sale entero al final.
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 from dataclasses import dataclass, field
 from typing import Sequence
@@ -35,6 +40,7 @@ from agente.business import frases
 from agente.business.intencion import Decision, clasificar, decidir
 from agente.business.sintesis import EvidenciasTurno, sintesis_documental
 from agente.entities.chat import Fuente
+from agente.entities.eventos import Emisor, Evento, EventoEstado, EventoTexto, Fase
 from agente.entities.intencion import DESCONOCIDA, Clasificacion, Tema
 from agente.tools import rag
 from agente.tools.base import Herramienta, ResultadoHerramienta, como_llamaindex
@@ -63,6 +69,7 @@ class ResultadoTurno:
     valida: bool | None = None                         # ruta documental: /rag/validar la aceptó
     reparaciones: int = 0                              # ruta documental: reintentos tras validar
     traza_id: str | None = None
+    emitida: bool = False                              # la respuesta ya salió como tokens por el emisor
 
 
 class Bucle:
@@ -77,16 +84,24 @@ class Bucle:
         self._llm_clasificador = llm_clasificador
         self._clasificador_timeout_s = clasificador_timeout_s
 
-    async def responder(self, pregunta: str) -> ResultadoTurno:
+    async def responder(self, pregunta: str, emitir: Emisor | None = None) -> ResultadoTurno:
+        """`emitir`: recibe los eventos del turno (stream). Es por turno, nunca del `Bucle`:
+        hay turnos concurrentes. None = sin eventos, como en `/responder`."""
         with observabilidad.turno(pregunta) as span:
             resultado = ResultadoTurno(respuesta="", traza_id=observabilidad.trace_id_actual())
-            await self._turno(pregunta, resultado)
+            try:
+                await self._turno(pregunta, resultado, emitir or _no_emitir, _texto_al_cliente(emitir, resultado))
+            except asyncio.CancelledError:  # el cliente del stream se fue: no se hacen más llamadas
+                span.set_attribute("agente.cancelado", True)
+                raise
+            resultado.emitida &= resultado.respuesta != frases.RESPUESTA_VACIA  # vacía: sale entera
             span.set_output(resultado.respuesta)
             span.set_attributes(_atributos_turno(resultado))
             return resultado
 
-    async def _turno(self, pregunta: str, resultado: ResultadoTurno) -> ResultadoTurno:
-        clasificacion = await self._clasificar(pregunta)
+    async def _turno(self, pregunta: str, resultado: ResultadoTurno, emitir: Emisor,
+                     emitir_texto: Emisor | None) -> ResultadoTurno:
+        clasificacion = await self._clasificar(pregunta, emitir)
         decision = decidir(clasificacion.intencion)
         resultado.intencion = clasificacion.intencion.value
         resultado.tema = clasificacion.tema.value
@@ -103,13 +118,17 @@ class Bucle:
             ChatMessage(role=MessageRole.USER, content=pregunta),
         ]
         evidencias = EvidenciasTurno()
+        consultas: list[str] = []  # resultados en texto para la síntesis forzada
         final: ChatResponse | None = None  # respuesta del modelo sin peticiones de herramienta
         rag_caido = False  # una búsqueda del modelo encontró el RAG sin servicio
 
         with observabilidad.span("bucle", "chain"):
             for _ in range(self._max_vueltas):
                 resultado.vueltas += 1
-                respuesta = await self._llamar(mensajes, list(disponibles.values()))
+                await emitir(EventoEstado(Fase.REDACTANDO))
+                # Sin herramientas ofrecidas, el texto de esta llamada es la respuesta final (D1).
+                respuesta = await self._llamar(mensajes, list(disponibles.values()),
+                                               None if disponibles else emitir_texto)
                 llamadas = self._llamadas_pedidas(respuesta) if disponibles else []
                 if not llamadas:
                     final = respuesta
@@ -117,10 +136,12 @@ class Bucle:
                 mensajes.append(respuesta.message)
                 hubo_sin_evidencia = False
                 for llamada in llamadas:
-                    r, sin_evidencia = await self._ejecutar_y_anotar(llamada, disponibles, evidencias, resultado)
+                    r, sin_evidencia = await self._ejecutar_y_anotar(llamada, disponibles, evidencias,
+                                                                     resultado, emitir)
                     hubo_sin_evidencia |= sin_evidencia
                     rag_caido |= bool(r.internos) and r.internos.get("estado") == rag.ESTADO_NO_DISPONIBLE
                     mensajes.append(_mensaje_tool(llamada, r))
+                    consultas.append(f"{llamada.tool_name}: {r.para_el_modelo()}")
                 if hubo_sin_evidencia and not evidencias:
                     observabilidad.decision("sin_evidencia")
                     return _sin_evidencia(resultado)
@@ -139,7 +160,8 @@ class Bucle:
                 if clasificacion.tema is not Tema.NINGUNO:
                     argumentos["tema"] = clasificacion.tema.value
                 llamada = ToolSelection(tool_id=ID_BUSQUEDA_FORZADA, tool_name=rag.NOMBRE, tool_kwargs=argumentos)
-                r, sin_evidencia = await self._ejecutar_y_anotar(llamada, disponibles, evidencias, resultado)
+                r, sin_evidencia = await self._ejecutar_y_anotar(llamada, disponibles, evidencias,
+                                                                 resultado, emitir)
                 if sin_evidencia:
                     observabilidad.decision("sin_evidencia")
                     return _sin_evidencia(resultado)
@@ -148,14 +170,14 @@ class Bucle:
                     return _fija(resultado, frases.DOCUMENTACION_NO_DISPONIBLE)
 
         if evidencias:  # el texto libre del modelo se descarta: lo sustituye la ruta documental
-            return await self._cerrar_documental(pregunta, evidencias, resultado)
+            return await self._cerrar_documental(pregunta, evidencias, resultado, emitir)
         if final is not None:
             resultado.respuesta = _texto(final)
             return resultado
         # Límite de vueltas: cerrar sin herramientas para que el usuario siempre reciba respuesta.
         with observabilidad.span("sintesis_forzada", "chain"):
-            mensajes.append(ChatMessage(role=MessageRole.SYSTEM, content=frases.PROMPT_SINTESIS_FORZADA))
-            respuesta = await self._llamar(mensajes, [])
+            await emitir(EventoEstado(Fase.REDACTANDO))
+            respuesta = await self._llamar(_mensajes_sintesis_forzada(pregunta, consultas), [], emitir_texto)
             resultado.respuesta = _texto(respuesta)
             resultado.sintesis_forzada = True
         return resultado
@@ -163,9 +185,9 @@ class Bucle:
     # ------------------------------------------------------------------ pasos
 
     async def _cerrar_documental(self, pregunta: str, evidencias: EvidenciasTurno,
-                                 resultado: ResultadoTurno) -> ResultadoTurno:
+                                 resultado: ResultadoTurno, emitir: Emisor) -> ResultadoTurno:
         documental = await sintesis_documental(self._llamar, self._herramientas[rag.NOMBRE],
-                                               pregunta, evidencias)
+                                               pregunta, evidencias, emitir)
         resultado.ruta = "documental"
         resultado.respuesta = documental.respuesta
         resultado.advertencia = documental.advertencia
@@ -174,9 +196,10 @@ class Bucle:
         _acumular_fuentes(resultado.fuentes, documental.fuentes)  # solo los documentos citados
         return resultado
 
-    async def _clasificar(self, pregunta: str) -> Clasificacion:
+    async def _clasificar(self, pregunta: str, emitir: Emisor) -> Clasificacion:
         if self._llm_clasificador is None:
             return DESCONOCIDA
+        await emitir(EventoEstado(Fase.CLASIFICANDO))
         return await clasificar(self._llm_clasificador, pregunta, self._clasificador_timeout_s)
 
     async def _herramientas_disponibles(self, decision: Decision) -> dict[str, BaseTool]:
@@ -193,9 +216,12 @@ class Bucle:
             disponibles[nombre] = como_llamaindex(definicion)
         return disponibles
 
-    async def _llamar(self, mensajes: list[ChatMessage], herramientas: list[BaseTool]) -> ChatResponse:
+    async def _llamar(self, mensajes: list[ChatMessage], herramientas: list[BaseTool],
+                      emitir_texto: Emisor | None = None) -> ChatResponse:
         """Una llamada al LLM, drenando el stream. Devuelve la última respuesta (mensaje completo).
-        La fase a la que pertenece la da el span padre (bucle, síntesis...)."""
+        La fase a la que pertenece la da el span padre (bucle, síntesis...).
+        `emitir_texto`: recibe cada `delta` no vacío; solo para respuestas definitivas (D1).
+        El razonamiento de los modelos que razonan no viaja en `delta` (verificado en Bedrock)."""
         nombres = [h.metadata.name for h in herramientas]
         with observabilidad.llamada_llm(self._llm, mensajes, nombres) as span:
             try:
@@ -206,6 +232,8 @@ class Bucle:
                 ultima: ChatResponse | None = None
                 async for trozo in flujo:
                     ultima = trozo
+                    if emitir_texto is not None and trozo.delta:
+                        await emitir_texto(EventoTexto(trozo.delta))
             except Exception as exc:  # el proveedor puede lanzar de todo: se traduce a un error propio
                 logger.error("Fallo del LLM: %s", exc)
                 raise LLMNoDisponible(str(exc)) from exc
@@ -233,13 +261,14 @@ class Bucle:
 
 
     async def _ejecutar_y_anotar(self, llamada: ToolSelection, disponibles: dict[str, BaseTool],
-                                 evidencias: EvidenciasTurno, resultado: ResultadoTurno,
+                                 evidencias: EvidenciasTurno, resultado: ResultadoTurno, emitir: Emisor,
                                  ) -> tuple[ResultadoHerramienta, bool]:
         """Ejecuta una llamada, incorpora las evidencias del RAG y la anota en el resultado.
         Devuelve el resultado (renumerado si trae evidencias) y si la búsqueda salió vacía.
         El span guarda lo que vio el modelo: el resultado ya renumerado."""
         argumentos = llamada.tool_kwargs if isinstance(llamada.tool_kwargs, dict) else {}
         with observabilidad.herramienta(llamada.tool_name, argumentos) as span:
+            await emitir(EventoEstado(Fase.BUSCANDO, llamada.tool_name))
             r = await self._ejecutar(llamada, disponibles)
             sin_evidencia = False
             if llamada.tool_name == rag.NOMBRE and r.ok and r.internos:
@@ -263,6 +292,21 @@ class Bucle:
 
 
 # ---------------------------------------------------------------------- utilidades
+
+async def _no_emitir(evento: Evento) -> None:
+    """Emisor de los turnos sin stream."""
+
+
+def _texto_al_cliente(emitir: Emisor | None, resultado: ResultadoTurno) -> Emisor | None:
+    """Emisor de tokens que marca `resultado.emitida`. None si el turno no tiene emisor."""
+    if emitir is None:
+        return None
+
+    async def emitir_texto(evento: Evento) -> None:
+        resultado.emitida = True
+        await emitir(evento)
+    return emitir_texto
+
 
 def _fija(resultado: ResultadoTurno, frase: str) -> ResultadoTurno:
     resultado.respuesta = frase
@@ -295,6 +339,14 @@ def _atributos_turno(resultado: ResultadoTurno) -> dict:
 def _texto(respuesta: ChatResponse) -> str:
     contenido = (respuesta.message.content or "").strip()
     return contenido or frases.RESPUESTA_VACIA
+
+
+def _mensajes_sintesis_forzada(pregunta: str, consultas: list[str]) -> list[ChatMessage]:
+    # Mensajes nuevos, como en la síntesis documental: Bedrock Converse rechaza los bloques
+    # toolUse/toolResult del historial cuando la llamada no lleva herramientas (toolConfig).
+    usuario = f"Pregunta: {pregunta}\n\nResultados de las consultas:\n" + "\n".join(consultas)
+    return [ChatMessage(role=MessageRole.SYSTEM, content=frases.PROMPT_SINTESIS_FORZADA),
+            ChatMessage(role=MessageRole.USER, content=usuario)]
 
 
 def _mensaje_tool(llamada: ToolSelection, resultado: ResultadoHerramienta) -> ChatMessage:

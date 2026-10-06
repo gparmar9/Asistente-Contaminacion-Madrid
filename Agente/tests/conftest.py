@@ -9,8 +9,13 @@ from pathlib import Path
 
 import httpx
 import pytest
+from openinference.instrumentation import TracerProvider
+from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
+
+from agente import observabilidad  # noqa: E402  (necesita el sys.path de arriba)
 
 HERRAMIENTA_RAG = {
     "type": "function",
@@ -79,6 +84,17 @@ TEXTO_NO2 = "El NO2 agrava el asma. [D1]"
 @pytest.fixture
 def anyio_backend():
     return "asyncio"
+
+
+@pytest.fixture
+def spans():
+    """Spans terminados en memoria, en lugar de Phoenix o el JSONL."""
+    exportador = InMemorySpanExporter()
+    proveedor = TracerProvider()
+    proveedor.add_span_processor(SimpleSpanProcessor(exportador))
+    observabilidad.usar_proveedor(proveedor)
+    yield exportador
+    observabilidad.usar_proveedor(TracerProvider())
 
 
 class RagFingido:

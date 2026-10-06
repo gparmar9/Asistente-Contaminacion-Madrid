@@ -20,6 +20,7 @@ from llama_index.core.base.llms.types import ChatMessage, ChatResponse, MessageR
 from agente import observabilidad
 from agente.business import frases
 from agente.entities.chat import Fuente
+from agente.entities.eventos import Emisor, EventoEstado, Fase
 from agente.tools.base import ResultadoHerramienta
 from agente.tools.rag import HerramientaRag
 
@@ -74,9 +75,10 @@ class ResultadoDocumental:
 
 
 async def sintesis_documental(llamar: Llamar, rag: HerramientaRag, pregunta: str,
-                              evidencias: EvidenciasTurno) -> ResultadoDocumental:
+                              evidencias: EvidenciasTurno, emitir: Emisor) -> ResultadoDocumental:
+    """`emitir` solo recibe las fases: el JSON de la síntesis nunca sale como tokens."""
     with observabilidad.span("sintesis_documental", "chain") as span:
-        resultado = await _sintesis(llamar, rag, pregunta, evidencias)
+        resultado = await _sintesis(llamar, rag, pregunta, evidencias, emitir)
         span.set_attributes({"agente.valida": resultado.valida, "agente.reparaciones": resultado.reparaciones})
         if not resultado.valida:
             observabilidad.decision("insuficiencia")
@@ -84,11 +86,13 @@ async def sintesis_documental(llamar: Llamar, rag: HerramientaRag, pregunta: str
 
 
 async def _sintesis(llamar: Llamar, rag: HerramientaRag, pregunta: str,
-                    evidencias: EvidenciasTurno) -> ResultadoDocumental:
+                    evidencias: EvidenciasTurno, emitir: Emisor) -> ResultadoDocumental:
     mensajes = _mensajes_sintesis(pregunta, evidencias, rag.esquema_salida)
     for intento in range(MAX_REPARACIONES + 1):
+        await emitir(EventoEstado(Fase.REDACTANDO))
         respuesta = await llamar(mensajes, [])
         salida_texto = respuesta.message.content or ""
+        await emitir(EventoEstado(Fase.VALIDANDO))
         validacion = await rag.validar(pregunta, evidencias.referencias(), _parsear(salida_texto))
         if validacion is None:
             break

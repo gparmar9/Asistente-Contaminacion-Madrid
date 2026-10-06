@@ -59,6 +59,7 @@ docs/arquitectura_estado_actual.md
 # Configuración local de asistentes de IA (permisos de cada persona, no del proyecto)
 .claude/
 docs/agente/plan_observabilidad_agente.md
+docs/agente/plan_fase4_streaming_sesion.md
 docs/agente/estado_agente.md
 docs/agente/decisiones_agente.md
 docs/agente/estado_agente.md

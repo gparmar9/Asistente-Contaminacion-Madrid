@@ -102,6 +102,8 @@ Hilo conductor de la memoria: cómo y por qué cambió el diseño.
 | 2026-10-02 | Empaquetado de la API | Servicios arrancados a mano con `uvicorn` y `python -m rag.api` → **una imagen Docker por servicio** (`api-usuario`, `orquestador`, `rag`), levantadas juntas con el perfil `api` de `docker-compose` | Es como irán en la EC2 y permite desplegar cada pieza por separado. La imagen del RAG lleva **dentro el modelo y el índice** construido en el propio build, con el commit del corpus en sus metadatos: arranca sin descargar nada y cada imagen corresponde a un corpus concreto. Descartado: una sola imagen con todo (obliga a redesplegar el RAG, de ~3 GB, por cualquier cambio en la API) y construir el índice al arrancar el contenedor (arranque lento y sin garantía de que todas las réplicas usen el mismo índice) |
 
 | 2026-10-04 | Agente LLM | `LLMOrchestrator` como único agente → **nuevo servicio `Agente`** (puerto 8200), diseñado desde cero con un **bucle de herramientas escrito a mano**; **LlamaIndex solo como cliente del LLM** (`OpenAILike` para APIs OpenAI-compatibles y `BedrockConverse` para Amazon Bedrock, elegibles por variable de entorno) y, más adelante, como almacén del chat. Ambos servicios conviven sin código ni dependencias compartidas; `ApiUsuario` elegirá uno por configuración | Principios tomados de las clases del máster y de un diseño de agente empresarial: pocas piezas, el modelo clasifica y el código decide, fases pequeñas con salida tipada y valor seguro, síntesis final sin herramientas, lo determinista lo entrega el código. **Descartado un framework de agentes completo** (ReAct/`AgentWorkflow` de LlamaIndex, LangGraph): esconde el bucle que precisamente se quiere controlar (vetar u obligar herramientas, cerrar el turno sin modelo, validar la salida con el RAG) y arrastra abstracciones que no se usan. Descartado también ampliar `LLMOrchestrator`: su bucle no tiene puntos de intervención en código y rehacerlo dentro equivalía a reescribirlo. Bedrock entra como proveedor de producción porque la cuenta del máster da acceso; el modelo concreto en `eu-west-1` con *tool use* y *streaming* queda `[por confirmar]` |
+| 2026-10-06 | Sesión en el agente | Servicios sin estado (2026-09-27) → **`session_id` opaco** en `/responder` (se genera si no llega) y **un turno a la vez por sesión** | El streaming y la memoria de la conversación (fases 4 y 5) necesitan agrupar los turnos. Sin usuarios ni datos personales: el id no identifica a nadie y el agente aún no guarda nada con él |
+| 2026-10-06 | Chat de `ApiUsuario` | `/chat` solo hacia `ORCHESTRATOR_URL` (o stub), sin sesión → **`AGENTE_URL` elige el agente**; `session_id` y `traza_id` opcionales en el contrato y **`POST /chat/stream`** (proxy del SSE del agente, o `passthrough` + `done` sin agente) | Los dos agentes conviven y se elige por configuración, sin tocar código. El fallback mantiene el contrato del stream para el frontend aunque el orquestador no conserve contexto |
 
 **Decisiones abiertas que alimentarán esta tabla:** proveedor concreto del LLM (se decidirá al
 conectar el bucle real: crear cuenta y verificar límites en consola) y dónde se despliega el
@@ -161,12 +163,12 @@ CSV histórico ─▶ notebooks 01/02/03 ─▶ modelo .joblib ─▶ PostgreSQL
 Corpus RAG (.md) ─▶ troceado + embeddings e5 ─▶ ChromaDB ─▶ servicio RAG (FastAPI)   (Fase 2)
 
 Usuario ─▶ ApiUsuario (FastAPI) ──▶ PostgreSQL (lecturas: estaciones, series)   (Fase 4, en curso)
-                    └─ /chat ──┬─▶ LLMOrchestrator ─▶ LLM hospedado (OpenAI-compat)
+        /chat, /chat/stream ──┬─▶ LLMOrchestrator ─▶ LLM hospedado (OpenAI-compat)
                                │       ├─ query_sql ─────────▶ PostgreSQL       (Fase 3, primer agente;
                                │       └─ buscar_evidencias ─▶ rag.api (HTTP)    proveedor pendiente)
                                └─▶ Agente ─▶ LLM vía LlamaIndex (OpenAI-compat | Bedrock)
                                        └─ buscar_evidencias ─▶ rag.api (HTTP)   (Fase 3 bis, en construcción;
-                                                                                  ApiUsuario elegirá por configuración)
+                                                                                  ApiUsuario elige con AGENTE_URL)
 ```
 
 **Principio de diseño central:** los **datos de contaminación viven estructurados en SQL** y la
@@ -179,8 +181,8 @@ mediante *tool use*.
 |---|---|---|
 | 1 | Datos, detector de anomalías, pipeline en tiempo real | Hecha en local; migración a AWS en curso |
 | 2 | Vector DB y servicio de evidencias | **Reescrita** (2026-09-23) como servicio de evidencias y mergeada en `development`; pendiente de pasar a `main` |
-| 3 | LLM con *tool use* | **Dos servicios** (§7.3): `LLMOrchestrator`, implementado (2026-09-28; ruta documental por contrato HTTP el 2026-09-30) con `query_sql` y `buscar_evidencias`, 51 tests, sin proveedor conectado; y `Agente` (2026-10-04), rediseño por fases con bucle propio y LlamaIndex como cliente: fases 1 a 3 de 7 hechas (esqueleto, herramienta documental, ruta documental validada, clasificador de intención, 20 tests). Falta conectar un proveedor real |
-| 4 | Informes y dashboard | En curso: `ApiUsuario` con `/estaciones`, `/estaciones/{codigo}/series` y `/chat` (proxy con stub), tests propios y job de CI. Informes y dashboard pendientes |
+| 3 | LLM con *tool use* | **Dos servicios** (§7.3): `LLMOrchestrator`, implementado (2026-09-28; ruta documental por contrato HTTP el 2026-09-30) con `query_sql` y `buscar_evidencias`, 51 tests, sin proveedor conectado; y `Agente` (2026-10-04), rediseño por fases con bucle propio y LlamaIndex como cliente: fases 1 a 4 de 7 hechas (esqueleto, herramienta documental, ruta documental validada, clasificador de intención, sesión y streaming SSE; 41 tests), probado con Amazon Bedrock |
+| 4 | Informes y dashboard | En curso: `ApiUsuario` con `/estaciones`, `/estaciones/{codigo}/series`, `/chat` y `/chat/stream` (proxy al agente o al orquestador, con stub), tests propios y job de CI. Informes y dashboard pendientes |
 
 **Stack actual:** Python 3.12 · pandas · NumPy · scikit-learn · PostgreSQL 18 (RDS) · SQLAlchemy ·
 pyarrow · ChromaDB · sentence-transformers (`multilingual-e5-base`) · FastAPI · pytest ·
@@ -414,15 +416,61 @@ de conversación, *streaming* y consulta de mediciones.
 ### 7.3 LLM con tool use (Fase 3) — dos servicios, proveedor pendiente
 
 Hay dos implementaciones del agente, independientes entre sí (sin código, dependencias ni imágenes
-compartidas). `ApiUsuario` reenvía `/chat` a una u otra por configuración (hoy `ORCHESTRATOR_URL`;
-el agente nuevo añadirá `AGENTE_URL`). El agente nuevo ya se ha probado contra Amazon Bedrock
-(clasificador y uso de herramientas, 2026-10-04); el orquestador sigue sin proveedor conectado.
+compartidas). `ApiUsuario` reenvía `/chat` a uno u otro por configuración: `AGENTE_URL` si está definida, si no
+`ORCHESTRATOR_URL`. El agente nuevo ya se ha probado contra Amazon Bedrock (clasificador, uso de
+herramientas, ruta documental y streaming); el orquestador sigue sin proveedor conectado.
 
 #### 7.3.1 `Agente` — rediseño por fases (en construcción)
 
-**Estado (2026-10-06): fases 1 a 3 de 7 hechas, más la observabilidad (partes A, B y C; el lote de C con Bedrock, sin ejecutar)** (rama `feature/Agente`). Servicio FastAPI en `Agente/`
+**Estado (2026-10-06): fases 1 a 4 de 7 hechas, más la observabilidad (partes A, B y C)** (rama `feature/Agente`). Servicio FastAPI en `Agente/`
 (paquete `agente`, puerto 8200, `GET /salud`, `POST /responder` con el mismo contrato que reenvía
-`ApiUsuario`), misma convención por capas que `ApiUsuario`.
+`ApiUsuario` y `POST /responder/stream`), misma convención por capas que `ApiUsuario`.
+
+**Sesión (2026-10-06).** `/responder` acepta un `session_id` opcional (1–64 caracteres
+`[A-Za-z0-9_-]`; si no llega, genera uno) y lo devuelve. Un turno a la vez por sesión: una segunda
+pregunta de la misma sesión **espera** (no se rechaza con 409). Cada sesión activa tiene un bloqueo y
+un **contador de usuarios** (el turno en curso más los que esperan); la entrada se borra cuando el
+contador llega a 0, también si el turno se cancela. Borrarla al soltar el bloqueo crearía una
+carrera: A termina, B espera en el bloqueo viejo y C crea uno nuevo y corre a la vez que B. Los
+tests la reproducen con eventos (sin esperas por tiempo) y fallan con las dos variantes erróneas
+(borrar al soltar y no borrar nunca). **Límite:** vale para un solo proceso del agente (uvicorn
+arranca hoy con uno); con varios haría falta otra coordinación.
+
+**Streaming (2026-10-06).** `POST /responder/stream` entrega el turno como Server-Sent Events:
+`status` (fase: `en_espera`, `clasificando`, `buscando`, `redactando`, `validando`), `token`,
+`passthrough`, `error` y `done`. **Solo salen como tokens las respuestas definitivas**: la llamada
+sin herramientas ofrecidas (`CHARLA`, o `DESCONOCIDA` con el RAG caído) y la síntesis forzada.
+Todo lo demás sale entero al final como `passthrough`: frases fijas, `sin_evidencia`, la ruta
+documental (su JSON se valida antes de entregarse) y el texto libre de un turno con herramientas
+ofrecidas, que puede acabar descartado. Así el cliente nunca ve un texto que luego se retira. El
+turno no sabe de HTTP: recibe un **emisor opcional por turno** y la capa HTTP lo conecta a una
+**cola acotada** de 64 eventos (si el cliente lee despacio, el turno espera) y repite el último
+`status` cada 0,7 s sin eventos. `/responder` es el mismo turno sin emisor. Errores: antes de abrir
+el stream, código HTTP (503); después, evento `error` sin `done`. Si el cliente se desconecta, el
+turno se cancela, libera la sesión y su span lleva `agente.cancelado`; comprobado con uvicorn real
+(0 llamadas al LLM tras cortar). **Límite:** cancelar no garantiza que Bedrock deje de procesar (y
+cobrar) una inferencia ya iniciada. Descartado: `/responder` como el generador del stream drenado a
+una cadena (lo que decía el plan), porque mezcla en negocio el formato del stream.
+
+**`ApiUsuario` como puerta (2026-10-06).** Con `AGENTE_URL`, `/chat` reenvía `{pregunta,
+session_id}` al agente y devuelve también su `traza_id`; `/chat/stream` comprueba la respuesta del
+agente antes de abrir su propio SSE (si no es 200, 503) y después reenvía los bytes tal cual. Al
+terminar o al irse el cliente cierra la respuesta y el cliente HTTP, y así el agente ve la
+desconexión y cancela el turno. Un primer test de ese cierre pasaba aunque se quitara el cierre
+(httpx cierra solo la respuesta cuando se lee entera): se rehízo cortando la lectura a mitad.
+Sin `AGENTE_URL`, `/chat/stream` hace lo mismo que `/chat` (orquestador o stub) y lo entrega como
+`passthrough` + `done`, con `session_id` y `traza_id: null`. **Límite:** el orquestador no conserva
+contexto; el `session_id` solo mantiene el contrato.
+
+**Verificación con Bedrock (2026-10-06, `rag.api` real, agente y `ApiUsuario` con uvicorn).** 10
+turnos, unas 25 llamadas, 0,003 $. Charla: primer `token` a 3,4 s (Ministral 14B, 9 fragmentos) y a
+2,0 s (gpt-oss-120b, 5), sin razonamiento en el texto y con `done` sin `passthrough`. Documental
+por el proxy: `clasificando → redactando → buscando → redactando → validando`, ningún `token`,
+`passthrough` con citas y `done` (gpt-oss 7,6 s; Ministral 33 s, con llamadas de 8–10 s para menos
+de 200 tokens: lentitud de Bedrock ese día, no del stream). Dos preguntas a la vez en la misma
+sesión: la segunda recibe `en_espera` ~6 s y se ejecuta después. Corte del cliente a los 6 s a
+través del proxy: el agente cancela a los 6,3 s, sin más llamadas, con `agente.cancelado` y la
+sesión libre.
 
 **Diseño.** Un solo agente con el **bucle de herramientas escrito a mano**; LlamaIndex
 (`llama-index-core` 0.14) aporta solo el cliente del LLM: `OpenAILike` (Mistral API, Groq,
@@ -444,7 +492,8 @@ cada decisión y de la elección de LlamaIndex está en `docs/agente/decisiones_
   `para_el_modelo` (sin `chunk_id` ni internos); el estado y los `chunk_id` se guardan aparte para
   el código.
 - **Bucle**: máx. `MAX_VUELTAS=3` llamadas al LLM con herramientas; si el modelo sigue pidiendo
-  herramientas, **síntesis forzada sin herramientas** (peor caso: 4 llamadas). Herramienta
+  herramientas, **síntesis forzada sin herramientas** (peor caso: 4 llamadas), con mensajes
+  nuevos: la pregunta y los resultados de las herramientas en texto, sin el historial. Herramienta
   desconocida → mensaje `tool` de error y se sigue. Cualquier fallo del proveedor → 503 controlado.
   El stream del LLM ya se drena (`astream_chat_with_tools`): el streaming de la fase 4 no cambiará
   la forma del bucle.
@@ -574,8 +623,8 @@ cada decisión y de la elección de LlamaIndex está en `docs/agente/decisiones_
 - **Probado contra Bedrock (2026-10-04)**, desde local con credenciales SSO temporales: los dos
   candidatos están bajo demanda en `eu-west-1` con streaming, y los dos **piden la herramienta por
   Converse con streaming** (`astream_chat_with_tools`), con la consulta reformulada y `tema=salud`.
-  Ruta documental de punta a punta con `rag.api`: medida el 2026-10-05 (abajo). Queda por probar la
-  síntesis forzada.
+  Ruta documental de punta a punta con `rag.api`: medida el 2026-10-05 (abajo). Síntesis forzada:
+  falló el 2026-10-06 y se corrigió ese día; verificada después contra Bedrock (abajo).
 - **Modelo en Bedrock: dos candidatos a comparar** (decisión del 2026-10-04): **Ministral 14B 3.0**
   ($0,24 / $0,24 por 1M de tokens de entrada / salida en Irlanda) y **gpt-oss-120b** ($0,18 / $0,70).
   Ministral 14B es el Mistral actual más parecido a Mistral Small 3.2 24B, que era la referencia del
@@ -631,14 +680,21 @@ cada decisión y de la elección de LlamaIndex está en `docs/agente/decisiones_
     pero con el historial, que lleva bloques de llamada y resultado de herramienta. Converse exige
     entonces `toolConfig` (`ValidationException`) y el turno acaba en 503. Se forzó con un script
     (una vuelta y una herramienta que falla): 3 de 3 turnos con búsqueda fallaron. Los tests con el
-    LLM falso no lo detectan porque no imitan esa regla del proveedor. Arreglo pendiente: mensajes
-    nuevos, como ya hace la síntesis documental. Revisión humana de la columna «Correcta» y del español `[pendiente]`.
+    LLM falso no lo detectan porque no imitan esa regla del proveedor. **Corregido el mismo día**:
+    la síntesis forzada parte de mensajes nuevos, como ya hacía la documental (prompt de sistema
+    propio + la pregunta y los resultados de las herramientas en texto), y un test comprueba que la
+    última llamada no lleva bloques de herramienta. Descartado quitar solo los bloques del historial:
+    el modelo perdería lo que devolvieron las herramientas. **Verificado contra Bedrock** (2026-10-06):
+    4 de 4 turnos (2 preguntas × 2 modelos, `max_vueltas=1`, búsqueda que falla) llegan a la síntesis forzada y responden; ninguno da 503 (1,9–3,0 s el turno). gpt-oss contesta con honestidad
+    («No dispongo de información suficiente…»). **Ministral ignora el «apóyate solo en lo que
+    contienen»** y responde con conocimiento propio: los síntomas del asma y, para el PM2.5, una
+    cifra (25 µg/m³) y una directiva que no venían de ninguna evidencia, con negritas. Es la ruta
+    libre, sin `/rag/validar` que lo frene: queda para las comprobaciones de cifras de la fase 6. Revisión humana de la columna «Correcta» y del español `[pendiente]`.
   - Hallazgo: `BedrockConverse` 0.15.3 rechaza los IDs de modelo que no conoce, como el de Ministral
     14B (`ValueError: Unknown model`). Resuelto con una subclase en la fábrica que declara a mano los
     metadatos de los modelos fuera de su lista.
 
-**Fases pendientes** (4–7): streaming SSE y sesión (`session_id` opaco, un turno a
-la vez); memoria con `turn_state` tipado; comprobaciones posteriores en modo observación con
+**Fases pendientes** (5–7): memoria con `turn_state` tipado; comprobaciones posteriores en modo observación con
 evaluación sobre 20 preguntas etiquetadas; Bedrock y despliegue junto al orquestador.
 
 #### 7.3.2 `LLMOrchestrator` — primer agente (implementado el 2026-09-28; convive)
@@ -1152,7 +1208,11 @@ la enciende a mano para trabajar o hacer una demo.
 | 2026-10-06 | **Agente LLM: informe visual de trazas** (Carlos, rama `feature/Agente`): `informe_trazas.py --salida x.html` genera una página autocontenida (JS y SVG sin librerías) para analizar latencia y coste por lote, fase, ruta y turno, con la cascada de cada turno y su coste; `--salida x.json` da el conjunto de datos, pensado como contrato de una futura web de análisis. 30 tests |
 | 2026-10-06 | **Agente LLM: lote de evaluación en Bedrock** (Carlos): 12 casos por modelo con `rag.api` real y `LLM_MAX_TOKENS`=2048. Ministral 14B y gpt-oss-120b: 11/12 lo esperado y 6/6 síntesis válidas a la primera, sin reparaciones. Medianas del turno: 4,0 s y 2,9 s; coste del lote: 0,0059 $ y 0,0087 $. Mismo fallo en los dos (`sin-01`, polen): el error era del caso, que pasa a fuera de alcance (las estaciones no miden polen); con esa lectura, gpt-oss 12/12 y Ministral 11/12. Pendiente: revisión humana y elección del modelo |
 | 2026-10-06 | **Agente LLM: síntesis forzada probada en Bedrock** (Carlos): falla con los dos modelos (`ValidationException`, falta `toolConfig` con bloques de herramienta en el historial) y el turno acaba en 503. Arreglo y revisión del prompt del clasificador (alcance: el polen no se mide) añadidos al plan del agente |
+| 2026-10-06 | **Agente LLM: síntesis forzada corregida** (Carlos): mensajes nuevos (pregunta + resultados de las herramientas en texto) en lugar del historial con bloques de herramienta; prompt de la síntesis forzada reescrito para ir solo. 31 tests (1 nuevo). Verificado en Bedrock: 4 de 4 turnos (2 preguntas × 2 modelos, `max_vueltas=1`, búsqueda que falla) llegan a la síntesis forzada y responden; ninguno da 503; Ministral responde con conocimiento propio (cifras sin evidencia), gpt-oss admite que no tiene información |
+| 2026-10-06 | **Agente LLM: sesión y un turno a la vez** (Carlos, rama `feature/Agente`): `session_id` opaco en `/responder` (generado si no llega) y `business/sesiones.py` con bloqueo y contador de usuarios por sesión. 35 tests (4 nuevos: contrato y tres de concurrencia con eventos) |
+| 2026-10-06 | **Agente LLM: streaming SSE** (Carlos, rama `feature/Agente`): `POST /responder/stream` con eventos `status`, `token`, `passthrough`, `error` y `done`; tokens solo en respuestas definitivas; emisor opcional por turno, cola acotada, heartbeat y cancelación al desconectarse el cliente (verificada con uvicorn real). 41 tests (6 nuevos). Sin probar aún contra Bedrock |
 | 2026-10-06 | **Agente LLM: lote repetido con Phoenix** (Carlos): el primero se lanzó sin `PHOENIX_ENDPOINT` (el script no lee `.env`) y solo quedó en JSONL. Misma calidad y coste; Ministral casi duplica su latencia (mediana 6,8 s frente a 4,0 s) y gpt-oss se mantiene (3,2 s). Cada lote es un proyecto en Phoenix |
+| 2026-10-06 | **Agente LLM: fase 4 cerrada, `ApiUsuario` conectado al agente** (Carlos, rama `feature/Agente`): `AGENTE_URL`, `session_id` y `traza_id` en `/chat`, y `POST /chat/stream` (proxy del SSE del agente o fallback `passthrough` + `done`). 22 tests de `ApiUsuario` (4 nuevos y 1 ampliado). Verificado con Bedrock de punta a punta (charla en tokens, documental en `passthrough`, `en_espera` y cancelación al cortar el cliente a través del proxy); 0,003 $ |
 
 
 ---

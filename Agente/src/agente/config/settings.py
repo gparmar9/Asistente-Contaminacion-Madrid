@@ -38,6 +38,10 @@ class Settings:
     traza_guardar_texto: bool = True    # false = prompts, preguntas y respuestas como __REDACTED__
     traza_razonamiento: bool = False    # guarda el razonamiento del modelo (ThinkingBlock) si lo hay
     traza_etiqueta: str = "agente"      # nombre del fichero JSONL y atributo `agente.etiqueta`
+    # /responder/stream: segundos sin eventos antes de repetir el último `status`, y tamaño de la
+    # cola de eventos (si el cliente lee despacio, el turno espera).
+    stream_heartbeat_s: float = 0.7
+    stream_cola: int = 64
 
 
 def get_settings() -> Settings:
@@ -66,6 +70,8 @@ def get_settings() -> Settings:
         traza_guardar_texto=_booleano(os.getenv("TRAZA_GUARDAR_TEXTO", "true")),
         traza_razonamiento=_booleano(os.getenv("TRAZA_RAZONAMIENTO", "false")),
         traza_etiqueta=os.getenv("TRAZA_ETIQUETA", "agente"),
+        stream_heartbeat_s=float(os.getenv("STREAM_HEARTBEAT_S", "0.7")),
+        stream_cola=int(os.getenv("STREAM_COLA", "64")),
     )
 
 
