@@ -7,6 +7,9 @@
 - `decidir()`: tabla en código con lo que se permite en el turno según la intención:
   herramientas ofrecidas, búsqueda obligatoria, frase fija o prompt del bucle.
 
+Con conversación previa, el clasificador recibe los dos últimos turnos (respuestas recortadas)
+como bloque de texto antes de la pregunta actual. Sin ella, el mensaje es solo la pregunta.
+
 `DESCONOCIDA` ofrece todas las herramientas, no obliga ninguna y no usa frases fijas:
 un clasificador caído no debe quitar herramientas ni dar respuestas enlatadas.
 """
@@ -15,13 +18,16 @@ from __future__ import annotations
 import asyncio
 import logging
 from dataclasses import dataclass
+from typing import Sequence
 
 from llama_index.core.base.llms.types import ChatMessage, MessageRole
 from llama_index.core.llms.function_calling import FunctionCallingLLM
 
 from agente import observabilidad
 from agente.business import frases
+from agente.business.memoria import texto_historial
 from agente.entities.intencion import DESCONOCIDA, Clasificacion, Intencion, Tema
+from agente.entities.memoria import TurnoGuardado
 from agente.tools import rag
 
 logger = logging.getLogger("agente.intencion")
@@ -29,13 +35,14 @@ logger = logging.getLogger("agente.intencion")
 _CLAVES = {"intencion": "intencion", "intención": "intencion", "tema": "tema"}
 # Adornos que se quitan antes de comparar. No el guion bajo: forma parte de FUERA_DE_ALCANCE.
 _ADORNOS = str.maketrans("", "", "*`")
+# Conversación previa que ve el clasificador: corta, para que siga siendo una llamada rápida.
+HISTORIAL_TURNOS = 2
+HISTORIAL_CAR_RESPUESTA = 300
 
 
-async def clasificar(llm: FunctionCallingLLM, pregunta: str, timeout_s: float) -> Clasificacion:
-    mensajes = [
-        ChatMessage(role=MessageRole.SYSTEM, content=frases.PROMPT_CLASIFICADOR),
-        ChatMessage(role=MessageRole.USER, content=pregunta),
-    ]
+async def clasificar(llm: FunctionCallingLLM, pregunta: str, timeout_s: float,
+                     historial: Sequence[TurnoGuardado] = ()) -> Clasificacion:
+    mensajes = _mensajes(pregunta, historial)
     with observabilidad.span("clasificar", "chain", entrada=pregunta) as span:
         try:
             with observabilidad.llamada_llm(llm, mensajes, []) as span_llm:
@@ -53,6 +60,17 @@ async def clasificar(llm: FunctionCallingLLM, pregunta: str, timeout_s: float) -
             logger.warning("Respuesta del clasificador con formato inválido: %r", respuesta.message.content)
             return DESCONOCIDA
         return clasificacion
+
+
+def _mensajes(pregunta: str, historial: Sequence[TurnoGuardado]) -> list[ChatMessage]:
+    if not historial:
+        return [ChatMessage(role=MessageRole.SYSTEM, content=frases.PROMPT_CLASIFICADOR),
+                ChatMessage(role=MessageRole.USER, content=pregunta)]
+    previa = texto_historial(historial, HISTORIAL_TURNOS, HISTORIAL_CAR_RESPUESTA)
+    return [ChatMessage(role=MessageRole.SYSTEM,
+                        content=frases.PROMPT_CLASIFICADOR + frases.PROMPT_CLASIFICADOR_CONTEXTO),
+            ChatMessage(role=MessageRole.USER,
+                        content=f"{frases.CONVERSACION_PREVIA}\n{previa}\n\nPregunta actual: {pregunta}")]
 
 
 def interpretar(texto: str) -> Clasificacion | None:

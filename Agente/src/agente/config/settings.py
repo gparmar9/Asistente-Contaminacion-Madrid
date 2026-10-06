@@ -42,6 +42,12 @@ class Settings:
     # cola de eventos (si el cliente lee despacio, el turno espera).
     stream_heartbeat_s: float = 0.7
     stream_cola: int = 64
+    # Memoria de la conversación (en el proceso). Tope estimado del historial que se manda al
+    # modelo (4 caracteres por token), turnos guardados por sesión y horas sin actividad tras
+    # las que se olvida una sesión.
+    memoria_presupuesto_tokens: int = 1500
+    memoria_max_turnos: int = 20
+    memoria_ttl_h: float = 168
 
 
 def get_settings() -> Settings:
@@ -72,6 +78,9 @@ def get_settings() -> Settings:
         traza_etiqueta=os.getenv("TRAZA_ETIQUETA", "agente"),
         stream_heartbeat_s=float(os.getenv("STREAM_HEARTBEAT_S", "0.7")),
         stream_cola=int(os.getenv("STREAM_COLA", "64")),
+        memoria_presupuesto_tokens=int(os.getenv("MEMORIA_PRESUPUESTO_TOKENS", "1500")),
+        memoria_max_turnos=int(os.getenv("MEMORIA_MAX_TURNOS", "20")),
+        memoria_ttl_h=float(os.getenv("MEMORIA_TTL_H", "168")),
     )
 
 

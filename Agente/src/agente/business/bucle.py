@@ -18,6 +18,11 @@ Las fases de sesión y comprobaciones se añaden encima de este esqueleto sin ca
 Cada paso deja un span (ver `agente.observabilidad`): turno > clasificar | bucle |
 busqueda_forzada | sintesis_documental | sintesis_forzada > llm y herramientas.
 
+Con historial (los turnos previos de la sesión que caben en la ventana), el contexto llega a todas
+las llamadas: al clasificador y a las síntesis como bloque de texto, al bucle como pares
+`user`/`assistant`, y a la búsqueda que lanza el código como preguntas concatenadas. `/rag/validar`
+sigue recibiendo solo la pregunta actual. Sin historial, los mensajes son los de siempre.
+
 Con un emisor (stream), el turno avisa de cada fase y entrega como tokens solo las respuestas
 definitivas: la llamada del bucle sin herramientas ofrecidas y la síntesis forzada. El resto
 (frases fijas, ruta documental, texto libre tras ofrecer herramientas) sale entero al final.
@@ -38,10 +43,12 @@ from opentelemetry.trace import Status, StatusCode
 from agente import observabilidad
 from agente.business import frases
 from agente.business.intencion import Decision, clasificar, decidir
+from agente.business.memoria import mensajes_historial, pregunta_contextual, texto_historial
 from agente.business.sintesis import EvidenciasTurno, sintesis_documental
 from agente.entities.chat import Fuente
 from agente.entities.eventos import Emisor, Evento, EventoEstado, EventoTexto, Fase
 from agente.entities.intencion import DESCONOCIDA, Clasificacion, Tema
+from agente.entities.memoria import TurnoGuardado
 from agente.tools import rag
 from agente.tools.base import Herramienta, ResultadoHerramienta, como_llamaindex
 
@@ -70,6 +77,7 @@ class ResultadoTurno:
     reparaciones: int = 0                              # ruta documental: reintentos tras validar
     traza_id: str | None = None
     emitida: bool = False                              # la respuesta ya salió como tokens por el emisor
+    respuesta_contexto: str = ""                       # la que entra en el historial; documental: sin [Dn]
 
 
 class Bucle:
@@ -84,24 +92,31 @@ class Bucle:
         self._llm_clasificador = llm_clasificador
         self._clasificador_timeout_s = clasificador_timeout_s
 
-    async def responder(self, pregunta: str, emitir: Emisor | None = None) -> ResultadoTurno:
+    async def responder(self, pregunta: str, emitir: Emisor | None = None,
+                        historial: Sequence[TurnoGuardado] = ()) -> ResultadoTurno:
         """`emitir`: recibe los eventos del turno (stream). Es por turno, nunca del `Bucle`:
-        hay turnos concurrentes. None = sin eventos, como en `/responder`."""
+        hay turnos concurrentes. None = sin eventos, como en `/responder`.
+        `historial`: turnos previos de la sesión, ya recortados por la ventana. El `Bucle` no
+        conoce el almacén."""
+        historial = list(historial)
         with observabilidad.turno(pregunta) as span:
+            span.set_attribute("agente.historial_turnos", len(historial))
             resultado = ResultadoTurno(respuesta="", traza_id=observabilidad.trace_id_actual())
             try:
-                await self._turno(pregunta, resultado, emitir or _no_emitir, _texto_al_cliente(emitir, resultado))
+                await self._turno(pregunta, historial, resultado, emitir or _no_emitir,
+                                  _texto_al_cliente(emitir, resultado))
             except asyncio.CancelledError:  # el cliente del stream se fue: no se hacen más llamadas
                 span.set_attribute("agente.cancelado", True)
                 raise
             resultado.emitida &= resultado.respuesta != frases.RESPUESTA_VACIA  # vacía: sale entera
+            resultado.respuesta_contexto = resultado.respuesta_contexto or resultado.respuesta
             span.set_output(resultado.respuesta)
             span.set_attributes(_atributos_turno(resultado))
             return resultado
 
-    async def _turno(self, pregunta: str, resultado: ResultadoTurno, emitir: Emisor,
-                     emitir_texto: Emisor | None) -> ResultadoTurno:
-        clasificacion = await self._clasificar(pregunta, emitir)
+    async def _turno(self, pregunta: str, historial: list[TurnoGuardado], resultado: ResultadoTurno,
+                     emitir: Emisor, emitir_texto: Emisor | None) -> ResultadoTurno:
+        clasificacion = await self._clasificar(pregunta, historial, emitir)
         decision = decidir(clasificacion.intencion)
         resultado.intencion = clasificacion.intencion.value
         resultado.tema = clasificacion.tema.value
@@ -115,6 +130,7 @@ class Bucle:
 
         mensajes = [
             ChatMessage(role=MessageRole.SYSTEM, content=decision.prompt),
+            *mensajes_historial(historial),
             ChatMessage(role=MessageRole.USER, content=pregunta),
         ]
         evidencias = EvidenciasTurno()
@@ -156,7 +172,7 @@ class Bucle:
             # El modelo no buscó (o su búsqueda falló por la petición): busca el código. Su texto se descarta.
             with observabilidad.span("busqueda_forzada", "chain"):
                 resultado.busqueda_forzada = True
-                argumentos = {"pregunta": pregunta}
+                argumentos = {"pregunta": pregunta_contextual(historial, pregunta)}
                 if clasificacion.tema is not Tema.NINGUNO:
                     argumentos["tema"] = clasificacion.tema.value
                 llamada = ToolSelection(tool_id=ID_BUSQUEDA_FORZADA, tool_name=rag.NOMBRE, tool_kwargs=argumentos)
@@ -170,37 +186,41 @@ class Bucle:
                     return _fija(resultado, frases.DOCUMENTACION_NO_DISPONIBLE)
 
         if evidencias:  # el texto libre del modelo se descarta: lo sustituye la ruta documental
-            return await self._cerrar_documental(pregunta, evidencias, resultado, emitir)
+            return await self._cerrar_documental(pregunta, historial, evidencias, resultado, emitir)
         if final is not None:
             resultado.respuesta = _texto(final)
             return resultado
         # Límite de vueltas: cerrar sin herramientas para que el usuario siempre reciba respuesta.
         with observabilidad.span("sintesis_forzada", "chain"):
             await emitir(EventoEstado(Fase.REDACTANDO))
-            respuesta = await self._llamar(_mensajes_sintesis_forzada(pregunta, consultas), [], emitir_texto)
+            respuesta = await self._llamar(_mensajes_sintesis_forzada(pregunta, consultas, historial), [],
+                                           emitir_texto)
             resultado.respuesta = _texto(respuesta)
             resultado.sintesis_forzada = True
         return resultado
 
     # ------------------------------------------------------------------ pasos
 
-    async def _cerrar_documental(self, pregunta: str, evidencias: EvidenciasTurno,
-                                 resultado: ResultadoTurno, emitir: Emisor) -> ResultadoTurno:
+    async def _cerrar_documental(self, pregunta: str, historial: list[TurnoGuardado],
+                                 evidencias: EvidenciasTurno, resultado: ResultadoTurno,
+                                 emitir: Emisor) -> ResultadoTurno:
         documental = await sintesis_documental(self._llamar, self._herramientas[rag.NOMBRE],
-                                               pregunta, evidencias, emitir)
+                                               pregunta, evidencias, emitir, historial)
         resultado.ruta = "documental"
         resultado.respuesta = documental.respuesta
         resultado.advertencia = documental.advertencia
         resultado.valida = documental.valida
         resultado.reparaciones = documental.reparaciones
+        resultado.respuesta_contexto = documental.respuesta_contexto or ""
         _acumular_fuentes(resultado.fuentes, documental.fuentes)  # solo los documentos citados
         return resultado
 
-    async def _clasificar(self, pregunta: str, emitir: Emisor) -> Clasificacion:
+    async def _clasificar(self, pregunta: str, historial: list[TurnoGuardado],
+                          emitir: Emisor) -> Clasificacion:
         if self._llm_clasificador is None:
             return DESCONOCIDA
         await emitir(EventoEstado(Fase.CLASIFICANDO))
-        return await clasificar(self._llm_clasificador, pregunta, self._clasificador_timeout_s)
+        return await clasificar(self._llm_clasificador, pregunta, self._clasificador_timeout_s, historial)
 
     async def _herramientas_disponibles(self, decision: Decision) -> dict[str, BaseTool]:
         """Se ofrecen las herramientas que permite la decisión y cuya definición se pudo obtener ahora."""
@@ -341,10 +361,13 @@ def _texto(respuesta: ChatResponse) -> str:
     return contenido or frases.RESPUESTA_VACIA
 
 
-def _mensajes_sintesis_forzada(pregunta: str, consultas: list[str]) -> list[ChatMessage]:
+def _mensajes_sintesis_forzada(pregunta: str, consultas: list[str],
+                               historial: list[TurnoGuardado]) -> list[ChatMessage]:
     # Mensajes nuevos, como en la síntesis documental: Bedrock Converse rechaza los bloques
     # toolUse/toolResult del historial cuando la llamada no lleva herramientas (toolConfig).
     usuario = f"Pregunta: {pregunta}\n\nResultados de las consultas:\n" + "\n".join(consultas)
+    if historial:
+        usuario = f"{frases.CONVERSACION_PREVIA_SINTESIS}\n{texto_historial(historial)}\n\n{usuario}"
     return [ChatMessage(role=MessageRole.SYSTEM, content=frases.PROMPT_SINTESIS_FORZADA),
             ChatMessage(role=MessageRole.USER, content=usuario)]
 

@@ -12,9 +12,16 @@ escribe en `resultados/` un markdown fechado con tres criterios separados:
 
 Sin jueces LLM. Al final va el informe de trazas del lote (latencia, tokens y coste).
 
+Conversaciones (`casos_conversacion.json`, o un caso con `turnos`): cada turno pasa por la capa
+HTTP en proceso (`main._turno_en_sesion`) con el mismo `session_id` y un almacén de memoria por
+conversación, como en el servicio. El id de cada turno es `<conversación>.<n>`. Un turno con
+`referente` exige que alguna búsqueda del turno (del modelo o del código) mencione una de las
+alternativas; se lee de los spans `buscar_evidencias` del JSONL.
+
 Uso, desde la carpeta Agente/, con rag.api levantado y el proveedor en el entorno:
     LLM_PROVEEDOR=bedrock LLM_MODELO=mistral.ministral-3-14b-instruct AWS_REGION=eu-west-1 \\
       AWS_PROFILE=pontia RAG_URL=http://localhost:8010 .venv/bin/python evaluacion/evaluar_turnos.py
+    ... evaluacion/evaluar_turnos.py --casos evaluacion/casos_conversacion.json
 """
 from __future__ import annotations
 
@@ -36,7 +43,9 @@ sys.path.insert(0, str(RAIZ))  # evaluacion.informe_trazas
 
 from agente import observabilidad  # noqa: E402
 from agente.business.bucle import Bucle, LLMNoDisponible, ResultadoTurno  # noqa: E402
+from agente.business.sesiones import Sesiones  # noqa: E402
 from agente.config.settings import get_settings  # noqa: E402
+from agente.datos.memoria import AlmacenEnMemoria  # noqa: E402
 from agente.tools import rag  # noqa: E402
 from evaluacion import informe_trazas  # noqa: E402
 
@@ -51,6 +60,7 @@ class ResultadoCaso:
     fallos: list[str] = field(default_factory=list)   # diferencias con lo esperado
     duracion_ms: float = 0.0
     json_a_la_primera: bool | None = None             # None = sin síntesis documental o sin texto en la traza
+    historial: int | None = None                      # turnos previos enviados (span `turno`); None = sin traza
 
     @property
     def cumple(self) -> bool:
@@ -78,6 +88,43 @@ async def evaluar_caso(bucle: Bucle, caso: dict) -> ResultadoCaso:
     return rc
 
 
+async def evaluar_conversacion(bucle: Bucle, conversacion: dict) -> list[ResultadoCaso]:
+    """Los turnos en orden, en la misma sesión y con memoria, por el mismo camino que el servicio."""
+    from agente.main import _turno_en_sesion  # aquí y no arriba: solo las conversaciones necesitan FastAPI
+
+    sesiones, memoria, session_id = Sesiones(), AlmacenEnMemoria(), f"eval-{conversacion['id']}"
+    resultados = []
+    for n, turno in enumerate(conversacion["turnos"], start=1):
+        rc = ResultadoCaso(caso={**turno, "id": f"{conversacion['id']}.{n}"})
+        inicio = time.perf_counter()
+        try:
+            rc.resultado = await _turno_en_sesion(bucle, sesiones, session_id, turno["pregunta"], memoria=memoria)
+            rc.fallos = comprobar(turno["esperado"], rc.resultado)
+        except LLMNoDisponible as exc:
+            rc.fallos = [f"error: LLM no disponible ({exc})"]
+        rc.duracion_ms = (time.perf_counter() - inicio) * 1000
+        resultados.append(rc)
+    return resultados
+
+
+def comprobar_referente(turno: informe_trazas.Turno, alternativas: list[str]) -> str | None:
+    """None si alguna búsqueda del turno menciona una alternativa; si no, el fallo."""
+    consultas = []
+    for s in turno.spans:
+        if s["name"] != rag.NOMBRE:
+            continue
+        entrada = s["attributes"].get("input.value", "")
+        try:
+            consultas.append(" ".join(str(v) for v in json.loads(entrada).values()))
+        except (TypeError, ValueError, AttributeError):
+            consultas.append(str(entrada))
+    if not consultas:
+        return "referente: no hubo búsqueda"
+    if any(a.lower() in c.lower() for a in alternativas for c in consultas):
+        return None
+    return f"referente: ninguna búsqueda menciona {' / '.join(alternativas)} ({' | '.join(consultas)})"
+
+
 def json_a_la_primera(turno: informe_trazas.Turno) -> bool | None:
     """¿La primera salida de la síntesis fue un objeto JSON? La lee del primer span `validar`."""
     validar = next((s for s in turno.spans if s["name"] == "validar"), None)
@@ -99,14 +146,15 @@ def informe_lote(resultados: list[ResultadoCaso], cabecera: str, trazas: str) ->
               f"{sum(rc.json_a_la_primera is True for rc in sintesis)}/{len(sintesis)}; referencias válidas "
               f"{sum(rc.resultado.valida for rc in sintesis)}/{len(sintesis)} "
               f"(reparaciones: {sum(rc.resultado.reparaciones for rc in sintesis)})."]
-    filas = [["Caso", "Intención", "Ruta", "Búsqueda", "Cita", "JSON a la primera", "Referencias válidas",
-              "Reparaciones", "ms", "Fallos"]]
+    filas = [["Caso", "Historial", "Intención", "Ruta", "Búsqueda", "Cita", "JSON a la primera",
+              "Referencias válidas", "Reparaciones", "ms", "Fallos"]]
     for rc in resultados:
         r = rc.resultado
         if r is None:
-            filas.append([rc.caso["id"]] + ["—"] * 8 + ["; ".join(rc.fallos)])
+            filas.append([rc.caso["id"]] + ["—"] * 9 + ["; ".join(rc.fallos)])
             continue
-        filas.append([rc.caso["id"], r.intencion, r.ruta, _si_no(rag.NOMBRE in r.herramientas_usadas),
+        filas.append([rc.caso["id"], _si_no(rc.historial), r.intencion, r.ruta,
+                      _si_no(rag.NOMBRE in r.herramientas_usadas),
                       _si_no(any(f.tipo == "documento" for f in r.fuentes)), _si_no(rc.json_a_la_primera),
                       _si_no(r.valida), str(r.reparaciones) if r.valida is not None else "—",
                       f"{rc.duracion_ms:.0f}", "; ".join(rc.fallos) or "ok"])
@@ -158,11 +206,12 @@ async def ejecutar(args: argparse.Namespace) -> None:
     print(f"Lote {etiqueta}: {len(casos)} casos · {settings.llm_proveedor} · {settings.llm_modelo}\n")
     resultados = []
     for caso in casos:
-        rc = await evaluar_caso(bucle, caso)
-        resultados.append(rc)
-        ruta = rc.resultado.ruta if rc.resultado else "error"
-        print(f"{'ok ' if rc.cumple else 'MAL'} {rc.duracion_ms:6.0f} ms  {caso['id']:<7} {ruta:<13} "
-              f"{'; '.join(rc.fallos)}")
+        nuevos = await evaluar_conversacion(bucle, caso) if "turnos" in caso else [await evaluar_caso(bucle, caso)]
+        resultados += nuevos
+        for rc in nuevos:
+            ruta = rc.resultado.ruta if rc.resultado else "error"
+            print(f"{'ok ' if rc.cumple else 'MAL'} {rc.duracion_ms:6.0f} ms  {rc.caso['id']:<8} {ruta:<13} "
+                  f"{'; '.join(rc.fallos)}")
     observabilidad.cerrar()  # vacía los spans pendientes al JSONL
 
     trazas = "Sin fichero de trazas."
@@ -170,14 +219,22 @@ async def ejecutar(args: argparse.Namespace) -> None:
         lista, huerfanas = informe_trazas.turnos(informe_trazas.cargar([fichero]))
         por_traza = {t.trace_id: t for t in lista}
         for rc in resultados:
-            if rc.resultado and rc.resultado.traza_id in por_traza:
-                rc.json_a_la_primera = json_a_la_primera(por_traza[rc.resultado.traza_id])
+            traza = por_traza.get(rc.resultado.traza_id) if rc.resultado else None
+            if traza is not None:
+                rc.json_a_la_primera = json_a_la_primera(traza)
+                rc.historial = traza.atributo("agente.historial_turnos")
+            if rc.resultado and "referente" in rc.caso:
+                fallo = (comprobar_referente(traza, rc.caso["referente"]) if traza is not None
+                         else "referente: sin traza para comprobarlo")
+                if fallo:
+                    rc.fallos.append(fallo)
+                    print(f"MAL {rc.caso['id']}: {fallo}")
         trazas = informe_trazas.informe(lista, huerfanas)
 
     cabecera = (f"# Evaluación de turnos: `{etiqueta}`\n\n"
                 f"Fecha: {inicio:%Y-%m-%d %H:%M} · proveedor {settings.llm_proveedor} · modelo "
                 f"{settings.llm_modelo} · LLM_MAX_TOKENS {settings.llm_max_tokens} · casos: "
-                f"`{args.casos.name}` ({len(casos)}) · trazas: `{fichero.name if fichero else '—'}`")
+                f"`{args.casos.name}` ({len(casos)}; {len(resultados)} turnos) · trazas: `{fichero.name if fichero else '—'}`")
     RESULTADOS.mkdir(exist_ok=True)
     salida = RESULTADOS / f"turnos_{etiqueta}_{inicio:%Y%m%d_%H%M%S}.md"
     salida.write_text(informe_lote(resultados, cabecera, trazas), encoding="utf-8")

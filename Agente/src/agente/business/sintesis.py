@@ -6,6 +6,9 @@
       -> válida: passthrough del texto que renderiza el RAG; si no, frase de insuficiencia
 
 El modelo nunca escribe el texto final con citas: lo renderiza el RAG.
+
+Con conversación previa, el mensaje la lleva como bloque de texto marcado como «no es evidencia».
+`/rag/validar` recibe solo la pregunta actual: activa los avisos del turno, no los de los anteriores.
 """
 from __future__ import annotations
 
@@ -13,14 +16,16 @@ import json
 import logging
 import re
 from dataclasses import dataclass, field, replace
-from typing import Any, Awaitable, Callable
+from typing import Any, Awaitable, Callable, Sequence
 
 from llama_index.core.base.llms.types import ChatMessage, ChatResponse, MessageRole
 
 from agente import observabilidad
 from agente.business import frases
+from agente.business.memoria import texto_historial
 from agente.entities.chat import Fuente
 from agente.entities.eventos import Emisor, EventoEstado, Fase
+from agente.entities.memoria import TurnoGuardado
 from agente.tools.base import ResultadoHerramienta
 from agente.tools.rag import HerramientaRag
 
@@ -28,6 +33,7 @@ logger = logging.getLogger("agente.sintesis")
 
 MAX_REPARACIONES = 1
 _RE_BLOQUE_CODIGO = re.compile(r"^```(?:json)?\s*|\s*```$")
+_RE_MARCA = re.compile(r"\s*\[D\d+(?:\s*,\s*D\d+)*\]")  # [D1] o [D1, D2]
 
 Llamar = Callable[[list[ChatMessage], list], Awaitable[ChatResponse]]
 
@@ -72,28 +78,31 @@ class ResultadoDocumental:
     advertencia: str | None = None
     valida: bool = False
     reparaciones: int = 0
+    respuesta_contexto: str | None = None  # válida: las afirmaciones sin [Dn], aviso ni bibliografía
 
 
 async def sintesis_documental(llamar: Llamar, rag: HerramientaRag, pregunta: str,
-                              evidencias: EvidenciasTurno, emitir: Emisor) -> ResultadoDocumental:
+                              evidencias: EvidenciasTurno, emitir: Emisor,
+                              historial: Sequence[TurnoGuardado] = ()) -> ResultadoDocumental:
     """`emitir` solo recibe las fases: el JSON de la síntesis nunca sale como tokens."""
     with observabilidad.span("sintesis_documental", "chain") as span:
-        resultado = await _sintesis(llamar, rag, pregunta, evidencias, emitir)
+        resultado = await _sintesis(llamar, rag, pregunta, evidencias, emitir, historial)
         span.set_attributes({"agente.valida": resultado.valida, "agente.reparaciones": resultado.reparaciones})
         if not resultado.valida:
             observabilidad.decision("insuficiencia")
         return resultado
 
 
-async def _sintesis(llamar: Llamar, rag: HerramientaRag, pregunta: str,
-                    evidencias: EvidenciasTurno, emitir: Emisor) -> ResultadoDocumental:
-    mensajes = _mensajes_sintesis(pregunta, evidencias, rag.esquema_salida)
+async def _sintesis(llamar: Llamar, rag: HerramientaRag, pregunta: str, evidencias: EvidenciasTurno,
+                    emitir: Emisor, historial: Sequence[TurnoGuardado]) -> ResultadoDocumental:
+    mensajes = _mensajes_sintesis(pregunta, evidencias, rag.esquema_salida, historial)
     for intento in range(MAX_REPARACIONES + 1):
         await emitir(EventoEstado(Fase.REDACTANDO))
         respuesta = await llamar(mensajes, [])
         salida_texto = respuesta.message.content or ""
+        salida = _parsear(salida_texto)
         await emitir(EventoEstado(Fase.VALIDANDO))
-        validacion = await rag.validar(pregunta, evidencias.referencias(), _parsear(salida_texto))
+        validacion = await rag.validar(pregunta, evidencias.referencias(), salida)
         if validacion is None:
             break
         if validacion["valida"]:
@@ -103,6 +112,7 @@ async def _sintesis(llamar: Llamar, rag: HerramientaRag, pregunta: str,
                 advertencia=frases.AVISO_SANITARIO if validacion["aviso_sanitario"] else None,
                 valida=True,
                 reparaciones=intento,
+                respuesta_contexto=_texto_afirmaciones(salida),
             )
         logger.warning("Salida documental inválida (intento %d): %s", intento + 1,
                     validacion["mensaje_reparacion"])
@@ -113,8 +123,8 @@ async def _sintesis(llamar: Llamar, rag: HerramientaRag, pregunta: str,
     return ResultadoDocumental(respuesta=frases.INSUFICIENCIA, reparaciones=intento)
 
 
-def _mensajes_sintesis(pregunta: str, evidencias: EvidenciasTurno,
-                       esquema: dict | None) -> list[ChatMessage]:
+def _mensajes_sintesis(pregunta: str, evidencias: EvidenciasTurno, esquema: dict | None,
+                       historial: Sequence[TurnoGuardado]) -> list[ChatMessage]:
     # Mensajes nuevos, sin el historial de herramientas: la síntesis no tiene herramientas y
     # Bedrock Converse rechaza bloques toolUse/toolResult sin toolConfig.
     sistema = frases.PROMPT_SINTESIS_DOCUMENTAL
@@ -122,6 +132,8 @@ def _mensajes_sintesis(pregunta: str, evidencias: EvidenciasTurno,
         sistema += "\n\nEsquema JSON de la respuesta:\n" + json.dumps(esquema, ensure_ascii=False)
     usuario = (f"Pregunta: {pregunta}\n\nEvidencias:\n"
                + json.dumps(evidencias.para_sintesis(), ensure_ascii=False, indent=1))
+    if historial:
+        usuario = f"{frases.CONVERSACION_PREVIA_SINTESIS}\n{texto_historial(historial)}\n\n{usuario}"
     return [ChatMessage(role=MessageRole.SYSTEM, content=sistema),
             ChatMessage(role=MessageRole.USER, content=usuario)]
 
@@ -133,3 +145,13 @@ def _parsear(texto: str) -> Any:
         return json.loads(_RE_BLOQUE_CODIGO.sub("", texto.strip()))
     except ValueError:
         return texto
+
+
+def _texto_afirmaciones(salida: Any) -> str | None:
+    """Texto de las afirmaciones de una salida ya validada, sin marcas `[Dn]`: la numeración es
+    de cada turno y en el siguiente no significaría nada."""
+    try:
+        textos = [_RE_MARCA.sub("", a["texto"]).strip() for a in salida["afirmaciones"]]
+    except (KeyError, TypeError):
+        return None
+    return " ".join(t for t in textos if t) or None

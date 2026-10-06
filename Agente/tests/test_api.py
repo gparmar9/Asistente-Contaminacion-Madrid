@@ -49,7 +49,7 @@ def test_responder_genera_o_conserva_la_sesion(cliente):
 
 def test_llm_caido_devuelve_503(cliente):
     class _BucleRoto:
-        async def responder(self, pregunta, emitir=None):
+        async def responder(self, pregunta, emitir=None, historial=()):
             raise LLMNoDisponible("sin red")
 
     app.dependency_overrides[get_bucle] = lambda: _BucleRoto()

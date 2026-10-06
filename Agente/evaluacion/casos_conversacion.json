@@ -1,0 +1,40 @@
+[
+  {"id": "con-01", "nota": "Cadena de seguimientos: el tercer turno solo se entiende con los dos anteriores",
+   "turnos": [
+     {"pregunta": "¿Qué efectos tiene el NO2 en la salud?",
+      "esperado": {"intencion": "DOCUMENTAL", "ruta": "documental", "busqueda": true, "cita": true}},
+     {"pregunta": "¿Y en niños?", "referente": ["NO2", "dióxido de nitrógeno"],
+      "esperado": {"intencion": "DOCUMENTAL", "ruta": "documental", "busqueda": true, "cita": true}},
+     {"pregunta": "¿Y a largo plazo?", "referente": ["NO2", "dióxido de nitrógeno"],
+      "esperado": {"intencion": "DOCUMENTAL", "ruta": "documental", "busqueda": true, "cita": true}}
+   ]},
+  {"id": "con-02", "nota": "Cambio de tema: de salud a normativa; la búsqueda no debe quedarse en el ozono",
+   "turnos": [
+     {"pregunta": "¿Qué síntomas puede empeorar el ozono?",
+      "esperado": {"intencion": "DOCUMENTAL", "ruta": "documental", "busqueda": true, "cita": true}},
+     {"pregunta": "¿Qué medidas toma el Ayuntamiento cuando se activa el protocolo por episodio de contaminación?",
+      "referente": ["protocolo", "episodio"],
+      "esperado": {"intencion": "DOCUMENTAL", "ruta": "documental", "busqueda": true, "cita": true}}
+   ]},
+  {"id": "con-03", "nota": "De la charla a una pregunta documental",
+   "turnos": [
+     {"pregunta": "Hola, ¿qué sabes hacer?",
+      "esperado": {"intencion": "CHARLA", "ruta": "libre", "busqueda": false}},
+     {"pregunta": "Pues explícame por qué son peligrosas las partículas PM2.5.",
+      "esperado": {"intencion": "DOCUMENTAL", "ruta": "documental", "busqueda": true, "cita": true}}
+   ]},
+  {"id": "con-04", "nota": "De una pregunta documental a otra fuera de alcance (el polen no se mide)",
+   "turnos": [
+     {"pregunta": "¿Qué efectos tiene el ozono en la salud?",
+      "esperado": {"intencion": "DOCUMENTAL", "ruta": "documental", "busqueda": true, "cita": true}},
+     {"pregunta": "¿Y cuándo empieza la temporada de polen?",
+      "esperado": {"intencion": "FUERA_DE_ALCANCE", "ruta": "fija", "busqueda": false}}
+   ]},
+  {"id": "con-05", "nota": "Seguimiento de normativa: la OMS se refiere al mismo contaminante",
+   "turnos": [
+     {"pregunta": "¿Cuál es el límite legal anual del NO2?",
+      "esperado": {"intencion": "DOCUMENTAL", "ruta": "documental", "busqueda": true, "cita": true}},
+     {"pregunta": "¿Y el que recomienda la OMS?", "referente": ["NO2", "dióxido de nitrógeno"],
+      "esperado": {"intencion": "DOCUMENTAL", "ruta": "documental", "busqueda": true, "cita": true}}
+   ]}
+]

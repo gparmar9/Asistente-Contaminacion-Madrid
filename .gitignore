@@ -60,6 +60,8 @@ docs/arquitectura_estado_actual.md
 .claude/
 docs/agente/plan_observabilidad_agente.md
 docs/agente/plan_fase4_streaming_sesion.md
+docs/agente/plan_agente_llm.md
+docs/agente/plan_fase5_memoria.md
 docs/agente/estado_agente.md
 docs/agente/decisiones_agente.md
 docs/agente/estado_agente.md

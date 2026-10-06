@@ -24,6 +24,24 @@ Un turno a la vez por sesión: una segunda pregunta de la misma sesión espera a
 primera (en el stream, recibiendo `status` con `en_espera`). El bloqueo vive en memoria del
 proceso: con varios procesos del agente haría falta otra coordinación.
 
+**Memoria de la conversación.** Dos turnos con el mismo `session_id` comparten contexto, para
+entender seguimientos como «¿Y en niños?». El historial sirve para interpretar la pregunta; las
+respuestas documentales siguen citando solo evidencias del turno.
+
+- Se guardan solo los turnos completados (no los cancelados ni los que fallan por el LLM). Las
+  frases fijas también se guardan.
+- En la ruta documental se recuerda el texto de las afirmaciones, sin `[Dn]`, aviso ni bibliografía.
+- El historial llega al clasificador (2 últimos turnos), al bucle, a las síntesis y a la búsqueda
+  que lanza el código (2 preguntas previas + la actual). `/rag/validar` ve solo la pregunta actual.
+- **Límites:** vive en el proceso, así que se pierde al reiniciar o desplegar, y exige arrancar
+  **un solo proceso** de uvicorn (sin `--workers`), igual que el bloqueo por sesión.
+
+| Variable | Por defecto | Qué hace |
+|-|-|-|
+| `MEMORIA_PRESUPUESTO_TOKENS` | 1500 | Tope del historial que se manda (turnos completos, estimado a 4 caracteres por token) |
+| `MEMORIA_MAX_TURNOS` | 20 | Turnos guardados por sesión |
+| `MEMORIA_TTL_H` | 168 | Horas sin actividad tras las que se olvida una sesión |
+
 ### Streaming (`/responder/stream`)
 
 Cada evento es `event: <tipo>\ndata: <json>\n\n`, con `Cache-Control: no-cache` y
@@ -164,7 +182,9 @@ pytest tests/ -v
 
 ## Medir el clasificador (fuera de CI)
 
-Con un proveedor real en `.env`: 20 preguntas etiquetadas a mano en `evaluacion/`.
+Con un proveedor real en `.env`: 29 preguntas etiquetadas a mano en
+`evaluacion/preguntas_clasificador.json`; algunas llevan `historial` (seguimientos) y el acierto
+de los casos de la fase 5 sale aparte.
 
 ```bash
 set -a && . ./.env && set +a
@@ -184,6 +204,12 @@ y el informe de trazas. Sin jueces LLM.
 LLM_PROVEEDOR=bedrock LLM_MODELO=mistral.ministral-3-14b-instruct AWS_REGION=eu-west-1 \
   AWS_PROFILE=pontia RAG_URL=http://localhost:8010 .venv/bin/python evaluacion/evaluar_turnos.py
 # --caso doc-01 --caso sin-02 para repetir solo algunos
+# --casos evaluacion/casos_conversacion.json para las conversaciones
 ```
+
+Conversaciones: `evaluacion/casos_conversacion.json` tiene 5 conversaciones de 2–3 turnos. Cada
+turno pasa por la misma capa de sesión y memoria que el servicio, y en los seguimientos se
+comprueba en las trazas que la búsqueda nombre el `referente` (por ejemplo, el NO2 en «¿Y a largo
+plazo?»). El markdown añade la columna «Historial» (turnos previos enviados).
 
 La carpeta `resultados/` no se versiona; los resultados revisados se añaden con `git add -f`.

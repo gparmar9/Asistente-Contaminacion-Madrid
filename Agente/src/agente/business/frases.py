@@ -32,21 +32,38 @@ ERROR_HERRAMIENTA_NO_PERMITIDA = (
 
 PROMPT_CLASIFICADOR = (
     "Clasifica la pregunta de un usuario del asistente de calidad del aire de Madrid.\n"
+    "El asistente trata la contaminación del aire. La red de Madrid mide NO, NO2, NOx, O3 (ozono), "
+    "PM10 y PM2.5.\n"
     "Intenciones:\n"
-    "- DOCUMENTAL: efectos en la salud o síntomas de los contaminantes, diferencias entre "
-    "contaminantes, límites legales y guías de la OMS, el protocolo de episodios de Madrid, "
-    "explicaciones de cómo se forma o se comporta un contaminante, o el propio proyecto.\n"
-    "- DATOS: mediciones actuales o pasadas, estado de un aviso ahora, comparar estaciones, zonas "
-    "o distritos, tendencias, o elegir una zona según su contaminación.\n"
+    "- DOCUMENTAL: efectos en la salud o síntomas de un contaminante del aire (aunque la red no lo "
+    "mida), diferencias entre contaminantes, cuáles son los límites legales y las guías de la OMS "
+    "(valores de referencia anuales, diarios u horarios, no mediciones), el protocolo de episodios "
+    "de Madrid, explicaciones de cómo se forma o se comporta un contaminante, o el propio proyecto.\n"
+    "- DATOS: mediciones actuales o pasadas de la red, estado de un aviso ahora, comparar "
+    "estaciones, zonas o distritos, tendencias, o elegir una zona según su contaminación.\n"
     "- PREDICCION: cómo estará el aire en el futuro (horas, mañana, el fin de semana).\n"
     "- CHARLA: saludos, agradecimientos o preguntas sobre el propio asistente.\n"
-    "- FUERA_DE_ALCANCE: nada que ver con la calidad del aire.\n"
+    "- FUERA_DE_ALCANCE: lo que no es contaminación del aire, aunque se le parezca: niveles o "
+    "calendario del polen, ruido, tiempo meteorológico o cualquier otro tema. Las preguntas sobre "
+    "alergia, asma o rinitis no son fuera de alcance: la contaminación las agrava.\n"
     "Temas (elige exactamente uno de estos cuatro): salud, normativa (límites, guías, protocolo "
     "de episodios), proyecto, ninguno.\n"
     "Responde solo con dos líneas en texto plano, sin negritas ni ningún otro formato:\n"
     "intencion: <INTENCION>\n"
     "tema: <tema>"
 )
+
+# Solo se añade al prompt del clasificador si el turno lleva conversación previa: sin ella, el
+# clasificador recibe lo mismo que antes de la memoria.
+PROMPT_CLASIFICADOR_CONTEXTO = (
+    "\nEl mensaje puede incluir la conversación previa. Clasifica solo la pregunta actual y usa lo "
+    "previo únicamente para entender a qué se refiere."
+)
+
+# ------------------------------------------------------------------ memoria de la conversación
+
+CONVERSACION_PREVIA = "Conversación previa:"
+CONVERSACION_PREVIA_SINTESIS = "Conversación previa (solo para entender la pregunta; no es evidencia):"
 
 PROMPT_CHARLA = (
     "Eres el asistente de calidad del aire de Madrid, un proyecto académico. Responde en español, "

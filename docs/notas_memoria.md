@@ -104,6 +104,8 @@ Hilo conductor de la memoria: cómo y por qué cambió el diseño.
 | 2026-10-04 | Agente LLM | `LLMOrchestrator` como único agente → **nuevo servicio `Agente`** (puerto 8200), diseñado desde cero con un **bucle de herramientas escrito a mano**; **LlamaIndex solo como cliente del LLM** (`OpenAILike` para APIs OpenAI-compatibles y `BedrockConverse` para Amazon Bedrock, elegibles por variable de entorno) y, más adelante, como almacén del chat. Ambos servicios conviven sin código ni dependencias compartidas; `ApiUsuario` elegirá uno por configuración | Principios tomados de las clases del máster y de un diseño de agente empresarial: pocas piezas, el modelo clasifica y el código decide, fases pequeñas con salida tipada y valor seguro, síntesis final sin herramientas, lo determinista lo entrega el código. **Descartado un framework de agentes completo** (ReAct/`AgentWorkflow` de LlamaIndex, LangGraph): esconde el bucle que precisamente se quiere controlar (vetar u obligar herramientas, cerrar el turno sin modelo, validar la salida con el RAG) y arrastra abstracciones que no se usan. Descartado también ampliar `LLMOrchestrator`: su bucle no tiene puntos de intervención en código y rehacerlo dentro equivalía a reescribirlo. Bedrock entra como proveedor de producción porque la cuenta del máster da acceso; el modelo concreto en `eu-west-1` con *tool use* y *streaming* queda `[por confirmar]` |
 | 2026-10-06 | Sesión en el agente | Servicios sin estado (2026-09-27) → **`session_id` opaco** en `/responder` (se genera si no llega) y **un turno a la vez por sesión** | El streaming y la memoria de la conversación (fases 4 y 5) necesitan agrupar los turnos. Sin usuarios ni datos personales: el id no identifica a nadie y el agente aún no guarda nada con él |
 | 2026-10-06 | Chat de `ApiUsuario` | `/chat` solo hacia `ORCHESTRATOR_URL` (o stub), sin sesión → **`AGENTE_URL` elige el agente**; `session_id` y `traza_id` opcionales en el contrato y **`POST /chat/stream`** (proxy del SSE del agente, o `passthrough` + `done` sin agente) | Los dos agentes conviven y se elige por configuración, sin tocar código. El fallback mantiene el contrato del stream para el frontend aunque el orquestador no conserve contexto |
+| 2026-10-06 | Memoria de la conversación del agente | Diseño previsto (2026-10-04): `PostgresChatStore` de LlamaIndex sobre la base del proyecto, estado tipado entre turnos (`turn_state`) e intención `REPETIR` → **almacén propio en memoria del proceso** (1 semana sin actividad, 20 turnos por sesión) y ventana por presupuesto de tokens; **LlamaIndex queda solo como cliente del LLM**. Sin `REPETIR` y con `turn_state` aplazado | Un TFM no necesita que las conversaciones sobrevivan a un reinicio, y el bloqueo por sesión ya exige un solo proceso: Postgres añadiría tablas, migraciones y una dependencia más en cada turno. El almacén vive detrás de una interfaz: pasar a una base de datos cambiaría una clase. `SimpleChatStore` solo guarda listas de mensajes, sin caducidad ni metadatos del turno. `REPETIR` desde cifras sueltas pierde a qué contaminante, unidad o fuente pertenece cada una; un «¿cuál era ese límite?» se trata como pregunta normal con contexto. El estado semántico se definirá cuando lo pida una necesidad concreta (comprobaciones de cifras, herramienta SQL) |
+| 2026-10-06 | Alcance del clasificador del agente | Alcance por tema («calidad del aire») → **alcance por lo que el sistema puede responder**: contaminación del aire, con los contaminantes que mide la red citados en el prompt; polen, ruido y tiempo fuera; alergia y asma dentro; los límites legales son documentación, no mediciones | En el lote del 2026-10-06 los dos modelos fallaron la pregunta del polen de forma distinta (uno `DATOS`, otro `FUERA_DE_ALCANCE`). Medido antes y después: 27/28 → 29/29 con los dos modelos (§7.3.1) |
 
 **Decisiones abiertas que alimentarán esta tabla:** proveedor concreto del LLM (se decidirá al
 conectar el bucle real: crear cuenta y verificar límites en consola) y dónde se despliega el
@@ -181,7 +183,7 @@ mediante *tool use*.
 |---|---|---|
 | 1 | Datos, detector de anomalías, pipeline en tiempo real | Hecha en local; migración a AWS en curso |
 | 2 | Vector DB y servicio de evidencias | **Reescrita** (2026-09-23) como servicio de evidencias y mergeada en `development`; pendiente de pasar a `main` |
-| 3 | LLM con *tool use* | **Dos servicios** (§7.3): `LLMOrchestrator`, implementado (2026-09-28; ruta documental por contrato HTTP el 2026-09-30) con `query_sql` y `buscar_evidencias`, 51 tests, sin proveedor conectado; y `Agente` (2026-10-04), rediseño por fases con bucle propio y LlamaIndex como cliente: fases 1 a 4 de 7 hechas (esqueleto, herramienta documental, ruta documental validada, clasificador de intención, sesión y streaming SSE; 41 tests), probado con Amazon Bedrock |
+| 3 | LLM con *tool use* | **Dos servicios** (§7.3): `LLMOrchestrator`, implementado (2026-09-28; ruta documental por contrato HTTP el 2026-09-30) con `query_sql` y `buscar_evidencias`, 51 tests, sin proveedor conectado; y `Agente` (2026-10-04), rediseño por fases con bucle propio y LlamaIndex como cliente: fases 1 a 5 de 7 hechas (esqueleto, herramienta documental, ruta documental validada, clasificador de intención, sesión y streaming SSE, memoria de la conversación; 51 tests), probado con Amazon Bedrock |
 | 4 | Informes y dashboard | En curso: `ApiUsuario` con `/estaciones`, `/estaciones/{codigo}/series`, `/chat` y `/chat/stream` (proxy al agente o al orquestador, con stub), tests propios y job de CI. Informes y dashboard pendientes |
 
 **Stack actual:** Python 3.12 · pandas · NumPy · scikit-learn · PostgreSQL 18 (RDS) · SQLAlchemy ·
@@ -422,7 +424,7 @@ herramientas, ruta documental y streaming); el orquestador sigue sin proveedor c
 
 #### 7.3.1 `Agente` — rediseño por fases (en construcción)
 
-**Estado (2026-10-06): fases 1 a 4 de 7 hechas, más la observabilidad (partes A, B y C)** (rama `feature/Agente`). Servicio FastAPI en `Agente/`
+**Estado (2026-10-06): fases 1 a 5 de 7 hechas, más la observabilidad (partes A, B y C)** (rama `feature/Agente`). Servicio FastAPI en `Agente/`
 (paquete `agente`, puerto 8200, `GET /salud`, `POST /responder` con el mismo contrato que reenvía
 `ApiUsuario` y `POST /responder/stream`), misma convención por capas que `ApiUsuario`.
 
@@ -472,13 +474,87 @@ sesión: la segunda recibe `en_espera` ~6 s y se ejecuta después. Corte del cli
 través del proxy: el agente cancela a los 6,3 s, sin más llamadas, con `agente.cancelado` y la
 sesión libre.
 
+**Memoria de la conversación (fase 5, 2026-10-06).** El agente recuerda cada sesión para
+interpretar preguntas de seguimiento («¿Qué efectos tiene el NO2?» → «¿Y en niños?» → «¿Y a largo
+plazo?»). Regla de fondo: **el historial interpreta, las evidencias fundamentan**; la ruta
+documental sigue exigiendo que cada afirmación cite evidencias del turno.
+- **Almacén** en memoria del proceso, detrás de una interfaz en la capa de datos (pasar a una base
+  de datos cambiaría una clase). Cada turno completado se guarda como una entidad (pregunta,
+  respuesta mostrada, respuesta para el contexto, intención, ruta, fuentes, `traza_id`). Como mucho
+  20 turnos por sesión; una sesión sin actividad durante una semana se olvida (purga perezosa al
+  guardar, sin tareas en segundo plano). Un turno cancelado o con el LLM caído no se guarda; las
+  frases fijas sí, y entran en el contexto: el modelo sabe qué se ha rechazado ya.
+- **Ventana**: turnos completos, del más reciente hacia atrás, mientras quepan en 1.500 tokens
+  estimados a 4 caracteres por token (no hay tokenizador local para los modelos de Bedrock).
+- **Lo que se recuerda no es lo que se mostró.** En la ruta documental el texto entregado lleva
+  aviso, evidencias con `chunk_id` y bibliografía; al contexto va solo el texto de las afirmaciones
+  validadas, sin marcas `[Dn]` (la numeración es de cada turno). Nada interno llega al modelo:
+  ni mensajes `system` extra ni metadatos.
+- **Dónde entra el contexto**: en el clasificador, como bloque de texto con los 2 últimos turnos
+  (respuestas recortadas a 300 caracteres) para que siga siendo corto; en el bucle, como pares
+  `user`/`assistant` reales (cumplen la alternancia que exige Bedrock Converse); en las dos
+  síntesis, como bloque marcado «no es evidencia» delante de la pregunta, para no empujar al modelo
+  a contestar en prosa; y en la búsqueda que lanza el código, como las 2 preguntas previas más la
+  actual concatenadas (con una sola, la cadena NO2 → niños → largo plazo pierde el NO2 en el tercer
+  turno). `/rag/validar` recibe solo la pregunta actual: concatenar arrastraría el aviso sanitario
+  y la limitación de actualidad de preguntas anteriores.
+- **Sin historial nada cambia**: el primer turno envía exactamente los mismos mensajes que antes, y
+  los 41 tests previos pasan sin tocar ninguna aserción.
+- Descartado (§2): `PostgresChatStore`, `SimpleChatStore`, la intención `REPETIR` y el estado
+  semántico entre turnos. Alternativa anotada a la concatenación: que el clasificador devuelva una
+  consulta reformulada (mejor búsqueda, pero un parser menos estricto y riesgo para el 20/20).
+- **Límites**: las conversaciones se pierden al reiniciar o desplegar, y exige un solo proceso del
+  agente (como el bloqueo por sesión). Unos 60 KB por sesión llena `[estimación: ~3 KB por turno]`.
+
+**Revisión del clasificador y evaluación con conversaciones (fase 5, 2026-10-06).** El guion del
+clasificador pasa a 29 preguntas (9 nuevas: 4 seguimientos con historial, polen, ruido, lluvia,
+«¿El NO2 empeora la alergia al polen?» y «¿Cuál es el límite legal anual del NO2?») y se añaden 5
+conversaciones de 2–3 turnos (11 turnos) que pasan por la misma capa de sesión y memoria que el
+servicio. En los seguimientos se comprueba en las trazas que la búsqueda nombre el referente (el
+NO2 en «¿Y a largo plazo?»). Prompt nuevo: alcance = contaminación del aire; los contaminantes de
+la red (NO, NO2, NOx, O3, PM10, PM2.5) citados en `DATOS`; `DOCUMENTAL` aunque la red no mida el
+contaminante (el benceno acaba en `sin_evidencia`); los límites legales son documentación, no
+mediciones; fuera de alcance, polen, ruido y tiempo, salvo alergia, asma o rinitis. Medido antes y
+después con Bedrock y `rag.api` real:
+
+| Medición | Ministral 14B antes | después | gpt-oss-120b antes | después |
+|-|-|-|-|-|
+| Clasificador, intención | 27/28 | 29/29 | 27/28 | 29/29 |
+| Clasificador, tema | 9/9 | 10/10 | 8/9 | 10/10 |
+| Conversaciones (turnos que cumplen) | 9/11 | 11/11 | 11/11 | 11/11 |
+| Turnos aislados (12 casos) | 11/12 | 12/12 | 12/12 | 12/12 |
+
+- Fallos de antes: Ministral clasificaba el polen como `DATOS` (aislado) o `DOCUMENTAL` (tras una
+  pregunta de ozono) y el límite legal anual del NO2 como `DATOS`; el de gpt-oss fue un tiempo
+  agotado del clasificador (10 s), no un error de clasificación.
+- Tres iteraciones del prompt sobre los mismos casos: **riesgo de sobreajuste**. La primera, con el
+  polen fuera de alcance sin matiz, arrastró también la rinitis, la zona para alérgicos y el NO2
+  con polen (26/28). Residuo conocido: «¿Cuál es el límite anual de PM10?», sin «legal», sigue en
+  `DATOS` con Ministral (2 de 2).
+- **La búsqueda concatenada no se ejecutó en ningún lote**: los dos modelos reformulan solos la
+  búsqueda del seguimiento («efectos del NO2 en la salud de los niños»). Referentes 4/4 por modelo
+  antes y después. La concatenación sigue sin medir.
+- «¿Y en niños?» lleva el aviso sanitario con los dos modelos aunque `/rag/validar` solo vea esa
+  pregunta: el validador también lo activa por las evidencias de salud citadas.
+- Coste del historial en tokens reales: la llamada del bucle pasa de ~360–380 tokens de entrada a
+  ~515–540 con un turno previo y ~655–660 con dos; el clasificador, de ~380–420 a ~500–620. El
+  presupuesto de 1.500 no se alcanzó (como mucho 2 turnos previos en el guion).
+- Latencia del clasificador con el prompt final: mediana 315 ms con Ministral y 986 ms con gpt-oss
+  (máximo 8,4 s). Mediana por turno: conversaciones 5,7 s / 6,9 s, turnos aislados 2,0 s / 3,0 s
+  (Ministral / gpt-oss).
+- Unas 600 llamadas a Bedrock (tres iteraciones, sondas y un lote repetido), unos 0,12 $
+  `[estimación]`. Revisión humana de las respuestas `[pendiente]`.
+- Incidencia: un lote entero acabó en frase fija porque cada búsqueda agotó los 20 s del RAG.
+  `rag.api` ocupaba 3,7 GB de los 7,9 GB del equipo y quedaban 78 MB libres; un minuto después
+  respondía en 0,07 s. Lote descartado y repetido.
+
 **Diseño.** Un solo agente con el **bucle de herramientas escrito a mano**; LlamaIndex
 (`llama-index-core` 0.14) aporta solo el cliente del LLM: `OpenAILike` (Mistral API, Groq,
 Ollama…) o `BedrockConverse` (Amazon Bedrock, credenciales por rol de instancia o perfil), elegidos
 con `LLM_PROVEEDOR`. El resto del código ve una única interfaz (`FunctionCallingLLM`). Principios:
 el modelo clasifica y el código decide; fases pequeñas con salida tipada y valor seguro; la síntesis
 final no tiene herramientas; lo determinista (texto con citas y bibliografía) lo entrega el código,
-no lo reescribe el modelo; el estado entre turnos se guarda como datos tipados; las comprobaciones
+no lo reescribe el modelo; el historial interpreta y las evidencias fundamentan; las comprobaciones
 nuevas empiezan en modo observación. Alternativas descartadas en §2 (2026-10-04); el detalle de
 cada decisión y de la elección de LlamaIndex está en `docs/agente/decisiones_agente.md`.
 
@@ -528,13 +604,14 @@ cada decisión y de la elección de LlamaIndex está en `docs/agente/decisiones_
   - Una herramienta no permitida no se ofrece; si el modelo la pide igualmente, recibe un error y no
     se ejecuta.
   - Descartado: buscar siempre antes del modelo (ahorra una llamada, pero pierde la reformulación de
-    la búsqueda) y responder en libre con el RAG caído. La intención `REPETIR` se deja para la
-    fase 5, cuando haya historial.
+    la búsqueda) y responder en libre con el RAG caído. La intención `REPETIR`, prevista para
+    cuando hubiera historial, se descartó en la fase 5 (§2).
   - Coste en llamadas al LLM: frase fija 1; charla 2; documental 4 (5 con reparación; 3 si busca el
     código).
   - Guion de medición fuera de CI (`Agente/evaluacion/`): 20 preguntas etiquetadas a mano, 15 de
-    `Preguntas.txt` y 5 nuevas para charla y fuera de alcance. **Resultado en Bedrock
-    (2026-10-04): 20/20 en intención y 5/5 en tema con los dos modelos candidatos**. Latencia típica
+    `Preguntas.txt` y 5 nuevas para charla y fuera de alcance (29 desde la fase 5, ver abajo).
+    **Resultado en Bedrock (2026-10-04): 20/20 en intención y 5/5 en tema con los dos modelos
+    candidatos**. Latencia típica
     del clasificador: ~0,3 s con Ministral 14B y ~0,5–1 s con gpt-oss-120b (un caso aislado de 7 s).
   - **Hallazgo de la primera medición: 4/20 con Ministral 14B por formato, no por comprensión.** El
     modelo escribía `intencion: **DOCUMENTAL**`; el parser estricto rechazaba la respuesta y el
@@ -610,7 +687,7 @@ cada decisión y de la elección de LlamaIndex está en `docs/agente/decisiones_
     fragmentos. Otras candidatas cercanas al dominio sí pasan el umbral: radón (3 fragmentos),
     monóxido de carbono (4) y la guía de la OMS para el benceno (3). Es otra muestra de que el
     umbral deja pasar preguntas próximas al corpus (§7.2); la síntesis tiene que reconocerlo.
-- **Tests**: 29, sin red, sin claves y sin torch: LLM falso con guion que hereda de
+- **Tests**: 51, sin red, sin claves y sin torch: LLM falso con guion que hereda de
   `FunctionCallingLLM` (mismo camino que un proveedor real) y RAG fingido con
   `httpx.MockTransport`. **Política de tests mínima** (decisión del 2026-10-04): solo los casos
   que fija el plan de cada fase (bucle con 0, 1 y 2 llamadas, límite de vueltas, RAG caído,
@@ -618,7 +695,10 @@ cada decisión y de la elección de LlamaIndex está en `docs/agente/decisiones_
   cada intención, clasificador caído, herramienta vetada, RAG caído con intención documental y
   clasificación en negrita; después, la búsqueda con el RAG caído que no se repite; en la
   observabilidad, el árbol de spans, turnos concurrentes, LLM caído, JSONL que falla, medianas del
-  informe, tokens incompletos y el evaluador que marca un caso fallido), sin tests de detalle interno; se partió de 25 y se recortaron. Verificado además, sin red, que `OpenAILike` serializa la herramienta cruda
+  informe, tokens incompletos y el evaluador que marca un caso fallido; en la fase 4, la sesión,
+  la concurrencia y el stream; en la fase 5, los 9 casos de la memoria: turnos de la misma sesión,
+  nada guardado si el turno falla o se cancela, ventana, caducidad, contexto sin `[Dn]` ni
+  metadatos, contexto en cada llamada y el evaluador de conversaciones), sin tests de detalle interno; se partió de 25 y se recortaron. Verificado además, sin red, que `OpenAILike` serializa la herramienta cruda
   y los mensajes `assistant(tool_calls)`/`tool` como espera la API. Quinto job del workflow de CI.
 - **Probado contra Bedrock (2026-10-04)**, desde local con credenciales SSO temporales: los dos
   candidatos están bajo demanda en `eu-west-1` con streaming, y los dos **piden la herramienta por
@@ -673,8 +753,9 @@ cada decisión y de la elección de LlamaIndex está en `docs/agente/decisiones_
     (0,0060 $ y 0,0089 $). La latencia de Ministral casi se duplicó: mediana del turno 6,8 s
     (documental 14,9 s) frente a 4,0 s (8,3 s), con el clasificador en 1,8 s frente a 0,3 s.
     gpt-oss se mantuvo (3,2 s; documental 7,4 s). Con dos ejecuciones, la latencia de Ministral 14B
-    bajo demanda en `eu-west-1` es variable; la de gpt-oss, estable `[n=2 lotes]`. Revisar el prompt del clasificador queda en el plan
-    del agente (fase 5): el alcance debe definirse por lo que el sistema mide, no por el tema.
+    bajo demanda en `eu-west-1` es variable; la de gpt-oss, estable `[n=2 lotes]`. El prompt del
+    clasificador se revisó en la fase 5 (arriba): el alcance se define por lo que el sistema
+    puede responder, no por el tema.
   - **Hallazgo: Bedrock rechaza la síntesis forzada** (2026-10-06, los dos modelos). Cuando el bucle
     llega al límite de vueltas sin evidencias, el agente vuelve a llamar al modelo sin herramientas
     pero con el historial, que lleva bloques de llamada y resultado de herramienta. Converse exige
@@ -694,7 +775,8 @@ cada decisión y de la elección de LlamaIndex está en `docs/agente/decisiones_
     14B (`ValueError: Unknown model`). Resuelto con una subclase en la fábrica que declara a mano los
     metadatos de los modelos fuera de su lista.
 
-**Fases pendientes** (5–7): memoria con `turn_state` tipado; comprobaciones posteriores en modo observación con
+**Fases pendientes** (6–7): comprobaciones posteriores en modo observación (las cifras del
+historial no contarán como verificadas: aparecer antes no prueba nada) con
 evaluación sobre 20 preguntas etiquetadas; Bedrock y despliegue junto al orquestador.
 
 #### 7.3.2 `LLMOrchestrator` — primer agente (implementado el 2026-09-28; convive)
@@ -1002,6 +1084,15 @@ la enciende a mano para trabajar o hacer una demo.
   «el modelo no buscó» de «buscó y el servicio no respondió». Los tests probaban el RAG caído desde
   el principio (la herramienta ni se ofrece), no el que cae después. En la cascada se veían los dos
   tramos de 20 s a simple vista. §7.3.1.
+- **Una regla de alcance en el prompt arrastra a sus vecinas** (2026-10-06). Escribir «el polen
+  está fuera de alcance» sin matiz mandó fuera también la rinitis y la zona para alérgicos, que sí
+  son del dominio: 26/28, peor que los 27/28 de partida. Hizo falta la salvedad explícita (alergia, asma o rinitis
+  están dentro). Lección: medir cada cambio de prompt con todo el guion, no solo con el caso que
+  se quería arreglar, y asumir que iterar sobre los mismos casos sobreajusta. §7.3.1.
+- **Medir antes de construir para el caso difícil** (2026-10-06). La búsqueda con las preguntas
+  previas concatenadas se diseñó para los seguimientos («¿Y en niños?»), pero en ningún lote llegó
+  a ejecutarse: los dos modelos reformulan solos la búsqueda con el contexto. Sigue siendo una red
+  de seguridad, pero sin medir. §7.3.1.
 
 **Seguridad**
 - En abril la contraseña de la base de datos quedó **escrita en el código y commiteada**. Se corrigió
@@ -1066,6 +1157,12 @@ la enciende a mano para trabajar o hacer una demo.
   la pregunta habla del presente. Unir ambas fuentes es la Fase 3 (§7.3).
 - **El umbral de evidencia está calibrado a ojo** (0,22) con un margen estrecho entre las preguntas
   del corpus y las ajenas, y sin casos de evaluación todavía.
+- **La memoria de la conversación vive en el proceso del agente**: se pierde al reiniciar o
+  desplegar y obliga a un solo proceso (§7.3.1). Escalar a varios exigiría un almacén compartido
+  y otra coordinación del bloqueo por sesión.
+- **El prompt del clasificador se ajustó sobre el mismo guion con el que se mide** (29 preguntas y
+  11 turnos de conversación): el 29/29 es optimista. Hace falta un juego de casos nuevo para
+  confirmarlo.
 
 **Trabajo futuro**
 - **¿Hace falta un modelo de razonamiento para el agente?** En la ruta documental no: el modelo sin
@@ -1074,6 +1171,9 @@ la enciende a mano para trabajar o hacer una demo.
   combinar varias mediciones, puede beneficiarse del razonamiento. Depende de si la herramienta usa
   consultas predefinidas (como `LLMOrchestrator`, §2 2026-09-28) o SQL generado. Si se usa un modelo
   razonador, hay que darle margen de tokens de salida (§10).
+- **Agente**: consulta de búsqueda reformulada por el clasificador en lugar de concatenar las
+  preguntas previas; estado semántico entre turnos (cifras, contaminantes, evidencias citadas)
+  cuando lo pidan las comprobaciones de cifras o la herramienta SQL.
 - LSTM Autoencoder o PCA para anomalías de forma del perfil horario.
 - Baseline ponderado por recencia y ajustado solo con el periodo de entrenamiento.
 - Módulo de *forecasting* para las preguntas de planificación.
@@ -1214,6 +1314,8 @@ la enciende a mano para trabajar o hacer una demo.
 | 2026-10-06 | **Agente LLM: lote repetido con Phoenix** (Carlos): el primero se lanzó sin `PHOENIX_ENDPOINT` (el script no lee `.env`) y solo quedó en JSONL. Misma calidad y coste; Ministral casi duplica su latencia (mediana 6,8 s frente a 4,0 s) y gpt-oss se mantiene (3,2 s). Cada lote es un proyecto en Phoenix |
 | 2026-10-06 | **Agente LLM: fase 4 cerrada, `ApiUsuario` conectado al agente** (Carlos, rama `feature/Agente`): `AGENTE_URL`, `session_id` y `traza_id` en `/chat`, y `POST /chat/stream` (proxy del SSE del agente o fallback `passthrough` + `done`). 22 tests de `ApiUsuario` (4 nuevos y 1 ampliado). Verificado con Bedrock de punta a punta (charla en tokens, documental en `passthrough`, `en_espera` y cancelación al cortar el cliente a través del proxy); 0,003 $ |
 | 2026-10-06 | **Entorno de pruebas local con un comando** (Carlos): `entorno_local.sh` levanta RAG, Phoenix, agente y `ApiUsuario` en paneles de tmux (antes, cuatro terminales a mano) con esperas por `/salud`, comprobación previa de credenciales de Bedrock y puertos, y `preguntar` para consultar por `/chat/stream`. Se descarta de momento Docker Compose para esto: cada cambio de código obligaría a reconstruir imágenes |
+| 2026-10-06 | **Agente LLM, fase 5: memoria de la conversación** (Carlos, rama `feature/Agente`): almacén en memoria del proceso detrás de una interfaz (20 turnos por sesión, caducidad de 1 semana), ventana por presupuesto de tokens (1.500), respuesta para el contexto sin marcas `[Dn]` y contexto en el clasificador, el bucle, las dos síntesis y la búsqueda que lanza el código; `/rag/validar` sigue viendo solo la pregunta actual. Descartados `PostgresChatStore`, `REPETIR` y el estado semántico. 50 tests (9 nuevos); sin historial, los mensajes del primer turno no cambian |
+| 2026-10-06 | **Agente LLM: clasificador revisado y evaluación con conversaciones** (Carlos): prompt con el alcance definido por lo que el sistema puede responder (polen, ruido y tiempo fuera; alergias dentro; límites legales como documentación). Guion de 29 preguntas y 5 conversaciones (11 turnos). En Bedrock, antes → después: clasificador 27/28 → 29/29 con los dos modelos; conversaciones 9/11 → 11/11 (Ministral) y 11/11 (gpt-oss). La búsqueda concatenada no llegó a ejecutarse: los modelos reformulan solos. Unas 600 llamadas, ~0,12 $ `[estimación]`. 51 tests |
 
 
 ---
@@ -1225,8 +1327,10 @@ la enciende a mano para trabajar o hacer una demo.
   herramientas. Ruta documental (2026-10-05): Ministral 18/18 a la primera; gpt-oss 4 fallos de 18
   por el límite de 512 tokens de salida. Con `LLM_MAX_TOKENS`=2048 (lote del 2026-10-06): empate,
   6/6 válidas a la primera con los dos (12/12 gpt-oss y 11/12 Ministral con el caso del polen
-  corregido); gpt-oss algo más rápido y ~50 % más caro. Falta la
-  revisión humana de las respuestas y del español. (§7.3.1)
+  corregido); gpt-oss algo más rápido y ~50 % más caro. Tras la fase 5, 29/29 en el clasificador y
+  11/11 en conversaciones con los dos. **Elección aplazada** (2026-10-06) hasta poder evaluar
+  también las herramientas SQL y de ML. Falta la revisión humana de las respuestas y del español.
+  (§7.3.1)
 - [ ] Agente nuevo: ¿necesitan las preguntas de datos (herramienta SQL) un modelo de razonamiento?
   Para la ruta documental no hace falta. Analizarlo cuando exista la herramienta SQL. (§11)
 - [x] Agente nuevo: precisión del clasificador con un proveedor real → 20/20 en intención y 5/5 en
