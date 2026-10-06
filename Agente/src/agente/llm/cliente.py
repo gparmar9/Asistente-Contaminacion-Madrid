@@ -41,6 +41,7 @@ def _openai_compatible(settings: Settings, temperatura: float) -> FunctionCallin
         api_base=settings.llm_base_url,
         api_key=settings.llm_api_key,
         temperature=temperatura,
+        max_tokens=settings.llm_max_tokens,
         timeout=settings.llm_timeout_s,
         max_retries=settings.llm_max_reintentos,
         # Sin estas dos marcas LlamaIndex trataría el modelo como de completado sin tools.
@@ -80,6 +81,7 @@ def _bedrock(settings: Settings, temperatura: float) -> FunctionCallingLLM:
         region_name=settings.aws_region,
         profile_name=settings.aws_profile or None,
         temperature=temperatura,
+        max_tokens=settings.llm_max_tokens,
         timeout=settings.llm_timeout_s,
         max_retries=settings.llm_max_reintentos,
     )

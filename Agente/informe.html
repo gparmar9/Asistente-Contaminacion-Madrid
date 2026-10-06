@@ -1,0 +1,794 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Trazas del agente</title>
+<!--
+  Plantilla del informe visual de trazas. informe_trazas.py sustituye el marcador de datos por el
+  JSON de datos(). Sin dependencias externas: se abre sin red. Todas las agregaciones se hacen aquí
+  para poder filtrar; siguen las mismas reglas que el informe markdown (mediana con n, p95 por
+  rango más cercano, turnos sin tokens o sin precio fuera del coste).
+-->
+<style>
+:root {
+  color-scheme: light;
+  --page: #f9f9f7; --surface: #fcfcfb; --ink: #0b0b0b; --ink-2: #52514e; --muted: #898781;
+  --grid: #e1e0d9; --axis: #c3c2b7; --border: rgba(11,11,11,0.10); --wash: rgba(11,11,11,0.04);
+  --neutral: #c3c2b7; --neutral-2: #898781; --critical: #d03b3b; --good: #006300;
+  --s1: #2a78d6; --s2: #eb6834; --s3: #1baf7a; --s4: #eda100;
+  --s5: #e87ba4; --s6: #008300; --s7: #4a3aa7; --s8: #e34948;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+    --page: #0d0d0d; --surface: #1a1a19; --ink: #ffffff; --ink-2: #c3c2b7; --muted: #898781;
+    --grid: #2c2c2a; --axis: #383835; --border: rgba(255,255,255,0.10); --wash: rgba(255,255,255,0.06);
+    --neutral: #4a4a46; --neutral-2: #6b6a65; --critical: #e66767; --good: #0ca30c;
+    --s1: #3987e5; --s2: #d95926; --s3: #199e70; --s4: #c98500;
+    --s5: #d55181; --s6: #008300; --s7: #9085e9; --s8: #e66767;
+  }
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --page: #0d0d0d; --surface: #1a1a19; --ink: #ffffff; --ink-2: #c3c2b7; --muted: #898781;
+  --grid: #2c2c2a; --axis: #383835; --border: rgba(255,255,255,0.10); --wash: rgba(255,255,255,0.06);
+  --neutral: #4a4a46; --neutral-2: #6b6a65; --critical: #e66767; --good: #0ca30c;
+  --s1: #3987e5; --s2: #d95926; --s3: #199e70; --s4: #c98500;
+  --s5: #d55181; --s6: #008300; --s7: #9085e9; --s8: #e66767;
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0; background: var(--page); color: var(--ink);
+  font: 14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+main { min-width: 0; max-width: 1180px; margin: 0 auto; padding: 24px 16px 64px; }
+h1 { font-size: 22px; margin: 0 0 4px; font-weight: 600; }
+h2 { font-size: 16px; margin: 0 0 2px; font-weight: 600; }
+p { margin: 0; }
+.sub { color: var(--ink-2); }
+.nota { color: var(--muted); font-size: 12px; }
+header { margin-bottom: 16px; }
+header .meta { color: var(--ink-2); margin-top: 4px; }
+
+.filtros {
+  position: sticky; top: 0; z-index: 5; display: flex; flex-wrap: wrap; gap: 8px 16px; align-items: center;
+  padding: 10px 0; margin-bottom: 8px; background: var(--page); border-bottom: 1px solid var(--grid);
+}
+.filtros label { display: inline-flex; align-items: center; gap: 6px; color: var(--ink-2); }
+.filtros select, .filtros button {
+  font: inherit; color: var(--ink); background: var(--surface); border: 1px solid var(--border);
+  border-radius: 6px; padding: 4px 8px;
+}
+.filtros button { cursor: pointer; }
+.chip {
+  display: inline-flex; align-items: center; gap: 6px; padding: 3px 10px; border-radius: 999px;
+  border: 1px solid var(--border); background: var(--surface); cursor: pointer; user-select: none;
+}
+.chip input { margin: 0; }
+.chip.apagado { opacity: 0.5; }
+.muestra { display: inline-block; width: 10px; height: 10px; border-radius: 50%; flex: none; }
+.empuje { flex: 1; }
+
+.tarjeta {
+  background: var(--surface); border: 1px solid var(--border); border-radius: 10px;
+  padding: 16px; margin-top: 16px;
+}
+.tarjeta > .cabecera { display: flex; flex-wrap: wrap; gap: 4px 16px; align-items: baseline; margin-bottom: 12px; }
+.tarjeta > .cabecera .sub { flex: 1 1 320px; }
+.lotes { display: grid; gap: 16px; grid-template-columns: repeat(auto-fit, minmax(min(320px, 100%), 1fr)); }
+.lote h3 { display: flex; align-items: center; gap: 8px; font-size: 15px; margin: 0; }
+.lote .modelo { color: var(--muted); font-size: 12px; margin: 2px 0 12px 18px; word-break: break-all; }
+.cifras { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(130px, 100%), 1fr)); gap: 12px 16px; }
+.cifra .etq { color: var(--ink-2); font-size: 12px; }
+.cifra .val { font-size: 22px; font-weight: 600; }
+.cifra .val small { font-size: 13px; font-weight: 400; color: var(--ink-2); }
+
+.leyenda { display: flex; flex-wrap: wrap; gap: 4px 16px; color: var(--ink-2); font-size: 12px; margin-bottom: 6px; }
+.leyenda span { display: inline-flex; align-items: center; gap: 6px; }
+.clave { display: inline-block; width: 14px; height: 10px; border-radius: 2px; }
+.grafica { width: 100%; overflow: hidden; }
+svg { display: block; font: 11px system-ui, -apple-system, "Segoe UI", sans-serif; }
+svg text { fill: var(--muted); }
+svg .etq-fila { fill: var(--ink-2); font-size: 12px; }
+svg .valor { fill: var(--ink-2); font-variant-numeric: tabular-nums; }
+svg .rejilla { stroke: var(--grid); stroke-width: 1; }
+svg .base { stroke: var(--axis); stroke-width: 1; }
+svg .marca { cursor: pointer; }
+svg .marca:hover .punto, svg .marca:focus .punto, svg .marca:hover .barra, svg .marca:focus .barra { filter: brightness(1.15); }
+svg .marca:focus { outline: none; }
+svg .marca:focus .anillo { stroke: var(--ink); }
+svg .sel { stroke: var(--ink); stroke-width: 2; }
+
+details { margin-top: 10px; }
+summary { cursor: pointer; color: var(--ink-2); font-size: 12px; }
+.tabla-scroll { overflow-x: auto; }
+table { border-collapse: collapse; width: 100%; font-size: 13px; }
+th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--grid); vertical-align: top; }
+th { color: var(--ink-2); font-weight: 600; white-space: nowrap; }
+td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+#turnos th { cursor: pointer; }
+#turnos th[aria-sort="ascending"]::after { content: " ▲"; }
+#turnos th[aria-sort="descending"]::after { content: " ▼"; }
+#turnos tbody tr { cursor: pointer; }
+#turnos tbody tr:hover { background: var(--wash); }
+#turnos tbody tr.elegido { background: var(--wash); box-shadow: inset 3px 0 0 var(--ink); }
+.pregunta { max-width: 380px; }
+.estado-error { color: var(--critical); font-weight: 600; white-space: nowrap; }
+.estado-ok { color: var(--ink-2); white-space: nowrap; }
+
+.cascada-meta { display: flex; flex-wrap: wrap; gap: 4px 16px; color: var(--ink-2); margin: 4px 0 12px; }
+.respuesta { white-space: pre-wrap; color: var(--ink-2); font-size: 13px; max-height: 280px; overflow: auto;
+  padding: 8px; border: 1px solid var(--grid); border-radius: 6px; margin-top: 6px; }
+
+#tip {
+  position: fixed; z-index: 10; pointer-events: none; display: none; max-width: 340px;
+  background: var(--surface); color: var(--ink); border: 1px solid var(--border); border-radius: 8px;
+  box-shadow: 0 4px 16px rgba(0,0,0,0.15); padding: 8px 10px; font-size: 12px;
+}
+#tip .t { font-weight: 600; margin-bottom: 4px; }
+#tip .f { display: flex; gap: 8px; align-items: center; }
+#tip .f b { font-variant-numeric: tabular-nums; }
+#tip .f span { color: var(--ink-2); }
+#tip .k { display: inline-block; width: 10px; height: 2px; }
+.vacio { color: var(--muted); padding: 24px 0; text-align: center; }
+@media (max-width: 640px) { .cifra .val { font-size: 19px; } }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <h1>Trazas del agente: latencia y coste</h1>
+    <p class="meta" id="meta"></p>
+    <p class="nota">Medianas con su n; el p95 es solo descriptivo (muestras pequeñas). Un turno sin
+      tokens en alguna llamada al LLM, o con un modelo sin precio, no entra en las cifras de coste.</p>
+  </header>
+
+  <div class="filtros" role="group" aria-label="Filtros">
+    <span id="filtro-lotes" style="display:contents"></span>
+    <label>Ruta <select id="filtro-ruta"></select></label>
+    <label>Intención <select id="filtro-intencion"></select></label>
+    <span class="empuje"></span>
+    <label><input type="checkbox" id="escala-log"> Escala logarítmica</label>
+    <button type="button" id="tema" title="Cambiar entre tema claro y oscuro">Tema</button>
+  </div>
+
+  <section id="resumen"></section>
+
+  <section class="tarjeta">
+    <div class="cabecera"><h2>Latencia y coste por turno</h2>
+      <p class="sub">Cada punto es un turno. Arriba a la derecha, lento y caro. Pulsa un punto para ver su cascada.</p></div>
+    <div class="leyenda" id="leyenda-dispersion"></div>
+    <div class="grafica" id="dispersion"></div>
+  </section>
+
+  <section class="tarjeta">
+    <div class="cabecera"><h2>Latencia por fase</h2>
+      <p class="sub">Puntos tenues: cada span. Marca grande: mediana; raya: hasta el p95. Las llamadas al LLM van por la fase que las contiene; <code>llm (bucle)</code> es una por vuelta.</p></div>
+    <div class="leyenda" id="leyenda-fases"></div>
+    <div class="grafica" id="fases"></div>
+    <details><summary>Ver tabla</summary><div class="tabla-scroll" id="tabla-fases"></div></details>
+  </section>
+
+  <section class="tarjeta">
+    <div class="cabecera"><h2>Latencia del turno por ruta</h2>
+      <p class="sub">Puntos tenues: cada turno; marca grande: mediana. Pulsa un punto para ver su cascada.</p></div>
+    <div class="leyenda" id="leyenda-rutas"></div>
+    <div class="grafica" id="rutas"></div>
+  </section>
+
+  <section class="tarjeta">
+    <div class="cabecera"><h2>Dónde se va el coste</h2>
+      <p class="sub">Coste medio por turno de las llamadas al LLM de cada fase (media, no mediana: así las fases suman el coste medio del turno). Solo turnos con coste completo.</p></div>
+    <div class="leyenda" id="leyenda-coste"></div>
+    <div class="grafica" id="coste"></div>
+    <details><summary>Ver tabla</summary><div class="tabla-scroll" id="tabla-coste"></div></details>
+  </section>
+
+  <section class="tarjeta">
+    <div class="cabecera"><h2>Turnos</h2>
+      <p class="sub">Pulsa una cabecera para ordenar y una fila para ver su cascada.</p></div>
+    <div class="tabla-scroll" id="turnos"></div>
+  </section>
+
+  <section class="tarjeta" id="seccion-cascada">
+    <div class="cabecera"><h2>Cascada del turno</h2>
+      <p class="sub">Spans en orden de inicio; la sangría es la jerarquía. Los mismos datos que Phoenix, con el coste.</p></div>
+    <div id="cascada"></div>
+  </section>
+
+  <section class="tarjeta">
+    <div class="cabecera"><h2>Calidad del turno y decisiones del código</h2></div>
+    <div class="tabla-scroll" id="calidad"></div>
+  </section>
+</main>
+<div id="tip" role="tooltip"></div>
+
+<script id="datos" type="application/json">{"generado": "2026-10-06T10:31:27+02:00", "precios": {"fecha": "2026-10-04, Bedrock eu-west-1", "usd_por_millon": {"mistral.ministral-3-14b-instruct": [0.24, 0.24], "openai.gpt-oss-120b-1:0": [0.18, 0.7]}}, "fases": ["clasificar", "bucle", "busqueda_forzada", "sintesis_documental", "sintesis_forzada", "validar"], "huerfanas": 0, "turnos": [{"id": "6c03b08bba277688d7fa110a54a6a055", "lote": "agente", "modelos": ["mistral.ministral-3-14b-instruct"], "ruta": "fija", "intencion": "DOCUMENTAL", "tema": "salud", "pregunta": "¿Qué efectos tiene el NO2 en la salud?", "respuesta": "La documentación del asistente no está disponible en este momento. Vuelve a intentarlo en unos minutos.", "inicio": "2026-10-06T06:56:53.026035+00:00", "duracion_ms": 43116.764, "error": false, "tokens_entrada": 1031, "tokens_salida": 158, "coste_usd": 0.00028536, "vueltas": 2, "valida": null, "reparaciones": null, "busqueda_forzada": true, "sintesis_forzada": false, "spans": [{"id": "c64b86f534008bf0", "padre": null, "nombre": "turno", "tipo": "AGENT", "grupo": "turno", "fase": "turno", "inicio_ms": 0.0, "duracion_ms": 43116.764, "error": false, "error_descripcion": null, "atributos": {"ruta": "fija", "intencion": "DOCUMENTAL", "tema": "salud", "vueltas": 2, "busqueda_forzada": true, "sintesis_forzada": false, "herramientas": ["buscar_evidencias", "buscar_evidencias"]}, "decisiones": []}, {"id": "8a47e34595750374", "padre": "c64b86f534008bf0", "nombre": "clasificar", "tipo": "CHAIN", "grupo": "clasificar", "fase": "clasificar", "inicio_ms": 0.3, "duracion_ms": 543.368, "error": false, "error_descripcion": null, "atributos": {"clasificacion_valida": true}, "decisiones": []}, {"id": "5d27e0d4a3d8d04a", "padre": "8a47e34595750374", "nombre": "llm", "tipo": "LLM", "grupo": "llm (clasificar)", "fase": "clasificar", "inicio_ms": 0.4, "duracion_ms": 543.224, "error": false, "error_descripcion": null, "atributos": {}, "decisiones": [], "modelo": "mistral.ministral-3-14b-instruct", "tokens_entrada": 260, "tokens_salida": 13, "coste_usd": 6.552e-05}, {"id": "c939e41d816a49e5", "padre": "c64b86f534008bf0", "nombre": "bucle", "tipo": "CHAIN", "grupo": "bucle", "fase": "bucle", "inicio_ms": 1054.7, "duracion_ms": 22017.939, "error": false, "error_descripcion": null, "atributos": {}, "decisiones": []}, {"id": "145112036fe30bab", "padre": "c939e41d816a49e5", "nombre": "llm", "tipo": "LLM", "grupo": "llm (bucle)", "fase": "bucle", "inicio_ms": 1054.8, "duracion_ms": 567.981, "error": false, "error_descripcion": null, "atributos": {}, "decisiones": [], "modelo": "mistral.ministral-3-14b-instruct", "tokens_entrada": 361, "tokens_salida": 33, "coste_usd": 9.456e-05}, {"id": "a292c46908e2786c", "padre": "c939e41d816a49e5", "nombre": "buscar_evidencias", "tipo": "TOOL", "grupo": "buscar_evidencias", "fase": "bucle", "inicio_ms": 1622.9, "duracion_ms": 20043.814, "error": true, "error_descripcion": "El servicio documental no está disponible en este momento", "atributos": {"ok": false, "permitida": true, "forzada": false}, "decisiones": []}, {"id": "db3e0a360df93e79", "padre": "c939e41d816a49e5", "nombre": "llm", "tipo": "LLM", "grupo": "llm (bucle)", "fase": "bucle", "inicio_ms": 21667.0, "duracion_ms": 1405.65, "error": false, "error_descripcion": null, "atributos": {}, "decisiones": [], "modelo": "mistral.ministral-3-14b-instruct", "tokens_entrada": 410, "tokens_salida": 112, "coste_usd": 0.00012528}, {"id": "197e381d40eb64c1", "padre": "c64b86f534008bf0", "nombre": "busqueda_forzada", "tipo": "CHAIN", "grupo": "busqueda_forzada", "fase": "busqueda_forzada", "inicio_ms": 23072.7, "duracion_ms": 20043.966, "error": false, "error_descripcion": null, "atributos": {}, "decisiones": ["documentacion_no_disponible"]}, {"id": "6ccf2ba497e827a6", "padre": "197e381d40eb64c1", "nombre": "buscar_evidencias", "tipo": "TOOL", "grupo": "buscar_evidencias", "fase": "busqueda_forzada", "inicio_ms": 23072.8, "duracion_ms": 20043.825, "error": true, "error_descripcion": "El servicio documental no está disponible en este momento", "atributos": {"ok": false, "permitida": true, "forzada": true}, "decisiones": []}]}, {"id": "5534d0f4ee2d22f6d8192ac5b610fb41", "lote": "agente", "modelos": ["mistral.ministral-3-14b-instruct"], "ruta": "documental", "intencion": "DOCUMENTAL", "tema": "salud", "pregunta": "¿Qué efectos tiene el NO2 en la salud?", "respuesta": "El NO₂ es un gas irritante que inflama las vías respiratorias, reduciendo la función pulmonar y aumentando la reactividad bronquial, especialmente en exposiciones agudas. [D1]\nEn personas con asma, el NO₂ agrava las crisis y su exposición crónica puede contribuir al desarrollo de asma infantil. [D1]\nEl NO₂ potencia las respuestas alérgicas al dañar el epitelio respiratorio, facilitando la entrada de alérgenos y empeorando síntomas de rinitis y asma alérgica, especialmente en días con altos niveles de polen. [D1]\nAumenta la susceptibilidad a infecciones respiratorias, con mayor impacto en niños. [D1]\nLa exposición crónica al NO₂ está asociada a mayor mortalidad cardiovascular y respiratoria, así como a un peor desarrollo pulmonar en niños. [D1]\n\nLimitaciones:\n- No hay información sobre efectos en otros órganos o sistemas distintos a los respiratorios y cardiovasculares.\n- No se detallan efectos específicos en adultos mayores sin condiciones previas.\n- No se incluyen efectos a largo plazo más allá de la mortalidad cardiovascular y respiratoria.\n- No se proporcionan datos sobre posibles efectos en embarazadas o fetos.\n\nAviso: esta información es divulgativa y general. No sustituye la valoración de un profesional sanitario ni los avisos oficiales. Si tienes síntomas o una enfermedad diagnosticada, sigue las indicaciones de tu médico; ante una urgencia, llama al 112.\n\nEvidencias citadas:\n[D1] Óxidos de nitrógeno (NO, NO2, NOx) y salud — Efectos en la salud (oxidos_nitrogeno_salud.md, fragmento oxidos_nitrogeno_salud:efectos-en-la-salud:0)\n\nFuentes de los documentos citados:\n- Óxidos de nitrógeno (NO, NO2, NOx) y salud (oxidos_nitrogeno_salud.md, revisado 2026-09-23; D1)\n    · WHO global air quality guidelines 2021, capítulo de dióxido de nitrógeno — OMS — https://www.who.int/publications/i/item/9789240034228\n    · Nota descriptiva «Calidad del aire ambiente (exterior) y salud» — OMS — https://www.who.int/es/news-room/fact-sheets/detail/ambient-(outdoor)-air-quality-and-health\n    · Informes «Air quality in Europe» — Agencia Europea de Medio Ambiente (EEA) — https://www.eea.europa.eu\n    · Basic Information about NO2 — U.S. Environmental Protection Agency (EPA) — https://www.epa.gov/no2-pollution", "inicio": "2026-10-06T06:59:50.987226+00:00", "duracion_ms": 5467.304, "error": false, "tokens_entrada": 3440, "tokens_salida": 687, "coste_usd": 0.00099048, "vueltas": 2, "valida": true, "reparaciones": 0, "busqueda_forzada": false, "sintesis_forzada": false, "spans": [{"id": "49467be9378986bc", "padre": null, "nombre": "turno", "tipo": "AGENT", "grupo": "turno", "fase": "turno", "inicio_ms": 0.0, "duracion_ms": 5467.304, "error": false, "error_descripcion": null, "atributos": {"ruta": "documental", "intencion": "DOCUMENTAL", "tema": "salud", "vueltas": 2, "busqueda_forzada": false, "sintesis_forzada": false, "herramientas": ["buscar_evidencias"], "valida": true, "reparaciones": 0}, "decisiones": []}, {"id": "51e5664fcd34ae3d", "padre": "49467be9378986bc", "nombre": "clasificar", "tipo": "CHAIN", "grupo": "clasificar", "fase": "clasificar", "inicio_ms": 0.2, "duracion_ms": 279.594, "error": false, "error_descripcion": null, "atributos": {"clasificacion_valida": true}, "decisiones": []}, {"id": "784eba1b5bb1a4b0", "padre": "51e5664fcd34ae3d", "nombre": "llm", "tipo": "LLM", "grupo": "llm (clasificar)", "fase": "clasificar", "inicio_ms": 0.3, "duracion_ms": 279.456, "error": false, "error_descripcion": null, "atributos": {}, "decisiones": [], "modelo": "mistral.ministral-3-14b-instruct", "tokens_entrada": 260, "tokens_salida": 13, "coste_usd": 6.552e-05}, {"id": "acd9039e7666fdac", "padre": "49467be9378986bc", "nombre": "bucle", "tipo": "CHAIN", "grupo": "bucle", "fase": "bucle", "inicio_ms": 279.9, "duracion_ms": 2477.791, "error": false, "error_descripcion": null, "atributos": {}, "decisiones": []}, {"id": "625493165b8e25cf", "padre": "acd9039e7666fdac", "nombre": "llm", "tipo": "LLM", "grupo": "llm (bucle)", "fase": "bucle", "inicio_ms": 279.9, "duracion_ms": 429.917, "error": false, "error_descripcion": null, "atributos": {}, "decisiones": [], "modelo": "mistral.ministral-3-14b-instruct", "tokens_entrada": 361, "tokens_salida": 33, "coste_usd": 9.456e-05}, {"id": "d6e7965d8a196720", "padre": "acd9039e7666fdac", "nombre": "buscar_evidencias", "tipo": "TOOL", "grupo": "buscar_evidencias", "fase": "bucle", "inicio_ms": 710.0, "duracion_ms": 126.887, "error": false, "error_descripcion": null, "atributos": {"ok": true, "permitida": true, "forzada": false, "estado": "con_evidencias"}, "decisiones": []}, {"id": "fbaaf57086bff2fa", "padre": "acd9039e7666fdac", "nombre": "llm", "tipo": "LLM", "grupo": "llm (bucle)", "fase": "bucle", "inicio_ms": 837.0, "duracion_ms": 1920.639, "error": false, "error_descripcion": null, "atributos": {}, "decisiones": [], "modelo": "mistral.ministral-3-14b-instruct", "tokens_entrada": 1447, "tokens_salida": 271, "coste_usd": 0.00041231999999999993}, {"id": "50394df26dee135f", "padre": "49467be9378986bc", "nombre": "sintesis_documental", "tipo": "CHAIN", "grupo": "sintesis_documental", "fase": "sintesis_documental", "inicio_ms": 2757.8, "duracion_ms": 2709.436, "error": false, "error_descripcion": null, "atributos": {"valida": true, "reparaciones": 0}, "decisiones": []}, {"id": "a6c2d455755254aa", "padre": "50394df26dee135f", "nombre": "llm", "tipo": "LLM", "grupo": "llm (sintesis_documental)", "fase": "sintesis_documental", "inicio_ms": 2757.9, "duracion_ms": 2619.177, "error": false, "error_descripcion": null, "atributos": {}, "decisiones": [], "modelo": "mistral.ministral-3-14b-instruct", "tokens_entrada": 1372, "tokens_salida": 370, "coste_usd": 0.00041808}, {"id": "8bfcc39e985aa918", "padre": "50394df26dee135f", "nombre": "validar", "tipo": "TOOL", "grupo": "validar", "fase": "sintesis_documental", "inicio_ms": 5377.4, "duracion_ms": 89.808, "error": false, "error_descripcion": null, "atributos": {"valida": true, "mensaje_reparacion": ""}, "decisiones": []}]}, {"id": "caa0d297ad217af1dd9f413c8f56816a", "lote": "mistral-ministral-3-14b-instruct", "modelos": ["mistral.ministral-3-14b-instruct"], "ruta": "documental", "intencion": "DOCUMENTAL", "tema": "salud", "pregunta": "¿Qué síntomas puede empeorar el ozono?", "respuesta": "El ozono empeora la irritación de ojos, garganta y vías respiratorias debido a su alta capacidad oxidante. [D1]\nReduce la función pulmonar y puede causar dolor torácico al respirar profundamente, especialmente durante el ejercicio. [D1]\nAgrava síntomas del asma y la EPOC, siendo más crítico en personas alérgicas con asma, especialmente en verano. [D1]\nLa exposición al ozono se agrava con actividad física intensa al aire libre por el aumento de ventilación pulmonar. [D1]\n\nLimitaciones:\n- No hay evidencia sobre síntomas no respiratorios o cardiovasculares específicos del ozono en las fuentes proporcionadas.\n- No se mencionan efectos en otros órganos o sistemas distintos al respiratorio en las evidencias.\n\nAviso: esta información es divulgativa y general. No sustituye la valoración de un profesional sanitario ni los avisos oficiales. Si tienes síntomas o una enfermedad diagnosticada, sigue las indicaciones de tu médico; ante una urgencia, llama al 112.\n\nEvidencias citadas:\n[D1] Ozono troposférico (O3) y salud — Efectos en la salud (ozono_salud.md, fragmento ozono_salud:efectos-en-la-salud:0)\n\nFuentes de los documentos citados:\n- Ozono troposférico (O3) y salud (ozono_salud.md, revisado 2026-09-23; D1)\n    · WHO global air quality guidelines 2021, capítulo de ozono — OMS — https://www.who.int/publications/i/item/9789240034228\n    · Informes «Air quality in Europe» — Agencia Europea de Medio Ambiente (EEA) — https://www.eea.europa.eu\n    · Ground-level Ozone Basics — U.S. Environmental Protection Agency (EPA) — https://www.epa.gov/ground-level-ozone-pollution", "inicio": "2026-10-06T08:27:32.704006+00:00", "duracion_ms": 11148.699, "error": false, "tokens_entrada": 3018, "tokens_salida": 466, "coste_usd": 0.0008361600000000001, "vueltas": 2, "valida": true, "reparaciones": 0, "busqueda_forzada": false, "sintesis_forzada": false, "spans": [{"id": "e99384f5d1120dd0", "padre": null, "nombre": "turno", "tipo": "AGENT", "grupo": "turno", "fase": "turno", "inicio_ms": 0.0, "duracion_ms": 11148.699, "error": false, "error_descripcion": null, "atributos": {"ruta": "documental", "intencion": "DOCUMENTAL", "tema": "salud", "vueltas": 2, "busqueda_forzada": false, "sintesis_forzada": false, "herramientas": ["buscar_evidencias"], "valida": true, "reparaciones": 0}, "decisiones": []}, {"id": "510de27fbb2c977c", "padre": "e99384f5d1120dd0", "nombre": "clasificar", "tipo": "CHAIN", "grupo": "clasificar", "fase": "clasificar", "inicio_ms": 0.2, "duracion_ms": -103.575, "error": false, "error_descripcion": null, "atributos": {"clasificacion_valida": true}, "decisiones": []}, {"id": "eb3f75ac4c84ac13", "padre": "510de27fbb2c977c", "nombre": "llm", "tipo": "LLM", "grupo": "llm (clasificar)", "fase": "clasificar", "inicio_ms": 0.2, "duracion_ms": -103.704, "error": false, "error_descripcion": null, "atributos": {}, "decisiones": [], "modelo": "mistral.ministral-3-14b-instruct", "tokens_entrada": 260, "tokens_salida": 13, "coste_usd": 6.552e-05}, {"id": "50207dc49a569ec1", "padre": "e99384f5d1120dd0", "nombre": "bucle", "tipo": "CHAIN", "grupo": "bucle", "fase": "bucle", "inicio_ms": 121.5, "duracion_ms": 7581.013, "error": false, "error_descripcion": null, "atributos": {}, "decisiones": []}, {"id": "b1081015362c0dc0", "padre": "50207dc49a569ec1", "nombre": "llm", "tipo": "LLM", "grupo": "llm (bucle)", "fase": "bucle", "inicio_ms": 121.6, "duracion_ms": 932.919, "error": false, "error_descripcion": null, "atributos": {}, "decisiones": [], "modelo": "mistral.ministral-3-14b-instruct", "tokens_entrada": 361, "tokens_salida": 40, "coste_usd": 9.624e-05}, {"id": "c5ec10607b92fcb4", "padre": "50207dc49a569ec1", "nombre": "buscar_evidencias", "tipo": "TOOL", "grupo": "buscar_evidencias", "fase": "bucle", "inicio_ms": 1054.6, "duracion_ms": 4834.14, "error": false, "error_descripcion": null, "atributos": {"ok": true, "permitida": true, "forzada": false, "estado": "con_evidencias"}, "decisiones": []}, {"id": "d6f24863b0436ffe", "padre": "50207dc49a569ec1", "nombre": "llm", "tipo": "LLM", "grupo": "llm (bucle)", "fase": "bucle", "inicio_ms": 5888.9, "duracion_ms": 1813.564, "error": false, "error_descripcion": null, "atributos": {}, "decisiones": [], "modelo": "mistral.ministral-3-14b-instruct", "tokens_entrada": 1243, "tokens_salida": 162, "coste_usd": 0.0003372}, {"id": "bca7399755eb4f2e", "padre": "e99384f5d1120dd0", "nombre": "sintesis_documental", "tipo": "CHAIN", "grupo": "sintesis_documental", "fase": "sintesis_documental", "inicio_ms": 7702.6, "duracion_ms": 3446.022, "error": false, "error_descripcion": null, "atributos": {"valida": true, "reparaciones": 0}, "decisiones": []}, {"id": "03e92aca9dd2b84d", "padre": "bca7399755eb4f2e", "nombre": "llm", "tipo": "LLM", "grupo": "llm (sintesis_documental)", "fase": "sintesis_documental", "inicio_ms": 7702.8, "duracion_ms": 3348.373, "error": false, "error_descripcion": null, "atributos": {}, "decisiones": [], "modelo": "mistral.ministral-3-14b-instruct", "tokens_entrada": 1154, "tokens_salida": 251, "coste_usd": 0.0003372}, {"id": "fead217144bd2113", "padre": "bca7399755eb4f2e", "nombre": "validar", "tipo": "TOOL", "grupo": "validar", "fase": "sintesis_documental", "inicio_ms": 11051.4, "duracion_ms": 97.221, "error": false, "error_descripcion": null, "atributos": {"valida": true, "mensaje_reparacion": ""}, "decisiones": []}]}, {"id": "7113ccb72a5cc3defc30ad54d8b7872b", "lote": "mistral-ministral-3-14b-instruct", "modelos": ["mistral.ministral-3-14b-instruct"], "ruta": "documental", "intencion": "DOCUMENTAL", "tema": "salud", "pregunta": "¿En qué se diferencia el PM10 del PM2.5 en términos de riesgo para la salud?", "respuesta": "El **PM2.5** es más peligroso que el **PM10** porque su tamaño (inferior a 2.5 micras) le permite penetrar hasta los alvéolos pulmonares e incluso ingresar al torrente sanguíneo, según su origen en combustión (tráfico, calefacciones, biomasa). El **PM10** (inferior a 10 micras) incluye fuentes como polvo mineral, polen o resuspensión por tráfico, pero no alcanza tan profundamente los pulmones. [D1]\nEl **PM2.5** está asociado a mayores riesgos cardiovasculares, como infartos, ictus e hipertensión, siendo el contaminante con la mayor carga de mortalidad atribuible globalmente. El **PM10**, aunque también afecta la salud respiratoria, no presenta la misma gravedad sistémica documentada para el PM2.5. [D2]\nAmbos tipos de partículas agravan enfermedades respiratorias (asma, EPOC, bronquitis), pero el **PM2.5** tiene mayor impacto en la reducción de la función pulmonar en niños y en la profundización de alérgenos (como el polen) en las vías respiratorias, empeorando síntomas en personas alérgicas o asmáticas. [D1][D2]\nNo existe un nivel seguro de exposición a estas partículas: cualquier reducción en la exposición al **PM2.5** o **PM10** aporta beneficios para la salud, según la evidencia científica citada. [D2]\n\nLimitaciones:\n- No se detallan diferencias específicas en efectos sobre diabetes, deterioro cognitivo o bajo peso al nacer entre PM10 y PM2.5 (solo se menciona evidencia general para ambos).\n- No se proporcionan datos sobre diferencias en la toxicidad química o composición específica de las partículas según su tamaño.\n\nAviso: esta información es divulgativa y general. No sustituye la valoración de un profesional sanitario ni los avisos oficiales. Si tienes síntomas o una enfermedad diagnosticada, sigue las indicaciones de tu médico; ante una urgencia, llama al 112.\n\nEvidencias citadas:\n[D1] Partículas en suspensión (PM10 y PM2.5) y salud — Qué son (particulas_salud.md, fragmento particulas_salud:que-son:0)\n[D2] Partículas en suspensión (PM10 y PM2.5) y salud — Efectos en la salud (particulas_salud.md, fragmento particulas_salud:efectos-en-la-salud:0)\n\nFuentes de los documentos citados:\n- Partículas en suspensión (PM10 y PM2.5) y salud (particulas_salud.md, revisado 2026-09-23; D1, D2)\n    · WHO global air quality guidelines 2021, capítulos de PM2.5 y PM10 — OMS — https://www.who.int/publications/i/item/9789240034228\n    · Nota descriptiva «Calidad del aire ambiente (exterior) y salud» — OMS — https://www.who.int/es/news-room/fact-sheets/detail/ambient-(outdoor)-air-quality-and-health\n    · Informes «Air quality in Europe» — Agencia Europea de Medio Ambiente (EEA) — https://www.eea.europa.eu\n    · Información y avisos sobre intrusiones de polvo sahariano (calima) — AEMET — https://www.aemet.es", "inicio": "2026-10-06T08:27:43.852816+00:00", "duracion_ms": 11603.687, "error": false, "tokens_entrada": 3104, "tokens_salida": 803, "coste_usd": 0.00093768, "vueltas": 2, "valida": true, "reparaciones": 0, "busqueda_forzada": false, "sintesis_forzada": false, "spans": [{"id": "62c94494467d6811", "padre": null, "nombre": "turno", "tipo": "AGENT", "grupo": "turno", "fase": "turno", "inicio_ms": 0.0, "duracion_ms": 11603.687, "error": false, "error_descripcion": null, "atributos": {"ruta": "documental", "intencion": "DOCUMENTAL", "tema": "salud", "vueltas": 2, "busqueda_forzada": false, "sintesis_forzada": false, "herramientas": ["buscar_evidencias"], "valida": true, "reparaciones": 0}, "decisiones": []}, {"id": "c34bab65dfade22d", "padre": "62c94494467d6811", "nombre": "clasificar", "tipo": "CHAIN", "grupo": "clasificar", "fase": "clasificar", "inicio_ms": 0.1, "duracion_ms": 441.469, "error": false, "error_descripcion": null, "atributos": {"clasificacion_valida": true}, "decisiones": []}, {"id": "c395b8ac4461a7ac", "padre": "c34bab65dfade22d", "nombre": "llm", "tipo": "LLM", "grupo": "llm (clasificar)", "fase": "clasificar", "inicio_ms": 0.1, "duracion_ms": 441.366, "error": false, "error_descripcion": null, "atributos": {}, "decisiones": [], "modelo": "mistral.ministral-3-14b-instruct", "tokens_entrada": 271, "tokens_salida": 13, "coste_usd": 6.816e-05}, {"id": "41b5ea0a24e45f70", "padre": "62c94494467d6811", "nombre": "bucle", "tipo": "CHAIN", "grupo": "bucle", "fase": "bucle", "inicio_ms": 441.7, "duracion_ms": 3224.095, "error": false, "error_descripcion": null, "atributos": {}, "decisiones": []}, {"id": "38a3364379fa406b", "padre": "41b5ea0a24e45f70", "nombre": "llm", "tipo": "LLM", "grupo": "llm (bucle)", "fase": "bucle", "inicio_ms": 441.7, "duracion_ms": 624.151, "error": false, "error_descripcion": null, "atributos": {}, "decisiones": [], "modelo": "mistral.ministral-3-14b-instruct", "tokens_entrada": 372, "tokens_salida": 46, "coste_usd": 0.00010031999999999999}, {"id": "1de076512699e728", "padre": "41b5ea0a24e45f70", "nombre": "buscar_evidencias", "tipo": "TOOL", "grupo": "buscar_evidencias", "fase": "bucle", "inicio_ms": 1066.1, "duracion_ms": 525.926, "error": false, "error_descripcion": null, "atributos": {"ok": true, "permitida": true, "forzada": false, "estado": "con_evidencias"}, "decisiones": []}, {"id": "05e338579a43a066", "padre": "41b5ea0a24e45f70", "nombre": "llm", "tipo": "LLM", "grupo": "llm (bucle)", "fase": "bucle", "inicio_ms": 1592.1, "duracion_ms": 2073.6, "error": false, "error_descripcion": null, "atributos": {}, "decisiones": [], "modelo": "mistral.ministral-3-14b-instruct", "tokens_entrada": 1281, "tokens_salida": 246, "coste_usd": 0.00036648000000000003}, {"id": "f10697b952094cab", "padre": "62c94494467d6811", "nombre": "sintesis_documental", "tipo": "CHAIN", "grupo": "sintesis_documental", "fase": "sintesis_documental", "inicio_ms": 3665.9, "duracion_ms": 7937.752, "error": false, "error_descripcion": null, "atributos": {"valida": true, "reparaciones": 0}, "decisiones": []}, {"id": "633bc138023928d2", "padre": "f10697b952094cab", "nombre": "llm", "tipo": "LLM", "grupo": "llm (sintesis_documental)", "fase": "sintesis_documental", "inicio_ms": 3666.0, "duracion_ms": 7850.477, "error": false, "error_descripcion": null, "atributos": {}, "decisiones": [], "modelo": "mistral.ministral-3-14b-instruct", "tokens_entrada": 1180, "tokens_salida": 498, "coste_usd": 0.00040271999999999997}, {"id": "417b3a1a17090712", "padre": "f10697b952094cab", "nombre": "validar", "tipo": "TOOL", "grupo": "validar", "fase": "sintesis_documental", "inicio_ms": 11516.7, "duracion_ms": 86.844, "error": false, "error_descripcion": null, "atributos": {"valida": true, "mensaje_reparacion": ""}, "decisiones": []}]}, {"id": "89fcc5d270012bd28397b273f87fc9c7", "lote": "mistral-ministral-3-14b-instruct", "modelos": ["mistral.ministral-3-14b-instruct"], "ruta": "documental", "intencion": "DOCUMENTAL", "tema": "salud", "pregunta": "¿Qué contaminante es el más preocupante para el riesgo cardiovascular a largo plazo?", "respuesta": "El contaminante más preocupante para el riesgo cardiovascular a largo plazo es la **PM2.5** (partículas en suspensión de diámetro menor a 2.5 micras). Está asociada a infartos, ictus e hipertensión, siendo el contaminante con mayor carga de mortalidad atribuible a nivel global según las evidencias. [D1]\n\nLimitaciones:\n- No hay información en las evidencias sobre otros contaminantes como ozono troposférico, dióxido de azufre o metales pesados que puedan compararse directamente con PM2.5 en riesgo cardiovascular.\n- No se detallan estudios comparativos entre PM2.5 y óxidos de nitrógeno (NOx) en efectos cardiovasculares a largo plazo.\n\nAviso: esta información es divulgativa y general. No sustituye la valoración de un profesional sanitario ni los avisos oficiales. Si tienes síntomas o una enfermedad diagnosticada, sigue las indicaciones de tu médico; ante una urgencia, llama al 112.\n\nEvidencias citadas:\n[D1] Partículas en suspensión (PM10 y PM2.5) y salud — Efectos en la salud (particulas_salud.md, fragmento particulas_salud:efectos-en-la-salud:0)\n\nFuentes de los documentos citados:\n- Partículas en suspensión (PM10 y PM2.5) y salud (particulas_salud.md, revisado 2026-09-23; D1)\n    · WHO global air quality guidelines 2021, capítulos de PM2.5 y PM10 — OMS — https://www.who.int/publications/i/item/9789240034228\n    · Nota descriptiva «Calidad del aire ambiente (exterior) y salud» — OMS — https://www.who.int/es/news-room/fact-sheets/detail/ambient-(outdoor)-air-quality-and-health\n    · Informes «Air quality in Europe» — Agencia Europea de Medio Ambiente (EEA) — https://www.eea.europa.eu\n    · Información y avisos sobre intrusiones de polvo sahariano (calima) — AEMET — https://www.aemet.es", "inicio": "2026-10-06T08:27:55.456601+00:00", "duracion_ms": 7103.535, "error": false, "tokens_entrada": 2613, "tokens_salida": 347, "coste_usd": 0.0007103999999999999, "vueltas": 2, "valida": true, "reparaciones": 0, "busqueda_forzada": false, "sintesis_forzada": false, "spans": [{"id": "ce17619c2e959657", "padre": null, "nombre": "turno", "tipo": "AGENT", "grupo": "turno", "fase": "turno", "inicio_ms": 0.0, "duracion_ms": 7103.535, "error": false, "error_descripcion": null, "atributos": {"ruta": "documental", "intencion": "DOCUMENTAL", "tema": "salud", "vueltas": 2, "busqueda_forzada": false, "sintesis_forzada": false, "herramientas": ["buscar_evidencias"], "valida": true, "reparaciones": 0}, "decisiones": []}, {"id": "fb58cf579caf89e2", "padre": "ce17619c2e959657", "nombre": "clasificar", "tipo": "CHAIN", "grupo": "clasificar", "fase": "clasificar", "inicio_ms": 0.1, "duracion_ms": 299.061, "error": false, "error_descripcion": null, "atributos": {"clasificacion_valida": true}, "decisiones": []}, {"id": "1b661ebd7a7be8a0", "padre": "fb58cf579caf89e2", "nombre": "llm", "tipo": "LLM", "grupo": "llm (clasificar)", "fase": "clasificar", "inicio_ms": 0.1, "duracion_ms": 298.967, "error": false, "error_descripcion": null, "atributos": {}, "decisiones": [], "modelo": "mistral.ministral-3-14b-instruct", "tokens_entrada": 266, "tokens_salida": 13, "coste_usd": 6.696e-05}, {"id": "099d350a3a78e122", "padre": "ce17619c2e959657", "nombre": "bucle", "tipo": "CHAIN", "grupo": "bucle", "fase": "bucle", "inicio_ms": 299.3, "duracion_ms": 4194.352, "error": false, "error_descripcion": null, "atributos": {}, "decisiones": []}, {"id": "f2c0956777ccd3c9", "padre": "099d350a3a78e122", "nombre": "llm", "tipo": "LLM", "grupo": "llm (bucle)", "fase": "bucle", "inicio_ms": 299.3, "duracion_ms": 503.129, "error": false, "error_descripcion": null, "atributos": {}, "decisiones": [], "modelo": "mistral.ministral-3-14b-instruct", "tokens_entrada": 367, "tokens_salida": 39, "coste_usd": 9.744e-05}, {"id": "537200c155a6ee6b", "padre": "099d350a3a78e122", "nombre": "buscar_evidencias", "tipo": "TOOL", "grupo": "buscar_evidencias", "fase": "bucle", "inicio_ms": 802.6, "duracion_ms": 458.801, "error": false, "error_descripcion": null, "atributos": {"ok": true, "permitida": true, "forzada": false, "estado": "con_evidencias"}, "decisiones": []}, {"id": "1007c77abe14ac71", "padre": "099d350a3a78e122", "nombre": "llm", "tipo": "LLM", "grupo": "llm (bucle)", "fase": "bucle", "inicio_ms": 1261.6, "duracion_ms": 3232.025, "error": false, "error_descripcion": null, "atributos": {}, "decisiones": [], "modelo": "mistral.ministral-3-14b-instruct", "tokens_entrada": 1039, "tokens_salida": 88, "coste_usd": 0.00027047999999999997}, {"id": "00bc0c73da841d03", "padre": "ce17619c2e959657", "nombre": "sintesis_documental", "tipo": "CHAIN", "grupo": "sintesis_documental", "fase": "sintesis_documental", "inicio_ms": 4493.7, "duracion_ms": 2609.784, "error": false, "error_descripcion": null, "atributos": {"valida": true, "reparaciones": 0}, "decisiones": []}, {"id": "34e35ae524675166", "padre": "00bc0c73da841d03", "nombre": "llm", "tipo": "LLM", "grupo": "llm (sintesis_documental)", "fase": "sintesis_documental", "inicio_ms": 4493.8, "duracion_ms": 2527.308, "error": false, "error_descripcion": null, "atributos": {}, "decisiones": [], "modelo": "mistral.ministral-3-14b-instruct", "tokens_entrada": 941, "tokens_salida": 207, "coste_usd": 0.00027551999999999996}, {"id": "13fc0504b363bab9", "padre": "00bc0c73da841d03", "nombre": "validar", "tipo": "TOOL", "grupo": "validar", "fase": "sintesis_documental", "inicio_ms": 7021.3, "duracion_ms": 82.147, "error": false, "error_descripcion": null, "atributos": {"valida": true, "mensaje_reparacion": ""}, "decisiones": []}]}, {"id": "b9fa85db08e1221ec4a9c983ca66ee42", "lote": "mistral-ministral-3-14b-instruct", "modelos": ["mistral.ministral-3-14b-instruct"], "ruta": "documental", "intencion": "DOCUMENTAL", "tema": "salud", "pregunta": "¿Qué contaminante debería vigilar primero si tengo asma inducida por el ejercicio?", "respuesta": "Si tienes asma inducida por el ejercicio, debes vigilar primero el **dióxido de nitrógeno (NO₂)** y las **partículas** en invierno, ya que son los contaminantes más críticos para este tipo de asma en esta estación, según D1. Evita ejercicio intenso al aire libre cuando estos estén en niveles moderados-altos (40-100 µg/m³ para NO₂, según D2). [D1][D2]\nEn verano, el contaminante más relevante es el **ozono (O₃)**, que puede limitar el ejercicio intenso en horas centrales del día (120-180 µg/m³), según D1 y D3. Se recomienda evitar actividad física en estas condiciones y usar medicación de rescate. [D1][D3]\nEl NO₂ y las partículas agravan el asma al dañar el epitelio respiratorio, aumentando la permeabilidad a alérgenos y la respuesta inflamatoria, lo que empeora los síntomas durante el ejercicio, según D4. [D4]\n\nAviso: esta información es divulgativa y general. No sustituye la valoración de un profesional sanitario ni los avisos oficiales. Si tienes síntomas o una enfermedad diagnosticada, sigue las indicaciones de tu médico; ante una urgencia, llama al 112.\n\nEvidencias citadas:\n[D1] Recomendaciones de exposición por perfil de persona — Personas con asma o EPOC (recomendaciones_por_perfil.md, fragmento recomendaciones_por_perfil:personas-con-asma-o-epoc:0)\n[D2] Óxidos de nitrógeno (NO, NO2, NOx) y salud — Niveles orientativos de NO2 (media horaria o de bloque) (oxidos_nitrogeno_salud.md, fragmento oxidos_nitrogeno_salud:niveles-orientativos-de-no2-media-horaria-o-de-bloque:0)\n[D3] Ozono troposférico (O3) y salud — Niveles orientativos (media horaria o de bloque) (ozono_salud.md, fragmento ozono_salud:niveles-orientativos-media-horaria-o-de-bloque:0)\n[D4] Alergias respiratorias y contaminación en Madrid — La interacción polen-contaminación (alergias_y_contaminacion.md, fragmento alergias_y_contaminacion:la-interaccion-polen-contaminacion:0)\n\nFuentes de los documentos citados:\n- Recomendaciones de exposición por perfil de persona (recomendaciones_por_perfil.md, revisado 2026-09-23; D1)\n    · WHO global air quality guidelines 2021 y notas descriptivas sobre calidad del aire y salud — OMS — https://www.who.int/publications/i/item/9789240034228\n    · Información al paciente sobre alergia y contaminación — Sociedad Española de Alergología e Inmunología Clínica (SEAIC) — https://www.seaic.org\n    · Recomendaciones de salud durante episodios de contaminación — Ayuntamiento de Madrid — https://www.madrid.es\n- Óxidos de nitrógeno (NO, NO2, NOx) y salud (oxidos_nitrogeno_salud.md, revisado 2026-09-23; D2)\n    · WHO global air quality guidelines 2021, capítulo de dióxido de nitrógeno — OMS — https://www.who.int/publications/i/item/9789240034228\n    · Nota descriptiva «Calidad del aire ambiente (exterior) y salud» — OMS — https://www.who.int/es/news-room/fact-sheets/detail/ambient-(outdoor)-air-quality-and-health\n    · Informes «Air quality in Europe» — Agencia Europea de Medio Ambiente (EEA) — https://www.eea.europa.eu\n    · Basic Information about NO2 — U.S. Environmental Protection Agency (EPA) — https://www.epa.gov/no2-pollution\n- Ozono troposférico (O3) y salud (ozono_salud.md, revisado 2026-09-23; D3)\n    · WHO global air quality guidelines 2021, capítulo de ozono — OMS — https://www.who.int/publications/i/item/9789240034228\n    · Informes «Air quality in Europe» — Agencia Europea de Medio Ambiente (EEA) — https://www.eea.europa.eu\n    · Ground-level Ozone Basics — U.S. Environmental Protection Agency (EPA) — https://www.epa.gov/ground-level-ozone-pollution\n- Alergias respiratorias y contaminación en Madrid (alergias_y_contaminacion.md, revisado 2026-09-23; D4)\n    · Alergia y contaminación (información al paciente) — Sociedad Española de Alergología e Inmunología Clínica (SEAIC) — https://www.seaic.org\n    · WHO global air quality guidelines 2021 — OMS — https://www.who.int/publications/i/item/9789240034228\n    · Air quality in Europe (informes) y literatura revisada sobre contaminación y aeroalérgenos — Agencia Europea de Medio Ambiente (EEA) — https://www.eea.europa.eu", "inicio": "2026-10-06T08:28:02.560229+00:00", "duracion_ms": 5990.682, "error": false, "tokens_entrada": 3299, "tokens_salida": 586, "coste_usd": 0.0009323999999999999, "vueltas": 2, "valida": true, "reparaciones": 0, "busqueda_forzada": false, "sintesis_forzada": false, "spans": [{"id": "6cceb06b9e865ffb", "padre": null, "nombre": "turno", "tipo": "AGENT", "grupo": "turno", "fase": "turno", "inicio_ms": 0.0, "duracion_ms": 5990.682, "error": false, "error_descripcion": null, "atributos": {"ruta": "documental", "intencion": "DOCUMENTAL", "tema": "salud", "vueltas": 2, "busqueda_forzada": false, "sintesis_forzada": false, "herramientas": ["buscar_evidencias"], "valida": true, "reparaciones": 0}, "decisiones": []}, {"id": "241eed335046c831", "padre": "6cceb06b9e865ffb", "nombre": "clasificar", "tipo": "CHAIN", "grupo": "clasificar", "fase": "clasificar", "inicio_ms": 0.1, "duracion_ms": 305.962, "error": false, "error_descripcion": null, "atributos": {"clasificacion_valida": true}, "decisiones": []}, {"id": "f3587ef86257ff31", "padre": "241eed335046c831", "nombre": "llm", "tipo": "LLM", "grupo": "llm (clasificar)", "fase": "clasificar", "inicio_ms": 0.1, "duracion_ms": 305.832, "error": false, "error_descripcion": null, "atributos": {}, "decisiones": [], "modelo": "mistral.ministral-3-14b-instruct", "tokens_entrada": 267, "tokens_salida": 13, "coste_usd": 6.720000000000001e-05}, {"id": "3709753a10af9bac", "padre": "6cceb06b9e865ffb", "nombre": "bucle", "tipo": "CHAIN", "grupo": "bucle", "fase": "bucle", "inicio_ms": 306.3, "duracion_ms": 3113.315, "error": false, "error_descripcion": null, "atributos": {}, "decisiones": []}, {"id": "6c0763af4df22155", "padre": "3709753a10af9bac", "nombre": "llm", "tipo": "LLM", "grupo": "llm (bucle)", "fase": "bucle", "inicio_ms": 306.3, "duracion_ms": 678.216, "error": false, "error_descripcion": null, "atributos": {}, "decisiones": [], "modelo": "mistral.ministral-3-14b-instruct", "tokens_entrada": 368, "tokens_salida": 42, "coste_usd": 9.839999999999999e-05}, {"id": "df554f3692e7f3f3", "padre": "3709753a10af9bac", "nombre": "buscar_evidencias", "tipo": "TOOL", "grupo": "buscar_evidencias", "fase": "bucle", "inicio_ms": 984.7, "duracion_ms": 371.529, "error": false, "error_descripcion": null, "atributos": {"ok": true, "permitida": true, "forzada": false, "estado": "con_evidencias"}, "decisiones": []}, {"id": "9e7f31d0cb21b3be", "padre": "3709753a10af9bac", "nombre": "llm", "tipo": "LLM", "grupo": "llm (bucle)", "fase": "bucle", "inicio_ms": 1356.4, "duracion_ms": 2063.188, "error": false, "error_descripcion": null, "atributos": {}, "decisiones": [], "modelo": "mistral.ministral-3-14b-instruct", "tokens_entrada": 1379, "tokens_salida": 222, "coste_usd": 0.00038424}, {"id": "0b2ca05d90076fd2", "padre": "6cceb06b9e865ffb", "nombre": "sintesis_documental", "tipo": "CHAIN", "grupo": "sintesis_documental", "fase": "sintesis_documental", "inicio_ms": 3419.7, "duracion_ms": 2570.934, "error": false, "error_descripcion": null, "atributos": {"valida": true, "reparaciones": 0}, "decisiones": []}, {"id": "0144a5aa23ccb197", "padre": "0b2ca05d90076fd2", "nombre": "llm", "tipo": "LLM", "grupo": "llm (sintesis_documental)", "fase": "sintesis_documental", "inicio_ms": 3419.8, "duracion_ms": 2480.669, "error": false, "error_descripcion": null, "atributos": {}, "decisiones": [], "modelo": "mistral.ministral-3-14b-instruct", "tokens_entrada": 1285, "tokens_salida": 309, "coste_usd": 0.00038255999999999994}, {"id": "3cf780fe16bdff43", "padre": "0b2ca05d90076fd2", "nombre": "validar", "tipo": "TOOL", "grupo": "validar", "fase": "sintesis_documental", "inicio_ms": 5900.6, "duracion_ms": 89.925, "error": false, "error_descripcion": null, "atributos": {"valida": true, "mensaje_reparacion": ""}, "decisiones": []}]}, {"id": "4cb74387d4bd86e775560743f7b0ca4a", "lote": "mistral-ministral-3-14b-instruct", "modelos": ["mistral.ministral-3-14b-instruct"], "ruta": "documental", "intencion": "DOCUMENTAL", "tema": "salud", "pregunta": "¿Qué significa una lectura alta de NO para una persona que está junto al tráfico?", "respuesta": "Una lectura alta de NO (monóxido de nitrógeno) junto al tráfico indica exposición a emisiones recientes de combustión, especialmente de motores diésel, ya que este gas se emite directamente y luego se transforma en NO₂ (dióxido de nitrógeno) en la atmósfera. [D2]\nEl NO₂, derivado del NO, es el compuesto con mayor relevancia sanitaria y sus niveles altos están asociados a irritación de vías respiratorias, agravamiento de asma, alergias y mayor susceptibilidad a infecciones respiratorias, especialmente en grupos sensibles. [D2][D4]\nLos niveles altos de NO₂ (>100 µg/m³) en zonas cercanas al tráfico requieren evitar ejercicio intenso al aire libre y recomiendan a personas sensibles (asma, niños, ancianos) permanecer en interiores o alejarse de las vías principales. [D1][D3][D4]\n\nLimitaciones:\n- No se especifica un umbral exacto de 'lectura alta' de NO en µg/m³, solo se menciona su relación con el tráfico y su transformación a NO₂.\n- No hay datos sobre efectos específicos del NO (sin oxidar) en comparación con el NO₂ en la salud de personas expuestas junto al tráfico.\n- No se detallan medidas concretas para reducir la exposición al NO en tiempo real, solo estrategias generales como alejarse del tráfico.\n\nAviso: esta información es divulgativa y general. No sustituye la valoración de un profesional sanitario ni los avisos oficiales. Si tienes síntomas o una enfermedad diagnosticada, sigue las indicaciones de tu médico; ante una urgencia, llama al 112.\n\nEvidencias citadas:\n[D1] Óxidos de nitrógeno (NO, NO2, NOx) y salud — Cómo reducir la exposición (oxidos_nitrogeno_salud.md, fragmento oxidos_nitrogeno_salud:como-reducir-la-exposicion:0)\n[D2] Óxidos de nitrógeno (NO, NO2, NOx) y salud — Qué son y de dónde vienen (oxidos_nitrogeno_salud.md, fragmento oxidos_nitrogeno_salud:que-son-y-de-donde-vienen:0)\n[D3] Óxidos de nitrógeno (NO, NO2, NOx) y salud — Niveles orientativos de NO2 (media horaria o de bloque) (oxidos_nitrogeno_salud.md, fragmento oxidos_nitrogeno_salud:niveles-orientativos-de-no2-media-horaria-o-de-bloque:0)\n[D4] Óxidos de nitrógeno (NO, NO2, NOx) y salud — Efectos en la salud (oxidos_nitrogeno_salud.md, fragmento oxidos_nitrogeno_salud:efectos-en-la-salud:0)\n\nFuentes de los documentos citados:\n- Óxidos de nitrógeno (NO, NO2, NOx) y salud (oxidos_nitrogeno_salud.md, revisado 2026-09-23; D1, D2, D3, D4)\n    · WHO global air quality guidelines 2021, capítulo de dióxido de nitrógeno — OMS — https://www.who.int/publications/i/item/9789240034228\n    · Nota descriptiva «Calidad del aire ambiente (exterior) y salud» — OMS — https://www.who.int/es/news-room/fact-sheets/detail/ambient-(outdoor)-air-quality-and-health\n    · Informes «Air quality in Europe» — Agencia Europea de Medio Ambiente (EEA) — https://www.eea.europa.eu\n    · Basic Information about NO2 — U.S. Environmental Protection Agency (EPA) — https://www.epa.gov/no2-pollution", "inicio": "2026-10-06T08:28:08.551014+00:00", "duracion_ms": 9433.076, "error": false, "tokens_entrada": 3479, "tokens_salida": 707, "coste_usd": 0.00100464, "vueltas": 2, "valida": true, "reparaciones": 0, "busqueda_forzada": false, "sintesis_forzada": false, "spans": [{"id": "bedbeb5eb3acb1f8", "padre": null, "nombre": "turno", "tipo": "AGENT", "grupo": "turno", "fase": "turno", "inicio_ms": 0.0, "duracion_ms": 9433.076, "error": false, "error_descripcion": null, "atributos": {"ruta": "documental", "intencion": "DOCUMENTAL", "tema": "salud", "vueltas": 2, "busqueda_forzada": false, "sintesis_forzada": false, "herramientas": ["buscar_evidencias"], "valida": true, "reparaciones": 0}, "decisiones": []}, {"id": "ef47d193dd54490d", "padre": "bedbeb5eb3acb1f8", "nombre": "clasificar", "tipo": "CHAIN", "grupo": "clasificar", "fase": "clasificar", "inicio_ms": 0.1, "duracion_ms": 308.457, "error": false, "error_descripcion": null, "atributos": {"clasificacion_valida": true}, "decisiones": []}, {"id": "0ba6ca69852bf586", "padre": "ef47d193dd54490d", "nombre": "llm", "tipo": "LLM", "grupo": "llm (clasificar)", "fase": "clasificar", "inicio_ms": 0.2, "duracion_ms": 308.318, "error": false, "error_descripcion": null, "atributos": {}, "decisiones": [], "modelo": "mistral.ministral-3-14b-instruct", "tokens_entrada": 266, "tokens_salida": 13, "coste_usd": 6.696e-05}, {"id": "54d85fbc81ef3410", "padre": "bedbeb5eb3acb1f8", "nombre": "bucle", "tipo": "CHAIN", "grupo": "bucle", "fase": "bucle", "inicio_ms": 308.7, "duracion_ms": 4955.067, "error": false, "error_descripcion": null, "atributos": {}, "decisiones": []}, {"id": "8a32e9b1cb7684a5", "padre": "54d85fbc81ef3410", "nombre": "llm", "tipo": "LLM", "grupo": "llm (bucle)", "fase": "bucle", "inicio_ms": 308.8, "duracion_ms": 1202.221, "error": false, "error_descripcion": null, "atributos": {}, "decisiones": [], "modelo": "mistral.ministral-3-14b-instruct", "tokens_entrada": 367, "tokens_salida": 46, "coste_usd": 9.912e-05}, {"id": "a32cfb0a92887bc8", "padre": "54d85fbc81ef3410", "nombre": "buscar_evidencias", "tipo": "TOOL", "grupo": "buscar_evidencias", "fase": "bucle", "inicio_ms": 1511.2, "duracion_ms": 434.978, "error": false, "error_descripcion": null, "atributos": {"ok": true, "permitida": true, "forzada": false, "estado": "con_evidencias"}, "decisiones": []}, {"id": "22ac26c60aeba5c1", "padre": "54d85fbc81ef3410", "nombre": "llm", "tipo": "LLM", "grupo": "llm (bucle)", "fase": "bucle", "inicio_ms": 1946.4, "duracion_ms": 3317.377, "error": false, "error_descripcion": null, "atributos": {}, "decisiones": [], "modelo": "mistral.ministral-3-14b-instruct", "tokens_entrada": 1474, "tokens_salida": 269, "coste_usd": 0.00041832}, {"id": "e1f0a62c005d5265", "padre": "bedbeb5eb3acb1f8", "nombre": "sintesis_documental", "tipo": "CHAIN", "grupo": "sintesis_documental", "fase": "sintesis_documental", "inicio_ms": 5263.9, "duracion_ms": 4169.064, "error": false, "error_descripcion": null, "atributos": {"valida": true, "reparaciones": 0}, "decisiones": []}, {"id": "263a2ca76e1a2bfc", "padre": "e1f0a62c005d5265", "nombre": "llm", "tipo": "LLM", "grupo": "llm (sintesis_documental)", "fase": "sintesis_documental", "inicio_ms": 5264.1, "duracion_ms": 4083.146, "error": false, "error_descripcion": null, "atributos": {}, "decisiones": [], "modelo": "mistral.ministral-3-14b-instruct", "tokens_entrada": 1372, "tokens_salida": 379, "coste_usd": 0.00042023999999999995}, {"id": "00b1884d44f786ec", "padre": "e1f0a62c005d5265", "nombre": "validar", "tipo": "TOOL", "grupo": "validar", "fase": "sintesis_documental", "inicio_ms": 9347.4, "duracion_ms": 85.52, "error": false, "error_descripcion": null, "atributos": {"valida": true, "mensaje_reparacion": ""}, "decisiones": []}]}, {"id": "bef2bdfce38f792e212e9468972ff3e1", "lote": "mistral-ministral-3-14b-instruct", "modelos": ["mistral.ministral-3-14b-instruct"], "ruta": "documental", "intencion": "DOCUMENTAL", "tema": "salud", "pregunta": "¿Por qué el ozono puede ser peor por la tarde aunque haya menos tráfico?", "respuesta": "El ozono aumenta por la tarde (14-19h) porque su formación depende de reacciones fotoquímicas entre óxidos de nitrógeno (NOx) y compuestos orgánicos volátiles (COV) bajo radiación solar intensa. Aunque haya menos tráfico, la acumulación de estos precursores durante el día, junto con la luz solar, favorece su transformación en ozono. [D1]\nEl ozono es más alto en zonas periféricas y verdes que cerca del tráfico, ya que el NO fresco emitido por los vehículos destruye ozono localmente. Esto explica por qué, aunque haya menos tráfico por la tarde, los niveles de ozono pueden ser mayores en áreas menos congestionadas. [D1]\nLa paradoja urbana indica que, aunque el tráfico disminuya, los niveles de ozono pueden ser peores por la tarde debido a la persistencia de sus precursores y la radiación solar, que maximiza su formación en ese horario. [D1]\n\nAviso: esta información es divulgativa y general. No sustituye la valoración de un profesional sanitario ni los avisos oficiales. Si tienes síntomas o una enfermedad diagnosticada, sigue las indicaciones de tu médico; ante una urgencia, llama al 112.\n\nEvidencias citadas:\n[D1] Ozono troposférico (O3) y salud — Qué es y su patrón particular (ozono_salud.md, fragmento ozono_salud:que-es-y-su-patron-particular:0)\n\nFuentes de los documentos citados:\n- Ozono troposférico (O3) y salud (ozono_salud.md, revisado 2026-09-23; D1)\n    · WHO global air quality guidelines 2021, capítulo de ozono — OMS — https://www.who.int/publications/i/item/9789240034228\n    · Informes «Air quality in Europe» — Agencia Europea de Medio Ambiente (EEA) — https://www.eea.europa.eu\n    · Ground-level Ozone Basics — U.S. Environmental Protection Agency (EPA) — https://www.epa.gov/ground-level-ozone-pollution", "inicio": "2026-10-06T08:28:17.984197+00:00", "duracion_ms": 5628.846, "error": false, "tokens_entrada": 3101, "tokens_salida": 538, "coste_usd": 0.0008733599999999999, "vueltas": 2, "valida": true, "reparaciones": 0, "busqueda_forzada": false, "sintesis_forzada": false, "spans": [{"id": "51464d257635c722", "padre": null, "nombre": "turno", "tipo": "AGENT", "grupo": "turno", "fase": "turno", "inicio_ms": 0.0, "duracion_ms": 5628.846, "error": false, "error_descripcion": null, "atributos": {"ruta": "documental", "intencion": "DOCUMENTAL", "tema": "salud", "vueltas": 2, "busqueda_forzada": false, "sintesis_forzada": false, "herramientas": ["buscar_evidencias"], "valida": true, "reparaciones": 0}, "decisiones": []}, {"id": "e92abd1ec8248636", "padre": "51464d257635c722", "nombre": "clasificar", "tipo": "CHAIN", "grupo": "clasificar", "fase": "clasificar", "inicio_ms": 0.1, "duracion_ms": 342.558, "error": false, "error_descripcion": null, "atributos": {"clasificacion_valida": true}, "decisiones": []}, {"id": "e94fb9b24cf5d564", "padre": "e92abd1ec8248636", "nombre": "llm", "tipo": "LLM", "grupo": "llm (clasificar)", "fase": "clasificar", "inicio_ms": 0.1, "duracion_ms": 342.357, "error": false, "error_descripcion": null, "atributos": {}, "decisiones": [], "modelo": "mistral.ministral-3-14b-instruct", "tokens_entrada": 266, "tokens_salida": 13, "coste_usd": 6.696e-05}, {"id": "6b66b8e2625589fe", "padre": "51464d257635c722", "nombre": "bucle", "tipo": "CHAIN", "grupo": "bucle", "fase": "bucle", "inicio_ms": 342.9, "duracion_ms": 2365.017, "error": false, "error_descripcion": null, "atributos": {}, "decisiones": []}, {"id": "de75df28218ab2b0", "padre": "6b66b8e2625589fe", "nombre": "llm", "tipo": "LLM", "grupo": "llm (bucle)", "fase": "bucle", "inicio_ms": 343.1, "duracion_ms": 576.253, "error": false, "error_descripcion": null, "atributos": {}, "decisiones": [], "modelo": "mistral.ministral-3-14b-instruct", "tokens_entrada": 367, "tokens_salida": 39, "coste_usd": 9.744e-05}, {"id": "69bb9d8c88e70aa2", "padre": "6b66b8e2625589fe", "nombre": "buscar_evidencias", "tipo": "TOOL", "grupo": "buscar_evidencias", "fase": "bucle", "inicio_ms": 919.5, "duracion_ms": 177.037, "error": false, "error_descripcion": null, "atributos": {"ok": true, "permitida": true, "forzada": false, "estado": "con_evidencias"}, "decisiones": []}, {"id": "d1785d976577e49d", "padre": "6b66b8e2625589fe", "nombre": "llm", "tipo": "LLM", "grupo": "llm (bucle)", "fase": "bucle", "inicio_ms": 1096.7, "duracion_ms": 1611.175, "error": false, "error_descripcion": null, "atributos": {}, "decisiones": [], "modelo": "mistral.ministral-3-14b-instruct", "tokens_entrada": 1278, "tokens_salida": 200, "coste_usd": 0.00035472}, {"id": "2728a94d07e9cbd4", "padre": "51464d257635c722", "nombre": "sintesis_documental", "tipo": "CHAIN", "grupo": "sintesis_documental", "fase": "sintesis_documental", "inicio_ms": 2708.1, "duracion_ms": 2920.686, "error": false, "error_descripcion": null, "atributos": {"valida": true, "reparaciones": 0}, "decisiones": []}, {"id": "6fefed382f53b6e8", "padre": "2728a94d07e9cbd4", "nombre": "llm", "tipo": "LLM", "grupo": "llm (sintesis_documental)", "fase": "sintesis_documental", "inicio_ms": 2708.3, "duracion_ms": 2833.698, "error": false, "error_descripcion": null, "atributos": {}, "decisiones": [], "modelo": "mistral.ministral-3-14b-instruct", "tokens_entrada": 1190, "tokens_salida": 286, "coste_usd": 0.00035423999999999997}, {"id": "d8009b6406446283", "padre": "2728a94d07e9cbd4", "nombre": "validar", "tipo": "TOOL", "grupo": "validar", "fase": "sintesis_documental", "inicio_ms": 5542.1, "duracion_ms": 86.589, "error": false, "error_descripcion": null, "atributos": {"valida": true, "mensaje_reparacion": ""}, "decisiones": []}]}, {"id": "b5576797d8562c4e3f60907ab54047d3", "lote": "mistral-ministral-3-14b-instruct", "modelos": ["mistral.ministral-3-14b-instruct"], "ruta": "libre", "intencion": "CHARLA", "tema": "ninguno", "pregunta": "Hola, ¿qué sabes hacer?", "respuesta": "¡Hola! Soy el asistente del proyecto académico **\"Calidad del Aire de Madrid\"**, que analiza contaminantes como **NO₂, ozono (O₃) y partículas (PM₂.₅ y PM₁₀)**. Puedo explicarte sus **efectos en la salud**, los **límites legales** (Real Decreto 102/2011) y las **guías de la OMS**, así como el **protocolo de episodios de contaminación** de la Comunidad de Madrid y el enfoque del propio proyecto.", "inicio": "2026-10-06T08:28:23.613146+00:00", "duracion_ms": 1827.411, "error": false, "tokens_entrada": 393, "tokens_salida": 137, "coste_usd": 0.0001272, "vueltas": 1, "valida": null, "reparaciones": null, "busqueda_forzada": false, "sintesis_forzada": false, "spans": [{"id": "6cda8d0354c6d284", "padre": null, "nombre": "turno", "tipo": "AGENT", "grupo": "turno", "fase": "turno", "inicio_ms": 0.0, "duracion_ms": 1827.411, "error": false, "error_descripcion": null, "atributos": {"ruta": "libre", "intencion": "CHARLA", "tema": "ninguno", "vueltas": 1, "busqueda_forzada": false, "sintesis_forzada": false, "herramientas": []}, "decisiones": []}, {"id": "823d9237fb0ddfee", "padre": "6cda8d0354c6d284", "nombre": "clasificar", "tipo": "CHAIN", "grupo": "clasificar", "fase": "clasificar", "inicio_ms": 0.1, "duracion_ms": 438.261, "error": false, "error_descripcion": null, "atributos": {"clasificacion_valida": true}, "decisiones": []}, {"id": "efb0a3020d4dc22c", "padre": "823d9237fb0ddfee", "nombre": "llm", "tipo": "LLM", "grupo": "llm (clasificar)", "fase": "clasificar", "inicio_ms": 0.1, "duracion_ms": 438.133, "error": false, "error_descripcion": null, "atributos": {}, "decisiones": [], "modelo": "mistral.ministral-3-14b-instruct", "tokens_entrada": 257, "tokens_salida": 12, "coste_usd": 6.456e-05}, {"id": "c88abbcdc7e36b95", "padre": "6cda8d0354c6d284", "nombre": "bucle", "tipo": "CHAIN", "grupo": "bucle", "fase": "bucle", "inicio_ms": 438.5, "duracion_ms": 1388.805, "error": false, "error_descripcion": null, "atributos": {}, "decisiones": []}, {"id": "2c2ea962bf84c101", "padre": "c88abbcdc7e36b95", "nombre": "llm", "tipo": "LLM", "grupo": "llm (bucle)", "fase": "bucle", "inicio_ms": 438.6, "duracion_ms": 1388.683, "error": false, "error_descripcion": null, "atributos": {}, "decisiones": [], "modelo": "mistral.ministral-3-14b-instruct", "tokens_entrada": 136, "tokens_salida": 125, "coste_usd": 6.264e-05}]}, {"id": "9b11034a6d3d2717581be90dee1fe99f", "lote": "mistral-ministral-3-14b-instruct", "modelos": ["mistral.ministral-3-14b-instruct"], "ruta": "libre", "intencion": "CHARLA", "tema": "ninguno", "pregunta": "Gracias, me ha sido muy útil.", "respuesta": "¡Gracias a ti por tu interés en el proyecto! Estoy encantado de que la información te haya resultado útil. Si tienes más dudas sobre calidad del aire, contaminantes o el protocolo de Madrid, aquí estoy para ayudarte.", "inicio": "2026-10-06T08:28:25.440707+00:00", "duracion_ms": 994.826, "error": false, "tokens_entrada": 393, "tokens_salida": 62, "coste_usd": 0.0001092, "vueltas": 1, "valida": null, "reparaciones": null, "busqueda_forzada": false, "sintesis_forzada": false, "spans": [{"id": "20c1da2f99c00a82", "padre": null, "nombre": "turno", "tipo": "AGENT", "grupo": "turno", "fase": "turno", "inicio_ms": 0.0, "duracion_ms": 994.826, "error": false, "error_descripcion": null, "atributos": {"ruta": "libre", "intencion": "CHARLA", "tema": "ninguno", "vueltas": 1, "busqueda_forzada": false, "sintesis_forzada": false, "herramientas": []}, "decisiones": []}, {"id": "6fa29b07b1a7200c", "padre": "20c1da2f99c00a82", "nombre": "clasificar", "tipo": "CHAIN", "grupo": "clasificar", "fase": "clasificar", "inicio_ms": 0.1, "duracion_ms": 357.853, "error": false, "error_descripcion": null, "atributos": {"clasificacion_valida": true}, "decisiones": []}, {"id": "8cff9350bebd3f57", "padre": "6fa29b07b1a7200c", "nombre": "llm", "tipo": "LLM", "grupo": "llm (clasificar)", "fase": "clasificar", "inicio_ms": 0.2, "duracion_ms": 357.728, "error": false, "error_descripcion": null, "atributos": {}, "decisiones": [], "modelo": "mistral.ministral-3-14b-instruct", "tokens_entrada": 257, "tokens_salida": 12, "coste_usd": 6.456e-05}, {"id": "52363633f6f45863", "padre": "20c1da2f99c00a82", "nombre": "bucle", "tipo": "CHAIN", "grupo": "bucle", "fase": "bucle", "inicio_ms": 358.1, "duracion_ms": 636.668, "error": false, "error_descripcion": null, "atributos": {}, "decisiones": []}, {"id": "993f78b691a534f5", "padre": "52363633f6f45863", "nombre": "llm", "tipo": "LLM", "grupo": "llm (bucle)", "fase": "bucle", "inicio_ms": 358.1, "duracion_ms": 636.6, "error": false, "error_descripcion": null, "atributos": {}, "decisiones": [], "modelo": "mistral.ministral-3-14b-instruct", "tokens_entrada": 136, "tokens_salida": 50, "coste_usd": 4.464e-05}]}, {"id": "5cdd5f94df5143546e31a86e2d92fa81", "lote": "mistral-ministral-3-14b-instruct", "modelos": ["mistral.ministral-3-14b-instruct"], "ruta": "fija", "intencion": "FUERA_DE_ALCANCE", "tema": "ninguno", "pregunta": "¿Quién ganó la Liga el año pasado?", "respuesta": "Solo puedo ayudarte con la calidad del aire de Madrid. Sí puedo explicarte los efectos de los contaminantes en la salud, los límites legales y las guías de la OMS, el protocolo de episodios de Madrid o el propio proyecto.", "inicio": "2026-10-06T08:28:26.435648+00:00", "duracion_ms": 304.602, "error": false, "tokens_entrada": 258, "tokens_salida": 17, "coste_usd": 6.6e-05, "vueltas": 0, "valida": null, "reparaciones": null, "busqueda_forzada": false, "sintesis_forzada": false, "spans": [{"id": "79df44af1b6c94dd", "padre": null, "nombre": "turno", "tipo": "AGENT", "grupo": "turno", "fase": "turno", "inicio_ms": 0.0, "duracion_ms": 304.602, "error": false, "error_descripcion": null, "atributos": {"ruta": "fija", "intencion": "FUERA_DE_ALCANCE", "tema": "ninguno", "vueltas": 0, "busqueda_forzada": false, "sintesis_forzada": false, "herramientas": []}, "decisiones": ["frase_fija:FUERA_DE_ALCANCE"]}, {"id": "da543a203968aeed", "padre": "79df44af1b6c94dd", "nombre": "clasificar", "tipo": "CHAIN", "grupo": "clasificar", "fase": "clasificar", "inicio_ms": 0.1, "duracion_ms": 304.373, "error": false, "error_descripcion": null, "atributos": {"clasificacion_valida": true}, "decisiones": []}, {"id": "a5ade7d3f530adf0", "padre": "da543a203968aeed", "nombre": "llm", "tipo": "LLM", "grupo": "llm (clasificar)", "fase": "clasificar", "inicio_ms": 0.2, "duracion_ms": 304.224, "error": false, "error_descripcion": null, "atributos": {}, "decisiones": [], "modelo": "mistral.ministral-3-14b-instruct", "tokens_entrada": 258, "tokens_salida": 17, "coste_usd": 6.6e-05}]}, {"id": "fbdc24151b2cc98cfbac411c1664e1a7", "lote": "mistral-ministral-3-14b-instruct", "modelos": ["mistral.ministral-3-14b-instruct"], "ruta": "fija", "intencion": "FUERA_DE_ALCANCE", "tema": "ninguno", "pregunta": "¿Cómo se hace una tortilla de patatas?", "respuesta": "Solo puedo ayudarte con la calidad del aire de Madrid. Sí puedo explicarte los efectos de los contaminantes en la salud, los límites legales y las guías de la OMS, el protocolo de episodios de Madrid o el propio proyecto.", "inicio": "2026-10-06T08:28:26.740384+00:00", "duracion_ms": 694.743, "error": false, "tokens_entrada": 260, "tokens_salida": 17, "coste_usd": 6.648e-05, "vueltas": 0, "valida": null, "reparaciones": null, "busqueda_forzada": false, "sintesis_forzada": false, "spans": [{"id": "3484f17ecef0a791", "padre": null, "nombre": "turno", "tipo": "AGENT", "grupo": "turno", "fase": "turno", "inicio_ms": 0.0, "duracion_ms": 694.743, "error": false, "error_descripcion": null, "atributos": {"ruta": "fija", "intencion": "FUERA_DE_ALCANCE", "tema": "ninguno", "vueltas": 0, "busqueda_forzada": false, "sintesis_forzada": false, "herramientas": []}, "decisiones": ["frase_fija:FUERA_DE_ALCANCE"]}, {"id": "7725bbc6d414121d", "padre": "3484f17ecef0a791", "nombre": "clasificar", "tipo": "CHAIN", "grupo": "clasificar", "fase": "clasificar", "inicio_ms": 0.1, "duracion_ms": 694.492, "error": false, "error_descripcion": null, "atributos": {"clasificacion_valida": true}, "decisiones": []}, {"id": "f15dfaf8a29ff1dd", "padre": "7725bbc6d414121d", "nombre": "llm", "tipo": "LLM", "grupo": "llm (clasificar)", "fase": "clasificar", "inicio_ms": 0.2, "duracion_ms": 694.33, "error": false, "error_descripcion": null, "atributos": {}, "decisiones": [], "modelo": "mistral.ministral-3-14b-instruct", "tokens_entrada": 260, "tokens_salida": 17, "coste_usd": 6.648e-05}]}, {"id": "bdbd9644b60ae6f57d76983949488082", "lote": "mistral-ministral-3-14b-instruct", "modelos": ["mistral.ministral-3-14b-instruct"], "ruta": "fija", "intencion": "DATOS", "tema": "ninguno", "pregunta": "¿Cuándo empieza la temporada de polen de las gramíneas en Madrid?", "respuesta": "Todavía no consulto mediciones de las estaciones, ni actuales ni históricas, así que no puedo decirte cómo está o cómo ha estado el aire en una zona. Sí puedo explicarte los efectos de los contaminantes en la salud, los límites legales y las guías de la OMS, el protocolo de episodios de Madrid o el propio proyecto.", "inicio": "2026-10-06T08:28:27.435266+00:00", "duracion_ms": 293.108, "error": false, "tokens_entrada": 266, "tokens_salida": 12, "coste_usd": 6.672e-05, "vueltas": 0, "valida": null, "reparaciones": null, "busqueda_forzada": false, "sintesis_forzada": false, "spans": [{"id": "2650b3924dd8c25c", "padre": null, "nombre": "turno", "tipo": "AGENT", "grupo": "turno", "fase": "turno", "inicio_ms": 0.0, "duracion_ms": 293.108, "error": false, "error_descripcion": null, "atributos": {"ruta": "fija", "intencion": "DATOS", "tema": "ninguno", "vueltas": 0, "busqueda_forzada": false, "sintesis_forzada": false, "herramientas": []}, "decisiones": ["frase_fija:DATOS"]}, {"id": "c76df3360cae6a6c", "padre": "2650b3924dd8c25c", "nombre": "clasificar", "tipo": "CHAIN", "grupo": "clasificar", "fase": "clasificar", "inicio_ms": 0.2, "duracion_ms": 292.851, "error": false, "error_descripcion": null, "atributos": {"clasificacion_valida": true}, "decisiones": []}, {"id": "2399332d3fe6fe9d", "padre": "c76df3360cae6a6c", "nombre": "llm", "tipo": "LLM", "grupo": "llm (clasificar)", "fase": "clasificar", "inicio_ms": 0.3, "duracion_ms": 292.7, "error": false, "error_descripcion": null, "atributos": {}, "decisiones": [], "modelo": "mistral.ministral-3-14b-instruct", "tokens_entrada": 266, "tokens_salida": 12, "coste_usd": 6.672e-05}]}, {"id": "3c9f15b0737788daf8e952b961259a76", "lote": "mistral-ministral-3-14b-instruct", "modelos": ["mistral.ministral-3-14b-instruct"], "ruta": "sin_evidencia", "intencion": "DOCUMENTAL", "tema": "salud", "pregunta": "¿Qué efectos tiene el benceno en la salud?", "respuesta": "No encuentro información sobre esto en la documentación revisada del asistente. Puedo ayudarte con los efectos en la salud de los contaminantes, los límites legales y las guías de la OMS, el protocolo de episodios de Madrid o el propio proyecto.", "inicio": "2026-10-06T08:28:27.728470+00:00", "duracion_ms": 2464.466, "error": false, "tokens_entrada": 623, "tokens_salida": 47, "coste_usd": 0.0001608, "vueltas": 1, "valida": null, "reparaciones": null, "busqueda_forzada": false, "sintesis_forzada": false, "spans": [{"id": "6e68e332452d76a0", "padre": null, "nombre": "turno", "tipo": "AGENT", "grupo": "turno", "fase": "turno", "inicio_ms": 0.0, "duracion_ms": 2464.466, "error": false, "error_descripcion": null, "atributos": {"ruta": "sin_evidencia", "intencion": "DOCUMENTAL", "tema": "salud", "vueltas": 1, "busqueda_forzada": false, "sintesis_forzada": false, "herramientas": ["buscar_evidencias"]}, "decisiones": []}, {"id": "4c343eaeb20f78c9", "padre": "6e68e332452d76a0", "nombre": "clasificar", "tipo": "CHAIN", "grupo": "clasificar", "fase": "clasificar", "inicio_ms": 0.1, "duracion_ms": 1803.229, "error": false, "error_descripcion": null, "atributos": {"clasificacion_valida": true}, "decisiones": []}, {"id": "4ae611ac1772234d", "padre": "4c343eaeb20f78c9", "nombre": "llm", "tipo": "LLM", "grupo": "llm (clasificar)", "fase": "clasificar", "inicio_ms": 0.1, "duracion_ms": 1803.143, "error": false, "error_descripcion": null, "atributos": {}, "decisiones": [], "modelo": "mistral.ministral-3-14b-instruct", "tokens_entrada": 261, "tokens_salida": 13, "coste_usd": 6.576000000000001e-05}, {"id": "2fe08b3054524a79", "padre": "6e68e332452d76a0", "nombre": "bucle", "tipo": "CHAIN", "grupo": "bucle", "fase": "bucle", "inicio_ms": 1803.4, "duracion_ms": 660.997, "error": false, "error_descripcion": null, "atributos": {}, "decisiones": ["sin_evidencia"]}, {"id": "91f0fcbcd50f557e", "padre": "2fe08b3054524a79", "nombre": "llm", "tipo": "LLM", "grupo": "llm (bucle)", "fase": "bucle", "inicio_ms": 1803.5, "duracion_ms": 468.623, "error": false, "error_descripcion": null, "atributos": {}, "decisiones": [], "modelo": "mistral.ministral-3-14b-instruct", "tokens_entrada": 362, "tokens_salida": 34, "coste_usd": 9.504e-05}, {"id": "10d5a35b3d0bdd74", "padre": "2fe08b3054524a79", "nombre": "buscar_evidencias", "tipo": "TOOL", "grupo": "buscar_evidencias", "fase": "bucle", "inicio_ms": 2272.2, "duracion_ms": 192.068, "error": false, "error_descripcion": null, "atributos": {"ok": true, "permitida": true, "forzada": false, "estado": "sin_evidencia"}, "decisiones": []}]}, {"id": "4e6496bae19519824ae627f0ea9b64eb", "lote": "openai-gpt-oss-120b-1-0", "modelos": ["openai.gpt-oss-120b-1:0"], "ruta": "documental", "intencion": "DOCUMENTAL", "tema": "salud", "pregunta": "¿Qué síntomas puede empeorar el ozono?", "respuesta": "El ozono irrita los ojos, la garganta y las vías respiratorias. [D1]\nReduce la función pulmonar y puede causar dolor torácico al inspirar profundamente durante el ejercicio. [D1]\nAgrava el asma y la enfermedad pulmonar obstructiva crónica (EPOC). [D1]\n\nAviso: esta información es divulgativa y general. No sustituye la valoración de un profesional sanitario ni los avisos oficiales. Si tienes síntomas o una enfermedad diagnosticada, sigue las indicaciones de tu médico; ante una urgencia, llama al 112.\n\nEvidencias citadas:\n[D1] Ozono troposférico (O3) y salud — Efectos en la salud (ozono_salud.md, fragmento ozono_salud:efectos-en-la-salud:0)\n\nFuentes de los documentos citados:\n- Ozono troposférico (O3) y salud (ozono_salud.md, revisado 2026-09-23; D1)\n    · WHO global air quality guidelines 2021, capítulo de ozono — OMS — https://www.who.int/publications/i/item/9789240034228\n    · Informes «Air quality in Europe» — Agencia Europea de Medio Ambiente (EEA) — https://www.eea.europa.eu\n    · Ground-level Ozone Basics — U.S. Environmental Protection Agency (EPA) — https://www.epa.gov/ground-level-ozone-pollution", "inicio": "2026-10-06T08:28:55.251569+00:00", "duracion_ms": 5305.913, "error": false, "tokens_entrada": 3002, "tokens_salida": 753, "coste_usd": 0.00106746, "vueltas": 2, "valida": true, "reparaciones": 0, "busqueda_forzada": false, "sintesis_forzada": false, "spans": [{"id": "1e43e95ee26b292d", "padre": null, "nombre": "turno", "tipo": "AGENT", "grupo": "turno", "fase": "turno", "inicio_ms": 0.0, "duracion_ms": 5305.913, "error": false, "error_descripcion": null, "atributos": {"ruta": "documental", "intencion": "DOCUMENTAL", "tema": "salud", "vueltas": 2, "busqueda_forzada": false, "sintesis_forzada": false, "herramientas": ["buscar_evidencias"], "valida": true, "reparaciones": 0}, "decisiones": []}, {"id": "50ec95000dab77ab", "padre": "1e43e95ee26b292d", "nombre": "clasificar", "tipo": "CHAIN", "grupo": "clasificar", "fase": "clasificar", "inicio_ms": 0.2, "duracion_ms": 1008.3, "error": false, "error_descripcion": null, "atributos": {"clasificacion_valida": true}, "decisiones": []}, {"id": "7491bd5e550df773", "padre": "50ec95000dab77ab", "nombre": "llm", "tipo": "LLM", "grupo": "llm (clasificar)", "fase": "clasificar", "inicio_ms": 0.2, "duracion_ms": 1008.176, "error": false, "error_descripcion": null, "atributos": {}, "decisiones": [], "modelo": "openai.gpt-oss-120b-1:0", "tokens_entrada": 310, "tokens_salida": 101, "coste_usd": 0.00012649999999999998}, {"id": "893547eced4b496e", "padre": "1e43e95ee26b292d", "nombre": "bucle", "tipo": "CHAIN", "grupo": "bucle", "fase": "bucle", "inicio_ms": 1150.3, "duracion_ms": 2731.35, "error": false, "error_descripcion": null, "atributos": {}, "decisiones": []}, {"id": "78d64f2f5288f286", "padre": "893547eced4b496e", "nombre": "llm", "tipo": "LLM", "grupo": "llm (bucle)", "fase": "bucle", "inicio_ms": 1150.5, "duracion_ms": 1011.171, "error": false, "error_descripcion": null, "atributos": {}, "decisiones": [], "modelo": "openai.gpt-oss-120b-1:0", "tokens_entrada": 379, "tokens_salida": 104, "coste_usd": 0.00014101999999999997}, {"id": "5ff4f016e71dc472", "padre": "893547eced4b496e", "nombre": "buscar_evidencias", "tipo": "TOOL", "grupo": "buscar_evidencias", "fase": "bucle", "inicio_ms": 2161.7, "duracion_ms": 165.778, "error": false, "error_descripcion": null, "atributos": {"ok": true, "permitida": true, "forzada": false, "estado": "con_evidencias"}, "decisiones": []}, {"id": "504fa1b51a71a2cb", "padre": "893547eced4b496e", "nombre": "llm", "tipo": "LLM", "grupo": "llm (bucle)", "fase": "bucle", "inicio_ms": 2327.7, "duracion_ms": 1553.976, "error": false, "error_descripcion": null, "atributos": {}, "decisiones": [], "modelo": "openai.gpt-oss-120b-1:0", "tokens_entrada": 1214, "tokens_salida": 210, "coste_usd": 0.00036552}, {"id": "27c35c2244f6c4bc", "padre": "1e43e95ee26b292d", "nombre": "sintesis_documental", "tipo": "CHAIN", "grupo": "sintesis_documental", "fase": "sintesis_documental", "inicio_ms": 3881.8, "duracion_ms": 1424.065, "error": false, "error_descripcion": null, "atributos": {"valida": true, "reparaciones": 0}, "decisiones": []}, {"id": "a8c5066fdf770b78", "padre": "27c35c2244f6c4bc", "nombre": "llm", "tipo": "LLM", "grupo": "llm (sintesis_documental)", "fase": "sintesis_documental", "inicio_ms": 3881.9, "duracion_ms": 1318.746, "error": false, "error_descripcion": null, "atributos": {}, "decisiones": [], "modelo": "openai.gpt-oss-120b-1:0", "tokens_entrada": 1099, "tokens_salida": 338, "coste_usd": 0.00043442}, {"id": "f51f9dba05a745e5", "padre": "27c35c2244f6c4bc", "nombre": "validar", "tipo": "TOOL", "grupo": "validar", "fase": "sintesis_documental", "inicio_ms": 5200.8, "duracion_ms": 104.968, "error": false, "error_descripcion": null, "atributos": {"valida": true, "mensaje_reparacion": ""}, "decisiones": []}]}, {"id": "830210845f19680edf976168b45f5b0e", "lote": "openai-gpt-oss-120b-1-0", "modelos": ["openai.gpt-oss-120b-1:0"], "ruta": "documental", "intencion": "DOCUMENTAL", "tema": "salud", "pregunta": "¿En qué se diferencia el PM10 del PM2.5 en términos de riesgo para la salud?", "respuesta": "PM10 son partículas de diámetro inferior a 10 µm, como polvo mineral, polen y resuspensión del tráfico; PM2.5 son la fracción fina, inferior a 2,5 µm, procedente mayormente de la combustión (tráfico, calefacciones, biomasa). [D1]\nAl ser más pequeñas, las PM2.5 penetran hasta los alvéolos y pueden entrar al torrente sanguíneo, lo que las hace más peligrosas que las PM10. [D1]\nEn términos de salud, la PM2.5 está asociada a mayor riesgo cardiovascular (infartos, ictus, hipertensión) y representa la mayor carga de mortalidad atribuible; aunque ambas provocan efectos respiratorios y alergénicos, la PM2.5 tiene un impacto más grave. [D2]\n\nAviso: esta información es divulgativa y general. No sustituye la valoración de un profesional sanitario ni los avisos oficiales. Si tienes síntomas o una enfermedad diagnosticada, sigue las indicaciones de tu médico; ante una urgencia, llama al 112.\n\nEvidencias citadas:\n[D1] Partículas en suspensión (PM10 y PM2.5) y salud — Qué son (particulas_salud.md, fragmento particulas_salud:que-son:0)\n[D2] Partículas en suspensión (PM10 y PM2.5) y salud — Efectos en la salud (particulas_salud.md, fragmento particulas_salud:efectos-en-la-salud:0)\n\nFuentes de los documentos citados:\n- Partículas en suspensión (PM10 y PM2.5) y salud (particulas_salud.md, revisado 2026-09-23; D1, D2)\n    · WHO global air quality guidelines 2021, capítulos de PM2.5 y PM10 — OMS — https://www.who.int/publications/i/item/9789240034228\n    · Nota descriptiva «Calidad del aire ambiente (exterior) y salud» — OMS — https://www.who.int/es/news-room/fact-sheets/detail/ambient-(outdoor)-air-quality-and-health\n    · Informes «Air quality in Europe» — Agencia Europea de Medio Ambiente (EEA) — https://www.eea.europa.eu\n    · Información y avisos sobre intrusiones de polvo sahariano (calima) — AEMET — https://www.aemet.es", "inicio": "2026-10-06T08:29:00.557589+00:00", "duracion_ms": 8328.562, "error": false, "tokens_entrada": 3221, "tokens_salida": 1064, "coste_usd": 0.00132458, "vueltas": 2, "valida": true, "reparaciones": 0, "busqueda_forzada": false, "sintesis_forzada": false, "spans": [{"id": "71db95f6fb9d6762", "padre": null, "nombre": "turno", "tipo": "AGENT", "grupo": "turno", "fase": "turno", "inicio_ms": 0.0, "duracion_ms": 8328.562, "error": false, "error_descripcion": null, "atributos": {"ruta": "documental", "intencion": "DOCUMENTAL", "tema": "salud", "vueltas": 2, "busqueda_forzada": false, "sintesis_forzada": false, "herramientas": ["buscar_evidencias"], "valida": true, "reparaciones": 0}, "decisiones": []}, {"id": "bbd996431908d3d1", "padre": "71db95f6fb9d6762", "nombre": "clasificar", "tipo": "CHAIN", "grupo": "clasificar", "fase": "clasificar", "inicio_ms": 0.1, "duracion_ms": 727.149, "error": false, "error_descripcion": null, "atributos": {"clasificacion_valida": true}, "decisiones": []}, {"id": "1cd6b6549c9a1ad7", "padre": "bbd996431908d3d1", "nombre": "llm", "tipo": "LLM", "grupo": "llm (clasificar)", "fase": "clasificar", "inicio_ms": 0.1, "duracion_ms": 727.045, "error": false, "error_descripcion": null, "atributos": {}, "decisiones": [], "modelo": "openai.gpt-oss-120b-1:0", "tokens_entrada": 322, "tokens_salida": 85, "coste_usd": 0.00011745999999999999}, {"id": "7e395b95bc498e11", "padre": "71db95f6fb9d6762", "nombre": "bucle", "tipo": "CHAIN", "grupo": "bucle", "fase": "bucle", "inicio_ms": 727.4, "duracion_ms": 3387.567, "error": false, "error_descripcion": null, "atributos": {}, "decisiones": []}, {"id": "f8185c5dd3e94e7e", "padre": "7e395b95bc498e11", "nombre": "llm", "tipo": "LLM", "grupo": "llm (bucle)", "fase": "bucle", "inicio_ms": 727.4, "duracion_ms": 754.909, "error": false, "error_descripcion": null, "atributos": {}, "decisiones": [], "modelo": "openai.gpt-oss-120b-1:0", "tokens_entrada": 391, "tokens_salida": 113, "coste_usd": 0.00014947999999999999}, {"id": "d1dabc12230c2546", "padre": "7e395b95bc498e11", "nombre": "buscar_evidencias", "tipo": "TOOL", "grupo": "buscar_evidencias", "fase": "bucle", "inicio_ms": 1482.5, "duracion_ms": 175.366, "error": false, "error_descripcion": null, "atributos": {"ok": true, "permitida": true, "forzada": false, "estado": "con_evidencias"}, "decisiones": []}, {"id": "41c24e1aa7fd2dfb", "padre": "7e395b95bc498e11", "nombre": "llm", "tipo": "LLM", "grupo": "llm (bucle)", "fase": "bucle", "inicio_ms": 1658.0, "duracion_ms": 2456.884, "error": false, "error_descripcion": null, "atributos": {}, "decisiones": [], "modelo": "openai.gpt-oss-120b-1:0", "tokens_entrada": 1317, "tokens_salida": 286, "coste_usd": 0.00043725999999999997}, {"id": "517a8890b5d51dbd", "padre": "71db95f6fb9d6762", "nombre": "sintesis_documental", "tipo": "CHAIN", "grupo": "sintesis_documental", "fase": "sintesis_documental", "inicio_ms": 4115.0, "duracion_ms": 4213.481, "error": false, "error_descripcion": null, "atributos": {"valida": true, "reparaciones": 0}, "decisiones": []}, {"id": "856993797d097bd1", "padre": "517a8890b5d51dbd", "nombre": "llm", "tipo": "LLM", "grupo": "llm (sintesis_documental)", "fase": "sintesis_documental", "inicio_ms": 4115.1, "duracion_ms": 4129.194, "error": false, "error_descripcion": null, "atributos": {}, "decisiones": [], "modelo": "openai.gpt-oss-120b-1:0", "tokens_entrada": 1191, "tokens_salida": 580, "coste_usd": 0.00062038}, {"id": "959032e6a79a3d1c", "padre": "517a8890b5d51dbd", "nombre": "validar", "tipo": "TOOL", "grupo": "validar", "fase": "sintesis_documental", "inicio_ms": 8244.5, "duracion_ms": 83.973, "error": false, "error_descripcion": null, "atributos": {"valida": true, "mensaje_reparacion": ""}, "decisiones": []}]}, {"id": "4d9836de3fcadaea74534110299e2b5b", "lote": "openai-gpt-oss-120b-1-0", "modelos": ["openai.gpt-oss-120b-1:0"], "ruta": "documental", "intencion": "DOCUMENTAL", "tema": "salud", "pregunta": "¿Qué contaminante es el más preocupante para el riesgo cardiovascular a largo plazo?", "respuesta": "El contaminante más preocupante para el riesgo cardiovascular a largo plazo es la partícula en suspensión PM2.5, ya que está asociada a infartos, ictus e hipertensión y es el contaminante con mayor carga de mortalidad atribuible a nivel mundial. [D1]\n\nAviso: esta información es divulgativa y general. No sustituye la valoración de un profesional sanitario ni los avisos oficiales. Si tienes síntomas o una enfermedad diagnosticada, sigue las indicaciones de tu médico; ante una urgencia, llama al 112.\n\nEvidencias citadas:\n[D1] Partículas en suspensión (PM10 y PM2.5) y salud — Efectos en la salud (particulas_salud.md, fragmento particulas_salud:efectos-en-la-salud:0)\n\nFuentes de los documentos citados:\n- Partículas en suspensión (PM10 y PM2.5) y salud (particulas_salud.md, revisado 2026-09-23; D1)\n    · WHO global air quality guidelines 2021, capítulos de PM2.5 y PM10 — OMS — https://www.who.int/publications/i/item/9789240034228\n    · Nota descriptiva «Calidad del aire ambiente (exterior) y salud» — OMS — https://www.who.int/es/news-room/fact-sheets/detail/ambient-(outdoor)-air-quality-and-health\n    · Informes «Air quality in Europe» — Agencia Europea de Medio Ambiente (EEA) — https://www.eea.europa.eu\n    · Información y avisos sobre intrusiones de polvo sahariano (calima) — AEMET — https://www.aemet.es", "inicio": "2026-10-06T08:29:08.886250+00:00", "duracion_ms": 4045.083, "error": false, "tokens_entrada": 2835, "tokens_salida": 567, "coste_usd": 0.0009071999999999999, "vueltas": 2, "valida": true, "reparaciones": 0, "busqueda_forzada": false, "sintesis_forzada": false, "spans": [{"id": "45595f2bdc77f713", "padre": null, "nombre": "turno", "tipo": "AGENT", "grupo": "turno", "fase": "turno", "inicio_ms": 0.0, "duracion_ms": 4045.083, "error": false, "error_descripcion": null, "atributos": {"ruta": "documental", "intencion": "DOCUMENTAL", "tema": "salud", "vueltas": 2, "busqueda_forzada": false, "sintesis_forzada": false, "herramientas": ["buscar_evidencias"], "valida": true, "reparaciones": 0}, "decisiones": []}, {"id": "ecf7540949c91d56", "padre": "45595f2bdc77f713", "nombre": "clasificar", "tipo": "CHAIN", "grupo": "clasificar", "fase": "clasificar", "inicio_ms": 0.1, "duracion_ms": 646.606, "error": false, "error_descripcion": null, "atributos": {"clasificacion_valida": true}, "decisiones": []}, {"id": "7d188f503e29a926", "padre": "ecf7540949c91d56", "nombre": "llm", "tipo": "LLM", "grupo": "llm (clasificar)", "fase": "clasificar", "inicio_ms": 0.1, "duracion_ms": 646.511, "error": false, "error_descripcion": null, "atributos": {}, "decisiones": [], "modelo": "openai.gpt-oss-120b-1:0", "tokens_entrada": 317, "tokens_salida": 107, "coste_usd": 0.00013195999999999998}, {"id": "ef3095f41bb8a4c6", "padre": "45595f2bdc77f713", "nombre": "bucle", "tipo": "CHAIN", "grupo": "bucle", "fase": "bucle", "inicio_ms": 646.8, "duracion_ms": 1979.872, "error": false, "error_descripcion": null, "atributos": {}, "decisiones": []}, {"id": "bc889b3c8a9e531c", "padre": "ef3095f41bb8a4c6", "nombre": "llm", "tipo": "LLM", "grupo": "llm (bucle)", "fase": "bucle", "inicio_ms": 646.9, "duracion_ms": 789.687, "error": false, "error_descripcion": null, "atributos": {}, "decisiones": [], "modelo": "openai.gpt-oss-120b-1:0", "tokens_entrada": 386, "tokens_salida": 139, "coste_usd": 0.00016678}, {"id": "2b0c6def5bf93176", "padre": "ef3095f41bb8a4c6", "nombre": "buscar_evidencias", "tipo": "TOOL", "grupo": "buscar_evidencias", "fase": "bucle", "inicio_ms": 1436.7, "duracion_ms": 158.796, "error": false, "error_descripcion": null, "atributos": {"ok": true, "permitida": true, "forzada": false, "estado": "con_evidencias"}, "decisiones": []}, {"id": "f34d00a0bcdbfb1c", "padre": "ef3095f41bb8a4c6", "nombre": "llm", "tipo": "LLM", "grupo": "llm (bucle)", "fase": "bucle", "inicio_ms": 1595.7, "duracion_ms": 1030.988, "error": false, "error_descripcion": null, "atributos": {}, "decisiones": [], "modelo": "openai.gpt-oss-120b-1:0", "tokens_entrada": 1150, "tokens_salida": 125, "coste_usd": 0.0002945}, {"id": "818dcfba0b2c949d", "padre": "45595f2bdc77f713", "nombre": "sintesis_documental", "tipo": "CHAIN", "grupo": "sintesis_documental", "fase": "sintesis_documental", "inicio_ms": 2626.8, "duracion_ms": 1418.249, "error": false, "error_descripcion": null, "atributos": {"valida": true, "reparaciones": 0}, "decisiones": []}, {"id": "1219f7985c3b3add", "padre": "818dcfba0b2c949d", "nombre": "llm", "tipo": "LLM", "grupo": "llm (sintesis_documental)", "fase": "sintesis_documental", "inicio_ms": 2626.9, "duracion_ms": 1317.101, "error": false, "error_descripcion": null, "atributos": {}, "decisiones": [], "modelo": "openai.gpt-oss-120b-1:0", "tokens_entrada": 982, "tokens_salida": 196, "coste_usd": 0.00031395999999999996}, {"id": "5bf6379030ad10da", "padre": "818dcfba0b2c949d", "nombre": "validar", "tipo": "TOOL", "grupo": "validar", "fase": "sintesis_documental", "inicio_ms": 3944.2, "duracion_ms": 100.8, "error": false, "error_descripcion": null, "atributos": {"valida": true, "mensaje_reparacion": ""}, "decisiones": []}]}, {"id": "15e144c6c9cfcf60464ee644cae275b9", "lote": "openai-gpt-oss-120b-1-0", "modelos": ["openai.gpt-oss-120b-1:0"], "ruta": "documental", "intencion": "DOCUMENTAL", "tema": "salud", "pregunta": "¿Qué contaminante debería vigilar primero si tengo asma inducida por el ejercicio?", "respuesta": "En verano, el ozono (O3) es el contaminante más crítico para el asma inducida por ejercicio, ya que irrita las vías respiratorias y agrava el asma durante la actividad física intensa. [D1][D3]\nEn invierno, el NO2 y las partículas son los contaminantes más relevantes a vigilar, pues son los factores limitantes para personas con asma en esa estación. [D1]\n\nAviso: esta información es divulgativa y general. No sustituye la valoración de un profesional sanitario ni los avisos oficiales. Si tienes síntomas o una enfermedad diagnosticada, sigue las indicaciones de tu médico; ante una urgencia, llama al 112.\n\nEvidencias citadas:\n[D1] Recomendaciones de exposición por perfil de persona — Personas con asma o EPOC (recomendaciones_por_perfil.md, fragmento recomendaciones_por_perfil:personas-con-asma-o-epoc:0)\n[D3] Ozono troposférico (O3) y salud — Efectos en la salud (ozono_salud.md, fragmento ozono_salud:efectos-en-la-salud:0)\n\nFuentes de los documentos citados:\n- Recomendaciones de exposición por perfil de persona (recomendaciones_por_perfil.md, revisado 2026-09-23; D1)\n    · WHO global air quality guidelines 2021 y notas descriptivas sobre calidad del aire y salud — OMS — https://www.who.int/publications/i/item/9789240034228\n    · Información al paciente sobre alergia y contaminación — Sociedad Española de Alergología e Inmunología Clínica (SEAIC) — https://www.seaic.org\n    · Recomendaciones de salud durante episodios de contaminación — Ayuntamiento de Madrid — https://www.madrid.es\n- Ozono troposférico (O3) y salud (ozono_salud.md, revisado 2026-09-23; D3)\n    · WHO global air quality guidelines 2021, capítulo de ozono — OMS — https://www.who.int/publications/i/item/9789240034228\n    · Informes «Air quality in Europe» — Agencia Europea de Medio Ambiente (EEA) — https://www.eea.europa.eu\n    · Ground-level Ozone Basics — U.S. Environmental Protection Agency (EPA) — https://www.epa.gov/ground-level-ozone-pollution", "inicio": "2026-10-06T08:29:12.931424+00:00", "duracion_ms": 7120.501, "error": false, "tokens_entrada": 3342, "tokens_salida": 1182, "coste_usd": 0.00142896, "vueltas": 2, "valida": true, "reparaciones": 0, "busqueda_forzada": false, "sintesis_forzada": false, "spans": [{"id": "acf15c31f8bfde18", "padre": null, "nombre": "turno", "tipo": "AGENT", "grupo": "turno", "fase": "turno", "inicio_ms": 0.0, "duracion_ms": 7120.501, "error": false, "error_descripcion": null, "atributos": {"ruta": "documental", "intencion": "DOCUMENTAL", "tema": "salud", "vueltas": 2, "busqueda_forzada": false, "sintesis_forzada": false, "herramientas": ["buscar_evidencias"], "valida": true, "reparaciones": 0}, "decisiones": []}, {"id": "92180bbee3b96074", "padre": "acf15c31f8bfde18", "nombre": "clasificar", "tipo": "CHAIN", "grupo": "clasificar", "fase": "clasificar", "inicio_ms": 0.1, "duracion_ms": 738.554, "error": false, "error_descripcion": null, "atributos": {"clasificacion_valida": true}, "decisiones": []}, {"id": "b37c8df2d52c7805", "padre": "92180bbee3b96074", "nombre": "llm", "tipo": "LLM", "grupo": "llm (clasificar)", "fase": "clasificar", "inicio_ms": 0.1, "duracion_ms": 738.424, "error": false, "error_descripcion": null, "atributos": {}, "decisiones": [], "modelo": "openai.gpt-oss-120b-1:0", "tokens_entrada": 318, "tokens_salida": 110, "coste_usd": 0.00013424000000000002}, {"id": "700de0bba487e6c8", "padre": "acf15c31f8bfde18", "nombre": "bucle", "tipo": "CHAIN", "grupo": "bucle", "fase": "bucle", "inicio_ms": 738.8, "duracion_ms": 4503.515, "error": false, "error_descripcion": null, "atributos": {}, "decisiones": []}, {"id": "f1c8d3330ba9b299", "padre": "700de0bba487e6c8", "nombre": "llm", "tipo": "LLM", "grupo": "llm (bucle)", "fase": "bucle", "inicio_ms": 738.9, "duracion_ms": 1075.761, "error": false, "error_descripcion": null, "atributos": {}, "decisiones": [], "modelo": "openai.gpt-oss-120b-1:0", "tokens_entrada": 387, "tokens_salida": 136, "coste_usd": 0.00016486}, {"id": "c58ed41873413e19", "padre": "700de0bba487e6c8", "nombre": "buscar_evidencias", "tipo": "TOOL", "grupo": "buscar_evidencias", "fase": "bucle", "inicio_ms": 1814.8, "duracion_ms": 163.156, "error": false, "error_descripcion": null, "atributos": {"ok": true, "permitida": true, "forzada": false, "estado": "con_evidencias"}, "decisiones": []}, {"id": "b607a06d78f65ff9", "padre": "700de0bba487e6c8", "nombre": "llm", "tipo": "LLM", "grupo": "llm (bucle)", "fase": "bucle", "inicio_ms": 1978.1, "duracion_ms": 3264.183, "error": false, "error_descripcion": null, "atributos": {}, "decisiones": [], "modelo": "openai.gpt-oss-120b-1:0", "tokens_entrada": 1396, "tokens_salida": 448, "coste_usd": 0.00056488}, {"id": "11e51421cce12513", "padre": "acf15c31f8bfde18", "nombre": "sintesis_documental", "tipo": "CHAIN", "grupo": "sintesis_documental", "fase": "sintesis_documental", "inicio_ms": 5242.4, "duracion_ms": 1877.982, "error": false, "error_descripcion": null, "atributos": {"valida": true, "reparaciones": 0}, "decisiones": []}, {"id": "b3c98a3754d74cb7", "padre": "11e51421cce12513", "nombre": "llm", "tipo": "LLM", "grupo": "llm (sintesis_documental)", "fase": "sintesis_documental", "inicio_ms": 5242.7, "duracion_ms": 1785.321, "error": false, "error_descripcion": null, "atributos": {}, "decisiones": [], "modelo": "openai.gpt-oss-120b-1:0", "tokens_entrada": 1241, "tokens_salida": 488, "coste_usd": 0.00056498}, {"id": "16c7a757dda45b0c", "padre": "11e51421cce12513", "nombre": "validar", "tipo": "TOOL", "grupo": "validar", "fase": "sintesis_documental", "inicio_ms": 7028.2, "duracion_ms": 92.168, "error": false, "error_descripcion": null, "atributos": {"valida": true, "mensaje_reparacion": ""}, "decisiones": []}]}, {"id": "3efe2b0b41adc0bf747b7fbb42875adc", "lote": "openai-gpt-oss-120b-1-0", "modelos": ["openai.gpt-oss-120b-1:0"], "ruta": "documental", "intencion": "DOCUMENTAL", "tema": "salud", "pregunta": "¿Qué significa una lectura alta de NO para una persona que está junto al tráfico?", "respuesta": "Una lectura alta de NO indica concentraciones elevadas de óxidos de nitrógeno, que pueden potenciar la respuesta alérgica y agravar los síntomas en personas con alergias respiratorias o grupos sensibles (asma, niños, mayores); por ello se aconseja moderar o evitar el ejercicio intenso al aire libre y alejarse de la zona de tráfico. [D1][D2]\n\nAviso: esta información es divulgativa y general. No sustituye la valoración de un profesional sanitario ni los avisos oficiales. Si tienes síntomas o una enfermedad diagnosticada, sigue las indicaciones de tu médico; ante una urgencia, llama al 112.\n\nEvidencias citadas:\n[D1] Recomendaciones de exposición por perfil de persona — Personas con alergias respiratorias (rinitis, asma alérgica) (recomendaciones_por_perfil.md, fragmento recomendaciones_por_perfil:personas-con-alergias-respiratorias-rinitis-asma-alergica:0)\n[D2] Óxidos de nitrógeno (NO, NO2, NOx) y salud — Niveles orientativos de NO2 (media horaria o de bloque) (oxidos_nitrogeno_salud.md, fragmento oxidos_nitrogeno_salud:niveles-orientativos-de-no2-media-horaria-o-de-bloque:0)\n\nFuentes de los documentos citados:\n- Recomendaciones de exposición por perfil de persona (recomendaciones_por_perfil.md, revisado 2026-09-23; D1)\n    · WHO global air quality guidelines 2021 y notas descriptivas sobre calidad del aire y salud — OMS — https://www.who.int/publications/i/item/9789240034228\n    · Información al paciente sobre alergia y contaminación — Sociedad Española de Alergología e Inmunología Clínica (SEAIC) — https://www.seaic.org\n    · Recomendaciones de salud durante episodios de contaminación — Ayuntamiento de Madrid — https://www.madrid.es\n- Óxidos de nitrógeno (NO, NO2, NOx) y salud (oxidos_nitrogeno_salud.md, revisado 2026-09-23; D2)\n    · WHO global air quality guidelines 2021, capítulo de dióxido de nitrógeno — OMS — https://www.who.int/publications/i/item/9789240034228\n    · Nota descriptiva «Calidad del aire ambiente (exterior) y salud» — OMS — https://www.who.int/es/news-room/fact-sheets/detail/ambient-(outdoor)-air-quality-and-health\n    · Informes «Air quality in Europe» — Agencia Europea de Medio Ambiente (EEA) — https://www.eea.europa.eu\n    · Basic Information about NO2 — U.S. Environmental Protection Agency (EPA) — https://www.epa.gov/no2-pollution", "inicio": "2026-10-06T08:29:20.052021+00:00", "duracion_ms": 9206.452, "error": false, "tokens_entrada": 3059, "tokens_salida": 1151, "coste_usd": 0.00135632, "vueltas": 2, "valida": true, "reparaciones": 0, "busqueda_forzada": false, "sintesis_forzada": false, "spans": [{"id": "aec945a5462303a7", "padre": null, "nombre": "turno", "tipo": "AGENT", "grupo": "turno", "fase": "turno", "inicio_ms": 0.0, "duracion_ms": 9206.452, "error": false, "error_descripcion": null, "atributos": {"ruta": "documental", "intencion": "DOCUMENTAL", "tema": "salud", "vueltas": 2, "busqueda_forzada": false, "sintesis_forzada": false, "herramientas": ["buscar_evidencias"], "valida": true, "reparaciones": 0}, "decisiones": []}, {"id": "24357ddd00c591ce", "padre": "aec945a5462303a7", "nombre": "clasificar", "tipo": "CHAIN", "grupo": "clasificar", "fase": "clasificar", "inicio_ms": 0.1, "duracion_ms": 728.828, "error": false, "error_descripcion": null, "atributos": {"clasificacion_valida": true}, "decisiones": []}, {"id": "414a3eed20a16a5f", "padre": "24357ddd00c591ce", "nombre": "llm", "tipo": "LLM", "grupo": "llm (clasificar)", "fase": "clasificar", "inicio_ms": 0.1, "duracion_ms": 728.729, "error": false, "error_descripcion": null, "atributos": {}, "decisiones": [], "modelo": "openai.gpt-oss-120b-1:0", "tokens_entrada": 317, "tokens_salida": 128, "coste_usd": 0.00014666}, {"id": "a01d7844eb59ac15", "padre": "aec945a5462303a7", "nombre": "bucle", "tipo": "CHAIN", "grupo": "bucle", "fase": "bucle", "inicio_ms": 729.0, "duracion_ms": 4945.732, "error": false, "error_descripcion": null, "atributos": {}, "decisiones": []}, {"id": "b2b943a03d0ae19a", "padre": "a01d7844eb59ac15", "nombre": "llm", "tipo": "LLM", "grupo": "llm (bucle)", "fase": "bucle", "inicio_ms": 729.1, "duracion_ms": 1844.82, "error": false, "error_descripcion": null, "atributos": {}, "decisiones": [], "modelo": "openai.gpt-oss-120b-1:0", "tokens_entrada": 386, "tokens_salida": 159, "coste_usd": 0.00018078000000000001}, {"id": "27f98da7a70dd672", "padre": "a01d7844eb59ac15", "nombre": "buscar_evidencias", "tipo": "TOOL", "grupo": "buscar_evidencias", "fase": "bucle", "inicio_ms": 2574.1, "duracion_ms": 237.255, "error": false, "error_descripcion": null, "atributos": {"ok": true, "permitida": true, "forzada": false, "estado": "con_evidencias"}, "decisiones": []}, {"id": "01a41bcb83d7baa2", "padre": "a01d7844eb59ac15", "nombre": "llm", "tipo": "LLM", "grupo": "llm (bucle)", "fase": "bucle", "inicio_ms": 2811.5, "duracion_ms": 2863.192, "error": false, "error_descripcion": null, "atributos": {}, "decisiones": [], "modelo": "openai.gpt-oss-120b-1:0", "tokens_entrada": 1270, "tokens_salida": 315, "coste_usd": 0.0004491}, {"id": "6f54188d294f8fe0", "padre": "aec945a5462303a7", "nombre": "sintesis_documental", "tipo": "CHAIN", "grupo": "sintesis_documental", "fase": "sintesis_documental", "inicio_ms": 5674.9, "duracion_ms": 3531.475, "error": false, "error_descripcion": null, "atributos": {"valida": true, "reparaciones": 0}, "decisiones": []}, {"id": "5de0bcd0b95f5bac", "padre": "6f54188d294f8fe0", "nombre": "llm", "tipo": "LLM", "grupo": "llm (sintesis_documental)", "fase": "sintesis_documental", "inicio_ms": 5675.1, "duracion_ms": 3445.492, "error": false, "error_descripcion": null, "atributos": {}, "decisiones": [], "modelo": "openai.gpt-oss-120b-1:0", "tokens_entrada": 1086, "tokens_salida": 549, "coste_usd": 0.00057978}, {"id": "7f2e16e81206d637", "padre": "6f54188d294f8fe0", "nombre": "validar", "tipo": "TOOL", "grupo": "validar", "fase": "sintesis_documental", "inicio_ms": 9120.7, "duracion_ms": 85.584, "error": false, "error_descripcion": null, "atributos": {"valida": true, "mensaje_reparacion": ""}, "decisiones": []}]}, {"id": "bbe251e3e292a0a602d9f33cb2c9cbaa", "lote": "openai-gpt-oss-120b-1-0", "modelos": ["openai.gpt-oss-120b-1:0"], "ruta": "documental", "intencion": "DOCUMENTAL", "tema": "ninguno", "pregunta": "¿Por qué el ozono puede ser peor por la tarde aunque haya menos tráfico?", "respuesta": "El ozono a nivel del suelo se forma por reacciones fotoquímicas entre óxidos de nitrógeno y compuestos orgánicos volátiles bajo radiación solar intensa, por lo que sus máximos se dan en las horas centrales y de tarde (14‑19 h). [D1]\nEl NO fresco del tráfico destruye ozono localmente, de modo que en zonas con menos tráfico (periferia, zonas verdes) los niveles de ozono pueden ser más altos que junto al tráfico, explicando por qué la tarde puede ser peor aun con menos vehículos. [D1]\nPor ello, la recomendación para actividades al aire libre en verano es realizarlas a primera hora de la mañana, cuando el ozono está en su mínimo antes de que el sol dispare la fotoquímica. [D2]\n\nAviso: esta información es divulgativa y general. No sustituye la valoración de un profesional sanitario ni los avisos oficiales. Si tienes síntomas o una enfermedad diagnosticada, sigue las indicaciones de tu médico; ante una urgencia, llama al 112.\n\nEvidencias citadas:\n[D1] Ozono troposférico (O3) y salud — Qué es y su patrón particular (ozono_salud.md, fragmento ozono_salud:que-es-y-su-patron-particular:0)\n[D2] Ozono troposférico (O3) y salud — Recomendación clave en verano (ozono_salud.md, fragmento ozono_salud:recomendacion-clave-en-verano:0)\n\nFuentes de los documentos citados:\n- Ozono troposférico (O3) y salud (ozono_salud.md, revisado 2026-09-23; D1, D2)\n    · WHO global air quality guidelines 2021, capítulo de ozono — OMS — https://www.who.int/publications/i/item/9789240034228\n    · Informes «Air quality in Europe» — Agencia Europea de Medio Ambiente (EEA) — https://www.eea.europa.eu\n    · Ground-level Ozone Basics — U.S. Environmental Protection Agency (EPA) — https://www.epa.gov/ground-level-ozone-pollution", "inicio": "2026-10-06T08:29:29.258570+00:00", "duracion_ms": 7948.916, "error": false, "tokens_entrada": 3266, "tokens_salida": 1228, "coste_usd": 0.00144748, "vueltas": 2, "valida": true, "reparaciones": 0, "busqueda_forzada": false, "sintesis_forzada": false, "spans": [{"id": "df88c669cf5d8998", "padre": null, "nombre": "turno", "tipo": "AGENT", "grupo": "turno", "fase": "turno", "inicio_ms": 0.0, "duracion_ms": 7948.916, "error": false, "error_descripcion": null, "atributos": {"ruta": "documental", "intencion": "DOCUMENTAL", "tema": "ninguno", "vueltas": 2, "busqueda_forzada": false, "sintesis_forzada": false, "herramientas": ["buscar_evidencias"], "valida": true, "reparaciones": 0}, "decisiones": []}, {"id": "282fb12ffa29846f", "padre": "df88c669cf5d8998", "nombre": "clasificar", "tipo": "CHAIN", "grupo": "clasificar", "fase": "clasificar", "inicio_ms": 0.1, "duracion_ms": 1463.059, "error": false, "error_descripcion": null, "atributos": {"clasificacion_valida": true}, "decisiones": []}, {"id": "8d833035a3f693af", "padre": "282fb12ffa29846f", "nombre": "llm", "tipo": "LLM", "grupo": "llm (clasificar)", "fase": "clasificar", "inicio_ms": 0.1, "duracion_ms": 1462.912, "error": false, "error_descripcion": null, "atributos": {}, "decisiones": [], "modelo": "openai.gpt-oss-120b-1:0", "tokens_entrada": 317, "tokens_salida": 233, "coste_usd": 0.00022016}, {"id": "15d8d9ddbb87f8ab", "padre": "df88c669cf5d8998", "nombre": "bucle", "tipo": "CHAIN", "grupo": "bucle", "fase": "bucle", "inicio_ms": 1463.3, "duracion_ms": 3019.348, "error": false, "error_descripcion": null, "atributos": {}, "decisiones": []}, {"id": "b690d13e77d889f8", "padre": "15d8d9ddbb87f8ab", "nombre": "llm", "tipo": "LLM", "grupo": "llm (bucle)", "fase": "bucle", "inicio_ms": 1463.4, "duracion_ms": 898.83, "error": false, "error_descripcion": null, "atributos": {}, "decisiones": [], "modelo": "openai.gpt-oss-120b-1:0", "tokens_entrada": 386, "tokens_salida": 111, "coste_usd": 0.00014718}, {"id": "723fa1416843227a", "padre": "15d8d9ddbb87f8ab", "nombre": "buscar_evidencias", "tipo": "TOOL", "grupo": "buscar_evidencias", "fase": "bucle", "inicio_ms": 2362.4, "duracion_ms": 138.118, "error": false, "error_descripcion": null, "atributos": {"ok": true, "permitida": true, "forzada": false, "estado": "con_evidencias"}, "decisiones": []}, {"id": "efc4d13a01b127af", "padre": "15d8d9ddbb87f8ab", "nombre": "llm", "tipo": "LLM", "grupo": "llm (bucle)", "fase": "bucle", "inicio_ms": 2500.7, "duracion_ms": 1981.929, "error": false, "error_descripcion": null, "atributos": {}, "decisiones": [], "modelo": "openai.gpt-oss-120b-1:0", "tokens_entrada": 1347, "tokens_salida": 427, "coste_usd": 0.00054136}, {"id": "7f092b6f29dcde6e", "padre": "df88c669cf5d8998", "nombre": "sintesis_documental", "tipo": "CHAIN", "grupo": "sintesis_documental", "fase": "sintesis_documental", "inicio_ms": 4482.8, "duracion_ms": 3466.093, "error": false, "error_descripcion": null, "atributos": {"valida": true, "reparaciones": 0}, "decisiones": []}, {"id": "a17fe740a23107df", "padre": "7f092b6f29dcde6e", "nombre": "llm", "tipo": "LLM", "grupo": "llm (sintesis_documental)", "fase": "sintesis_documental", "inicio_ms": 4482.9, "duracion_ms": 3367.639, "error": false, "error_descripcion": null, "atributos": {}, "decisiones": [], "modelo": "openai.gpt-oss-120b-1:0", "tokens_entrada": 1216, "tokens_salida": 457, "coste_usd": 0.00053878}, {"id": "734105eec14b075f", "padre": "7f092b6f29dcde6e", "nombre": "validar", "tipo": "TOOL", "grupo": "validar", "fase": "sintesis_documental", "inicio_ms": 7850.7, "duracion_ms": 98.022, "error": false, "error_descripcion": null, "atributos": {"valida": true, "mensaje_reparacion": ""}, "decisiones": []}]}, {"id": "f60c94280967ef97f00d0e2399283fda", "lote": "openai-gpt-oss-120b-1-0", "modelos": ["openai.gpt-oss-120b-1:0"], "ruta": "libre", "intencion": "CHARLA", "tema": "ninguno", "pregunta": "Hola, ¿qué sabes hacer?", "respuesta": "¡Hola! Soy el asistente de calidad del aire de Madrid y puedo explicarte los efectos en la salud del NO₂, el ozono y las partículas, así como los límites legales y las guías de la OMS, el protocolo de episodios de contaminación de la ciudad y los objetivos de nuestro proyecto académico. No realizo predicciones ni ofrezco consejos médicos.", "inicio": "2026-10-06T08:29:37.207582+00:00", "duracion_ms": 1628.441, "error": false, "tokens_entrada": 502, "tokens_salida": 217, "coste_usd": 0.00024226, "vueltas": 1, "valida": null, "reparaciones": null, "busqueda_forzada": false, "sintesis_forzada": false, "spans": [{"id": "4bf13103115e8b64", "padre": null, "nombre": "turno", "tipo": "AGENT", "grupo": "turno", "fase": "turno", "inicio_ms": 0.0, "duracion_ms": 1628.441, "error": false, "error_descripcion": null, "atributos": {"ruta": "libre", "intencion": "CHARLA", "tema": "ninguno", "vueltas": 1, "busqueda_forzada": false, "sintesis_forzada": false, "herramientas": []}, "decisiones": []}, {"id": "23559b38a318e806", "padre": "4bf13103115e8b64", "nombre": "clasificar", "tipo": "CHAIN", "grupo": "clasificar", "fase": "clasificar", "inicio_ms": 0.1, "duracion_ms": 649.923, "error": false, "error_descripcion": null, "atributos": {"clasificacion_valida": true}, "decisiones": []}, {"id": "5a4f6af67696e9cb", "padre": "23559b38a318e806", "nombre": "llm", "tipo": "LLM", "grupo": "llm (clasificar)", "fase": "clasificar", "inicio_ms": 0.2, "duracion_ms": 649.8, "error": false, "error_descripcion": null, "atributos": {}, "decisiones": [], "modelo": "openai.gpt-oss-120b-1:0", "tokens_entrada": 308, "tokens_salida": 75, "coste_usd": 0.00010794}, {"id": "5d395fb3cf84465d", "padre": "4bf13103115e8b64", "nombre": "bucle", "tipo": "CHAIN", "grupo": "bucle", "fase": "bucle", "inicio_ms": 650.1, "duracion_ms": 978.271, "error": false, "error_descripcion": null, "atributos": {}, "decisiones": []}, {"id": "59ca7bbfa4c07d77", "padre": "5d395fb3cf84465d", "nombre": "llm", "tipo": "LLM", "grupo": "llm (bucle)", "fase": "bucle", "inicio_ms": 650.2, "duracion_ms": 978.201, "error": false, "error_descripcion": null, "atributos": {}, "decisiones": [], "modelo": "openai.gpt-oss-120b-1:0", "tokens_entrada": 194, "tokens_salida": 142, "coste_usd": 0.00013432}]}, {"id": "efd41890622eb3f342cc9b12f104e93e", "lote": "openai-gpt-oss-120b-1-0", "modelos": ["openai.gpt-oss-120b-1:0"], "ruta": "libre", "intencion": "CHARLA", "tema": "ninguno", "pregunta": "Gracias, me ha sido muy útil.", "respuesta": "¡De nada! Me alegra saber que la información te ha sido útil. Si tienes cualquier otra duda sobre la calidad del aire en Madrid, estaré encantado de ayudarte.", "inicio": "2026-10-06T08:29:38.836117+00:00", "duracion_ms": 1179.752, "error": false, "tokens_entrada": 504, "tokens_salida": 173, "coste_usd": 0.00021182, "vueltas": 1, "valida": null, "reparaciones": null, "busqueda_forzada": false, "sintesis_forzada": false, "spans": [{"id": "57ea08c3b098cd66", "padre": null, "nombre": "turno", "tipo": "AGENT", "grupo": "turno", "fase": "turno", "inicio_ms": 0.0, "duracion_ms": 1179.752, "error": false, "error_descripcion": null, "atributos": {"ruta": "libre", "intencion": "CHARLA", "tema": "ninguno", "vueltas": 1, "busqueda_forzada": false, "sintesis_forzada": false, "herramientas": []}, "decisiones": []}, {"id": "35250a85ce4c9b9f", "padre": "57ea08c3b098cd66", "nombre": "clasificar", "tipo": "CHAIN", "grupo": "clasificar", "fase": "clasificar", "inicio_ms": 0.1, "duracion_ms": 559.439, "error": false, "error_descripcion": null, "atributos": {"clasificacion_valida": true}, "decisiones": []}, {"id": "5d6d73bf58bae378", "padre": "35250a85ce4c9b9f", "nombre": "llm", "tipo": "LLM", "grupo": "llm (clasificar)", "fase": "clasificar", "inicio_ms": 0.2, "duracion_ms": 559.34, "error": false, "error_descripcion": null, "atributos": {}, "decisiones": [], "modelo": "openai.gpt-oss-120b-1:0", "tokens_entrada": 309, "tokens_salida": 68, "coste_usd": 0.00010322}, {"id": "30e346d99102a249", "padre": "57ea08c3b098cd66", "nombre": "bucle", "tipo": "CHAIN", "grupo": "bucle", "fase": "bucle", "inicio_ms": 559.6, "duracion_ms": 620.004, "error": false, "error_descripcion": null, "atributos": {}, "decisiones": []}, {"id": "afd0ed3403515e39", "padre": "30e346d99102a249", "nombre": "llm", "tipo": "LLM", "grupo": "llm (bucle)", "fase": "bucle", "inicio_ms": 559.7, "duracion_ms": 619.911, "error": false, "error_descripcion": null, "atributos": {}, "decisiones": [], "modelo": "openai.gpt-oss-120b-1:0", "tokens_entrada": 195, "tokens_salida": 105, "coste_usd": 0.0001086}]}, {"id": "7ba84ab964ac1cd33c4a4b8abdbe25ee", "lote": "openai-gpt-oss-120b-1-0", "modelos": ["openai.gpt-oss-120b-1:0"], "ruta": "fija", "intencion": "FUERA_DE_ALCANCE", "tema": "ninguno", "pregunta": "¿Quién ganó la Liga el año pasado?", "respuesta": "Solo puedo ayudarte con la calidad del aire de Madrid. Sí puedo explicarte los efectos de los contaminantes en la salud, los límites legales y las guías de la OMS, el protocolo de episodios de Madrid o el propio proyecto.", "inicio": "2026-10-06T08:29:40.016027+00:00", "duracion_ms": 521.771, "error": false, "tokens_entrada": 310, "tokens_salida": 54, "coste_usd": 9.36e-05, "vueltas": 0, "valida": null, "reparaciones": null, "busqueda_forzada": false, "sintesis_forzada": false, "spans": [{"id": "2b14e722f4b924ee", "padre": null, "nombre": "turno", "tipo": "AGENT", "grupo": "turno", "fase": "turno", "inicio_ms": 0.0, "duracion_ms": 521.771, "error": false, "error_descripcion": null, "atributos": {"ruta": "fija", "intencion": "FUERA_DE_ALCANCE", "tema": "ninguno", "vueltas": 0, "busqueda_forzada": false, "sintesis_forzada": false, "herramientas": []}, "decisiones": ["frase_fija:FUERA_DE_ALCANCE"]}, {"id": "4c7455f50a6a9d79", "padre": "2b14e722f4b924ee", "nombre": "clasificar", "tipo": "CHAIN", "grupo": "clasificar", "fase": "clasificar", "inicio_ms": 0.1, "duracion_ms": 521.485, "error": false, "error_descripcion": null, "atributos": {"clasificacion_valida": true}, "decisiones": []}, {"id": "c0d9e8e7e2acefe8", "padre": "4c7455f50a6a9d79", "nombre": "llm", "tipo": "LLM", "grupo": "llm (clasificar)", "fase": "clasificar", "inicio_ms": 0.2, "duracion_ms": 521.305, "error": false, "error_descripcion": null, "atributos": {}, "decisiones": [], "modelo": "openai.gpt-oss-120b-1:0", "tokens_entrada": 310, "tokens_salida": 54, "coste_usd": 9.36e-05}]}, {"id": "9d57d5b61074d6b579c7b65853e1fa4f", "lote": "openai-gpt-oss-120b-1-0", "modelos": ["openai.gpt-oss-120b-1:0"], "ruta": "fija", "intencion": "FUERA_DE_ALCANCE", "tema": "ninguno", "pregunta": "¿Cómo se hace una tortilla de patatas?", "respuesta": "Solo puedo ayudarte con la calidad del aire de Madrid. Sí puedo explicarte los efectos de los contaminantes en la salud, los límites legales y las guías de la OMS, el protocolo de episodios de Madrid o el propio proyecto.", "inicio": "2026-10-06T08:29:40.537942+00:00", "duracion_ms": 716.381, "error": false, "tokens_entrada": 310, "tokens_salida": 93, "coste_usd": 0.0001209, "vueltas": 0, "valida": null, "reparaciones": null, "busqueda_forzada": false, "sintesis_forzada": false, "spans": [{"id": "c600fa0e59b39fbb", "padre": null, "nombre": "turno", "tipo": "AGENT", "grupo": "turno", "fase": "turno", "inicio_ms": 0.0, "duracion_ms": 716.381, "error": false, "error_descripcion": null, "atributos": {"ruta": "fija", "intencion": "FUERA_DE_ALCANCE", "tema": "ninguno", "vueltas": 0, "busqueda_forzada": false, "sintesis_forzada": false, "herramientas": []}, "decisiones": ["frase_fija:FUERA_DE_ALCANCE"]}, {"id": "38c29a79969cf860", "padre": "c600fa0e59b39fbb", "nombre": "clasificar", "tipo": "CHAIN", "grupo": "clasificar", "fase": "clasificar", "inicio_ms": 0.2, "duracion_ms": 716.072, "error": false, "error_descripcion": null, "atributos": {"clasificacion_valida": true}, "decisiones": []}, {"id": "2b8334a47343029a", "padre": "38c29a79969cf860", "nombre": "llm", "tipo": "LLM", "grupo": "llm (clasificar)", "fase": "clasificar", "inicio_ms": 0.3, "duracion_ms": 715.908, "error": false, "error_descripcion": null, "atributos": {}, "decisiones": [], "modelo": "openai.gpt-oss-120b-1:0", "tokens_entrada": 310, "tokens_salida": 93, "coste_usd": 0.0001209}]}, {"id": "0da89305a7174f6f785da6a45bf50c30", "lote": "openai-gpt-oss-120b-1-0", "modelos": ["openai.gpt-oss-120b-1:0"], "ruta": "fija", "intencion": "FUERA_DE_ALCANCE", "tema": "ninguno", "pregunta": "¿Cuándo empieza la temporada de polen de las gramíneas en Madrid?", "respuesta": "Solo puedo ayudarte con la calidad del aire de Madrid. Sí puedo explicarte los efectos de los contaminantes en la salud, los límites legales y las guías de la OMS, el protocolo de episodios de Madrid o el propio proyecto.", "inicio": "2026-10-06T08:29:41.254458+00:00", "duracion_ms": 925.888, "error": false, "tokens_entrada": 317, "tokens_salida": 258, "coste_usd": 0.00023766, "vueltas": 0, "valida": null, "reparaciones": null, "busqueda_forzada": false, "sintesis_forzada": false, "spans": [{"id": "0d54e49955a2e82f", "padre": null, "nombre": "turno", "tipo": "AGENT", "grupo": "turno", "fase": "turno", "inicio_ms": 0.0, "duracion_ms": 925.888, "error": false, "error_descripcion": null, "atributos": {"ruta": "fija", "intencion": "FUERA_DE_ALCANCE", "tema": "ninguno", "vueltas": 0, "busqueda_forzada": false, "sintesis_forzada": false, "herramientas": []}, "decisiones": ["frase_fija:FUERA_DE_ALCANCE"]}, {"id": "cd9f40e6558940e4", "padre": "0d54e49955a2e82f", "nombre": "clasificar", "tipo": "CHAIN", "grupo": "clasificar", "fase": "clasificar", "inicio_ms": 0.1, "duracion_ms": 925.623, "error": false, "error_descripcion": null, "atributos": {"clasificacion_valida": true}, "decisiones": []}, {"id": "8ad4d6d3f8fd59b0", "padre": "cd9f40e6558940e4", "nombre": "llm", "tipo": "LLM", "grupo": "llm (clasificar)", "fase": "clasificar", "inicio_ms": 0.2, "duracion_ms": 925.46, "error": false, "error_descripcion": null, "atributos": {}, "decisiones": [], "modelo": "openai.gpt-oss-120b-1:0", "tokens_entrada": 317, "tokens_salida": 258, "coste_usd": 0.00023766}]}, {"id": "800fc27d9f3390ee922460b902dbbf47", "lote": "openai-gpt-oss-120b-1-0", "modelos": ["openai.gpt-oss-120b-1:0"], "ruta": "sin_evidencia", "intencion": "DOCUMENTAL", "tema": "salud", "pregunta": "¿Qué efectos tiene el benceno en la salud?", "respuesta": "No encuentro información sobre esto en la documentación revisada del asistente. Puedo ayudarte con los efectos en la salud de los contaminantes, los límites legales y las guías de la OMS, el protocolo de episodios de Madrid o el propio proyecto.", "inicio": "2026-10-06T08:29:42.180494+00:00", "duracion_ms": 1775.715, "error": false, "tokens_entrada": 693, "tokens_salida": 251, "coste_usd": 0.00030044, "vueltas": 1, "valida": null, "reparaciones": null, "busqueda_forzada": true, "sintesis_forzada": false, "spans": [{"id": "c8e945bc8e18ab18", "padre": null, "nombre": "turno", "tipo": "AGENT", "grupo": "turno", "fase": "turno", "inicio_ms": 0.0, "duracion_ms": 1775.715, "error": false, "error_descripcion": null, "atributos": {"ruta": "sin_evidencia", "intencion": "DOCUMENTAL", "tema": "salud", "vueltas": 1, "busqueda_forzada": true, "sintesis_forzada": false, "herramientas": ["buscar_evidencias"]}, "decisiones": []}, {"id": "3e23de01bfab6bda", "padre": "c8e945bc8e18ab18", "nombre": "clasificar", "tipo": "CHAIN", "grupo": "clasificar", "fase": "clasificar", "inicio_ms": 0.1, "duracion_ms": 753.654, "error": false, "error_descripcion": null, "atributos": {"clasificacion_valida": true}, "decisiones": []}, {"id": "a70317563a507ee0", "padre": "3e23de01bfab6bda", "nombre": "llm", "tipo": "LLM", "grupo": "llm (clasificar)", "fase": "clasificar", "inicio_ms": 0.2, "duracion_ms": 753.465, "error": false, "error_descripcion": null, "atributos": {}, "decisiones": [], "modelo": "openai.gpt-oss-120b-1:0", "tokens_entrada": 312, "tokens_salida": 82, "coste_usd": 0.00011356}, {"id": "52d6ac73aeb33fdc", "padre": "c8e945bc8e18ab18", "nombre": "bucle", "tipo": "CHAIN", "grupo": "bucle", "fase": "bucle", "inicio_ms": 753.9, "duracion_ms": 915.35, "error": false, "error_descripcion": null, "atributos": {}, "decisiones": []}, {"id": "8e1810b1f31b6453", "padre": "52d6ac73aeb33fdc", "nombre": "llm", "tipo": "LLM", "grupo": "llm (bucle)", "fase": "bucle", "inicio_ms": 754.0, "duracion_ms": 915.243, "error": false, "error_descripcion": null, "atributos": {}, "decisiones": [], "modelo": "openai.gpt-oss-120b-1:0", "tokens_entrada": 381, "tokens_salida": 169, "coste_usd": 0.00018688}, {"id": "ded34d80667dc080", "padre": "c8e945bc8e18ab18", "nombre": "busqueda_forzada", "tipo": "CHAIN", "grupo": "busqueda_forzada", "fase": "busqueda_forzada", "inicio_ms": 1669.4, "duracion_ms": 106.286, "error": false, "error_descripcion": null, "atributos": {}, "decisiones": ["sin_evidencia"]}, {"id": "ecddf573938aa365", "padre": "ded34d80667dc080", "nombre": "buscar_evidencias", "tipo": "TOOL", "grupo": "buscar_evidencias", "fase": "busqueda_forzada", "inicio_ms": 1669.4, "duracion_ms": 106.174, "error": false, "error_descripcion": null, "atributos": {"ok": true, "permitida": true, "forzada": true, "estado": "sin_evidencia"}, "decisiones": []}]}]}</script>
+<script>
+"use strict";
+const DATOS = JSON.parse(document.getElementById("datos").textContent);
+const SVGNS = "http://www.w3.org/2000/svg";
+const ORDEN_TIPO = { AGENT: 0, CHAIN: 1, LLM: 2, TOOL: 3 };
+
+// ------------------------------------------------------------------ estado y colores
+
+// El color sigue al lote (orden de aparición en todo el fichero): filtrar nunca lo cambia.
+const LOTES = [...new Set(DATOS.turnos.map(t => t.lote))];
+const color = lote => `var(--s${(LOTES.indexOf(lote) % 8) + 1})`;
+const estado = { lotes: new Set(LOTES), ruta: "", intencion: "", log: false, elegido: null,
+                 orden: { col: "inicio", asc: true } };
+
+const filtrados = () => DATOS.turnos.filter(t =>
+  estado.lotes.has(t.lote) && (!estado.ruta || t.ruta === estado.ruta) &&
+  (!estado.intencion || t.intencion === estado.intencion));
+const porLote = ts => LOTES.filter(l => estado.lotes.has(l))
+  .map(l => [l, ts.filter(t => t.lote === l)]).filter(([, g]) => g.length);
+
+// ------------------------------------------------------------------ estadística y formato
+
+function mediana(v) {
+  if (!v.length) return null;
+  const o = [...v].sort((a, b) => a - b), m = o.length >> 1;
+  return o.length % 2 ? o[m] : (o[m - 1] + o[m]) / 2;
+}
+function p95(v) {  // rango más cercano, como el informe markdown
+  if (!v.length) return null;
+  const o = [...v].sort((a, b) => a - b);
+  return o[Math.ceil(0.95 * o.length) - 1];
+}
+const suma = v => v.reduce((a, b) => a + b, 0);
+const nf = (d) => new Intl.NumberFormat("es-ES", { maximumFractionDigits: d, minimumFractionDigits: d });
+const entero = v => v == null ? "—" : nf(0).format(v);
+function ms(v) {
+  if (v == null) return "—";
+  return v < 1000 ? `${nf(0).format(v)} ms` : `${nf(v < 10000 ? 2 : v < 100000 ? 1 : 0).format(v / 1000)} s`;
+}
+function usd(v) {
+  if (v == null) return "—";
+  if (v === 0) return "0 $";
+  return `${new Intl.NumberFormat("es-ES", { maximumSignificantDigits: 2 }).format(v)} $`;
+}
+const pct = v => `${nf(0).format(v * 100)} %`;
+
+// ------------------------------------------------------------------ utilidades DOM y SVG
+
+function el(etiqueta, attrs = {}, ...hijos) {
+  const n = document.createElement(etiqueta);
+  for (const [k, v] of Object.entries(attrs)) {
+    if (k === "texto") n.textContent = v; else if (k === "clase") n.className = v; else n.setAttribute(k, v);
+  }
+  for (const h of hijos) if (h != null) n.append(h);
+  return n;
+}
+function s(etiqueta, attrs = {}, padre) {
+  const n = document.createElementNS(SVGNS, etiqueta);
+  for (const [k, v] of Object.entries(attrs)) {
+    if (k === "texto") n.textContent = v; else n.setAttribute(k, v);
+  }
+  if (padre) padre.append(n);
+  return n;
+}
+function vaciar(id) { const n = document.getElementById(id); n.replaceChildren(); return n; }
+function ancho(id) { return Math.max(260, document.getElementById(id).clientWidth); }
+
+function leyenda(id, lotes) {
+  const n = vaciar(id);
+  if (lotes.length < 2) return;  // una sola serie: el título basta
+  for (const l of lotes) n.append(el("span", {}, el("span", { clase: "muestra", style: `background:${color(l)}` }), l));
+}
+
+// Tooltip: valor primero, etiqueta después; siempre con textContent (los datos no son de fiar).
+const tip = document.getElementById("tip");
+function mostrarTip(evento, titulo, filas) {
+  tip.replaceChildren();
+  if (titulo) tip.append(el("div", { clase: "t", texto: titulo }));
+  for (const [valor, etiqueta, clave] of filas) {
+    const f = el("div", { clase: "f" });
+    if (clave) f.append(el("span", { clase: "k", style: `background:${clave}` }));
+    f.append(el("b", { texto: valor }), el("span", { texto: etiqueta }));
+    tip.append(f);
+  }
+  tip.style.display = "block";
+  let x, y;
+  if (evento.clientX != null && evento.type !== "focus") { x = evento.clientX; y = evento.clientY; }
+  else { const r = evento.target.getBoundingClientRect(); x = r.left + r.width / 2; y = r.top; }
+  const w = tip.offsetWidth, h = tip.offsetHeight;
+  tip.style.left = `${Math.min(window.innerWidth - w - 8, Math.max(8, x + 14))}px`;
+  tip.style.top = `${y + 14 + h > window.innerHeight ? y - h - 10 : y + 14}px`;
+}
+const ocultarTip = () => { tip.style.display = "none"; };
+function conTip(nodo, titulo, filas, alPulsar) {
+  nodo.setAttribute("tabindex", "0");
+  nodo.classList.add("marca");
+  const ver = e => mostrarTip(e, titulo, typeof filas === "function" ? filas() : filas);
+  nodo.addEventListener("pointermove", ver);
+  nodo.addEventListener("focus", ver);
+  nodo.addEventListener("pointerleave", ocultarTip);
+  nodo.addEventListener("blur", ocultarTip);
+  if (alPulsar) {
+    nodo.addEventListener("click", alPulsar);
+    nodo.addEventListener("keydown", e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); alPulsar(); } });
+  }
+}
+
+// Escalas: lineal con ticks redondos, o logarítmica en potencias de 10.
+function ticksLineales(max, n = 5) {
+  if (!(max > 0)) return [0, 1];
+  const paso0 = max / n, mag = 10 ** Math.floor(Math.log10(paso0)), r = paso0 / mag;
+  const paso = (r >= 7.5 ? 10 : r >= 3.5 ? 5 : r >= 1.5 ? 2 : 1) * mag;
+  const out = [];
+  for (let v = 0; v < max + paso * 0.999; v += paso) out.push(+v.toPrecision(12));
+  return out;
+}
+function escala(min, max, x0, x1, log) {
+  const n = Math.max(2, Math.min(6, Math.floor(Math.abs(x1 - x0) / 80)));
+  if (log) {
+    const a = 10 ** Math.floor(Math.log10(Math.max(min, 1e-9))), b = 10 ** Math.ceil(Math.log10(Math.max(max, a * 10)));
+    const f = v => x0 + (Math.log10(Math.max(v, a)) - Math.log10(a)) / (Math.log10(b) - Math.log10(a)) * (x1 - x0);
+    const ticks = [];
+    for (let v = a; v <= b * 1.0001; v *= 10) ticks.push(v);
+    return { f, ticks };
+  }
+  const ticks = ticksLineales(max, n);
+  const top = ticks[ticks.length - 1];
+  return { f: v => x0 + v / top * (x1 - x0), ticks };
+}
+
+// ------------------------------------------------------------------ filtros
+
+function construirFiltros() {
+  const caja = document.getElementById("filtro-lotes");
+  for (const l of LOTES) {
+    const chk = el("input", { type: "checkbox" });
+    chk.checked = true;
+    const chip = el("label", { clase: "chip" }, chk, el("span", { clase: "muestra", style: `background:${color(l)}` }), l);
+    chk.addEventListener("change", () => {
+      if (chk.checked) estado.lotes.add(l); else estado.lotes.delete(l);
+      chip.classList.toggle("apagado", !chk.checked);
+      pintar();
+    });
+    caja.append(chip);
+  }
+  for (const [id, campo] of [["filtro-ruta", "ruta"], ["filtro-intencion", "intencion"]]) {
+    const sel = document.getElementById(id);
+    sel.append(el("option", { value: "", texto: "Todas" }));
+    for (const v of [...new Set(DATOS.turnos.map(t => t[campo]))].sort()) sel.append(el("option", { value: v, texto: v }));
+    sel.addEventListener("change", () => { estado[campo] = sel.value; pintar(); });
+  }
+  document.getElementById("escala-log").addEventListener("change", e => { estado.log = e.target.checked; pintar(); });
+  document.getElementById("tema").addEventListener("click", () => {
+    const raiz = document.documentElement;
+    const oscuro = raiz.dataset.theme ? raiz.dataset.theme === "dark" : matchMedia("(prefers-color-scheme: dark)").matches;
+    raiz.dataset.theme = oscuro ? "light" : "dark";
+  });
+}
+
+// ------------------------------------------------------------------ resumen por lote
+
+function pintarResumen(ts) {
+  const n = vaciar("resumen");
+  const grupos = porLote(ts);
+  if (!grupos.length) { n.append(el("div", { clase: "tarjeta vacio", texto: "Ningún turno con estos filtros." })); return; }
+  const rejilla = el("div", { clase: "lotes" });
+  for (const [lote, g] of grupos) {
+    const dur = g.map(t => t.duracion_ms);
+    const conCoste = g.filter(t => t.coste_usd != null);
+    const completos = g.filter(t => t.tokens_entrada != null);
+    const docs = g.filter(t => t.valida != null);
+    const primera = docs.filter(t => t.valida === true && t.reparaciones === 0).length;
+    const costeTotal = suma(conCoste.map(t => t.coste_usd));
+    const modelos = [...new Set(g.flatMap(t => t.modelos))].join(", ") || "—";
+    const cifra = (etq, val, extra) => el("div", { clase: "cifra" }, el("div", { clase: "etq", texto: etq }),
+      el("div", { clase: "val", texto: val }, extra ? el("small", { texto: ` ${extra}` }) : null));
+    rejilla.append(el("div", { clase: "tarjeta lote" },
+      el("h3", {}, el("span", { clase: "muestra", style: `background:${color(lote)}` }), lote),
+      el("div", { clase: "modelo", texto: modelos }),
+      el("div", { clase: "cifras" },
+        cifra("Turnos", entero(g.length)),
+        cifra("Latencia mediana", ms(mediana(dur)), `p95 ${ms(p95(dur))}`),
+        cifra("Coste total", conCoste.length ? usd(costeTotal) : "—",
+              g.length - conCoste.length ? `${g.length - conCoste.length} sin coste` : null),
+        cifra("Coste por 1.000 turnos", conCoste.length ? usd(costeTotal / conCoste.length * 1000) : "—", "media"),
+        cifra("Coste mediano por turno", usd(mediana(conCoste.map(t => t.coste_usd)))),
+        cifra("Tokens mediana", `${entero(mediana(completos.map(t => t.tokens_entrada)))} / ${entero(mediana(completos.map(t => t.tokens_salida)))}`, "ent. / sal."),
+        cifra("Síntesis válida a la primera", docs.length ? `${primera}/${docs.length}` : "—"),
+        cifra("Turnos con error", entero(g.filter(t => t.error).length)))));
+  }
+  n.append(rejilla);
+}
+
+// ------------------------------------------------------------------ dispersión latencia-coste
+
+function pintarDispersion(ts) {
+  const n = vaciar("dispersion");
+  const puntos = ts.filter(t => t.coste_usd != null);
+  leyenda("leyenda-dispersion", porLote(ts).map(([l]) => l));
+  if (!puntos.length) { n.append(el("div", { clase: "vacio", texto: "Sin turnos con coste completo." })); return; }
+  const W = ancho("dispersion"), H = 300, m = { l: 64, r: 16, t: 12, b: 36 };
+  const svg = s("svg", { width: W, height: H, role: "img", "aria-label": "Latencia frente a coste por turno" }, n);
+  const ex = escala(Math.min(...puntos.map(t => t.duracion_ms)), Math.max(...puntos.map(t => t.duracion_ms)), m.l, W - m.r, estado.log);
+  const ey = escala(0, Math.max(...puntos.map(t => t.coste_usd)), H - m.b, m.t, false);
+  for (const v of ey.ticks) {
+    s("line", { class: "rejilla", x1: m.l, x2: W - m.r, y1: ey.f(v), y2: ey.f(v) }, svg);
+    s("text", { x: m.l - 6, y: ey.f(v) + 4, "text-anchor": "end", texto: usd(v) }, svg);
+  }
+  for (const v of ex.ticks) s("text", { x: ex.f(v), y: H - m.b + 16, "text-anchor": "middle", texto: ms(v) }, svg);
+  s("text", { x: (m.l + W - m.r) / 2, y: H - 4, "text-anchor": "middle", texto: "latencia del turno" }, svg);
+  s("line", { class: "base", x1: m.l, x2: W - m.r, y1: H - m.b, y2: H - m.b }, svg);
+  for (const t of puntos) {
+    const g = s("g", {}, svg);
+    const cx = ex.f(t.duracion_ms), cy = ey.f(t.coste_usd);
+    s("circle", { cx, cy, r: 12, fill: "transparent" }, g);  // área de acierto mayor que la marca
+    s("circle", { class: "punto anillo", cx, cy, r: 5, fill: color(t.lote), stroke: "var(--surface)", "stroke-width": 2 }, g);
+    if (t.id === estado.elegido) s("circle", { class: "sel", cx, cy, r: 9, fill: "none" }, g);
+    conTip(g, recorte(t.pregunta, 90), [[ms(t.duracion_ms), "latencia"], [usd(t.coste_usd), "coste"],
+      [`${entero(t.tokens_entrada)} / ${entero(t.tokens_salida)}`, "tokens ent. / sal."],
+      [`${t.ruta} · ${t.intencion}`, "ruta · intención"], [t.lote, "lote", color(t.lote)]], () => elegir(t.id));
+  }
+  const fuera = ts.length - puntos.length;
+  if (fuera) n.append(el("p", { clase: "nota", texto: `${fuera} turno(s) sin coste completo no aparecen.` }));
+}
+
+// ------------------------------------------------------------------ distribución por filas (fases y rutas)
+
+// filas: [{etiqueta, porLote: {lote: [{v, turno}]}}]. Una subfila por lote con puntos, mediana y p95.
+function distribucion(idGrafica, filas, lotes, alPulsarPunto) {
+  const n = vaciar(idGrafica);
+  if (!filas.length) { n.append(el("div", { clase: "vacio", texto: "Sin datos con estos filtros." })); return; }
+  const W = ancho(idGrafica), etqW = Math.min(190, W * 0.3), valW = 96;
+  const sub = 18, hueco = 10, m = { t: 8, b: 30 };
+  const alturaFila = lotes.length * sub + hueco;
+  const H = m.t + filas.length * alturaFila + m.b;
+  const svg = s("svg", { width: W, height: H, role: "img", "aria-label": "Distribución de latencias" }, n);
+  const todos = filas.flatMap(f => Object.values(f.porLote).flat().map(p => p.v));
+  const ex = escala(Math.max(1, Math.min(...todos)), Math.max(...todos), etqW + 8, W - valW - 8, estado.log);
+  for (const v of ex.ticks) {
+    s("line", { class: "rejilla", x1: ex.f(v), x2: ex.f(v), y1: m.t, y2: H - m.b }, svg);
+    s("text", { x: ex.f(v), y: H - m.b + 16, "text-anchor": "middle", texto: ms(v) }, svg);
+  }
+  s("text", { x: W - 4, y: H - m.b + 16, "text-anchor": "end", texto: "mediana · n" }, svg);
+  filas.forEach((f, i) => {
+    const y0 = m.t + i * alturaFila;
+    s("text", { class: "etq-fila", x: 0, y: y0 + (lotes.length * sub) / 2 + 4, texto: recorte(f.etiqueta, 28) }, svg);
+    if (i) s("line", { class: "rejilla", x1: 0, x2: W, y1: y0 - hueco / 2, y2: y0 - hueco / 2 }, svg);
+    lotes.forEach((l, j) => {
+      const pts = f.porLote[l] || [];
+      const y = y0 + j * sub + sub / 2;
+      if (!pts.length) return;
+      const vals = pts.map(p => p.v), med = mediana(vals), p = p95(vals);
+      for (const pt of pts) {
+        const g = s("g", {}, svg);
+        s("circle", { cx: ex.f(pt.v), cy: y, r: 9, fill: "transparent" }, g);
+        s("circle", { class: "punto", cx: ex.f(pt.v), cy: y, r: 3, fill: color(l), "fill-opacity": 0.35 }, g);
+        conTip(g, pt.turno ? recorte(pt.turno.pregunta, 90) : f.etiqueta,
+               [[ms(pt.v), f.etiqueta], [l, "lote", color(l)]], pt.turno ? () => alPulsarPunto(pt.turno) : null);
+      }
+      s("line", { x1: ex.f(med), x2: ex.f(p), y1: y, y2: y, stroke: color(l), "stroke-width": 2, "stroke-linecap": "round" }, svg);
+      const g = s("g", {}, svg);
+      s("rect", { x: ex.f(med) - 10, y: y - 8, width: 20, height: 16, fill: "transparent" }, g);
+      s("rect", { class: "punto anillo", x: ex.f(med) - 2, y: y - 7, width: 4, height: 14, rx: 2, fill: color(l), stroke: "var(--surface)", "stroke-width": 1 }, g);
+      conTip(g, `${f.etiqueta} · ${l}`, [[ms(med), "mediana"], [ms(p), "p95"], [entero(vals.length), "n"],
+        [ms(Math.min(...vals)), "mínimo"], [ms(Math.max(...vals)), "máximo"]]);
+      s("text", { class: "valor", x: W - 4, y: y + 4, "text-anchor": "end", texto: `${ms(med)} · ${vals.length}` }, svg);
+    });
+  });
+}
+
+function filasFases(ts) {
+  const filas = new Map();
+  for (const t of ts) for (const sp of t.spans) {
+    if (sp.duracion_ms == null) continue;
+    if (!filas.has(sp.grupo)) filas.set(sp.grupo, { etiqueta: sp.grupo, fase: sp.fase, tipo: sp.tipo, porLote: {} });
+    (filas.get(sp.grupo).porLote[t.lote] ||= []).push({ v: sp.duracion_ms, turno: t });
+  }
+  const idx = f => { const i = DATOS.fases.indexOf(f); return f === "turno" ? -1 : i < 0 ? 99 : i; };
+  return [...filas.values()].sort((a, b) => idx(a.fase) - idx(b.fase) || a.fase.localeCompare(b.fase) ||
+    (ORDEN_TIPO[a.tipo] ?? 9) - (ORDEN_TIPO[b.tipo] ?? 9) || a.etiqueta.localeCompare(b.etiqueta));
+}
+
+function pintarFases(ts) {
+  const lotes = porLote(ts).map(([l]) => l);
+  leyenda("leyenda-fases", lotes);
+  const filas = filasFases(ts);
+  distribucion("fases", filas, lotes, t => elegir(t.id));
+  const cab = ["Span", "Lote", "n", "Mediana", "p95"];
+  const cuerpo = filas.flatMap(f => lotes.filter(l => f.porLote[l]).map(l => {
+    const v = f.porLote[l].map(p => p.v);
+    return [f.etiqueta, l, entero(v.length), ms(mediana(v)), ms(p95(v))];
+  }));
+  tabla("tabla-fases", cab, cuerpo, [2, 3, 4]);
+}
+
+function pintarRutas(ts) {
+  const lotes = porLote(ts).map(([l]) => l);
+  leyenda("leyenda-rutas", lotes);
+  const filas = new Map();
+  for (const t of ts) {
+    const k = `${t.ruta} · ${t.intencion}`;
+    if (!filas.has(k)) filas.set(k, { etiqueta: k, porLote: {} });
+    (filas.get(k).porLote[t.lote] ||= []).push({ v: t.duracion_ms, turno: t });
+  }
+  distribucion("rutas", [...filas.values()].sort((a, b) => a.etiqueta.localeCompare(b.etiqueta)), lotes, t => elegir(t.id));
+}
+
+// ------------------------------------------------------------------ coste por fase
+
+function pintarCoste(ts) {
+  const n = vaciar("coste");
+  const grupos = porLote(ts).map(([l, g]) => [l, g.filter(t => t.coste_usd != null)]).filter(([, g]) => g.length);
+  const lotes = grupos.map(([l]) => l);
+  leyenda("leyenda-coste", lotes);
+  if (!grupos.length) { n.append(el("div", { clase: "vacio", texto: "Sin turnos con coste completo." })); tabla("tabla-coste", [], []); return; }
+  // Por lote y fase (la fase de una llamada al LLM es su span padre): coste y tokens medios por turno.
+  const fases = new Map();
+  for (const [l, g] of grupos) for (const t of g) for (const sp of t.spans) {
+    if (sp.tipo !== "LLM") continue;
+    const f = sp.grupo;
+    if (!fases.has(f)) fases.set(f, {});
+    const r = (fases.get(f)[l] ||= { coste: 0, ent: 0, sal: 0, llamadas: 0 });
+    r.coste += sp.coste_usd || 0; r.ent += sp.tokens_entrada || 0; r.sal += sp.tokens_salida || 0; r.llamadas += 1;
+  }
+  const nTurnos = Object.fromEntries(grupos.map(([l, g]) => [l, g.length]));
+  const totales = Object.fromEntries(grupos.map(([l, g]) => [l, suma(g.map(t => t.coste_usd)) / g.length]));
+  const orden = [...fases.keys()].sort((a, b) => {
+    const total = f => suma(lotes.map(l => (fases.get(f)[l]?.coste || 0) / nTurnos[l]));
+    return total(b) - total(a);
+  });
+  const W = ancho("coste"), etqW = Math.min(190, W * 0.3), valW = 130, barra = 14, gap = 2, hueco = 12;
+  const alturaFila = lotes.length * (barra + gap) + hueco, m = { t: 6, b: 24 };
+  const H = m.t + orden.length * alturaFila + m.b;
+  const svg = s("svg", { width: W, height: H, role: "img", "aria-label": "Coste medio por turno y fase" }, n);
+  const max = Math.max(...orden.flatMap(f => lotes.map(l => (fases.get(f)[l]?.coste || 0) / nTurnos[l])));
+  const ex = escala(0, max, etqW + 8, W - valW, false);
+  for (const v of ex.ticks) {
+    s("line", { class: "rejilla", x1: ex.f(v), x2: ex.f(v), y1: m.t, y2: H - m.b }, svg);
+    s("text", { x: ex.f(v), y: H - m.b + 16, "text-anchor": "middle", texto: usd(v) }, svg);
+  }
+  orden.forEach((f, i) => {
+    const y0 = m.t + i * alturaFila;
+    s("text", { class: "etq-fila", x: 0, y: y0 + (lotes.length * (barra + gap)) / 2 + 3, texto: recorte(f, 28) }, svg);
+    lotes.forEach((l, j) => {
+      const r = fases.get(f)[l];
+      if (!r) return;
+      const v = r.coste / nTurnos[l], y = y0 + j * (barra + gap), x0 = ex.f(0), x1 = Math.max(ex.f(v), x0 + 2);
+      const g = s("g", {}, svg);
+      s("rect", { x: x0, y: y - 1, width: W - valW - x0, height: barra + 2, fill: "transparent" }, g);
+      s("path", { class: "barra", d: barraRedondeada(x0, y, x1 - x0, barra, 4), fill: color(l) }, g);
+      s("text", { class: "valor", x: x1 + 6, y: y + barra - 3, texto: `${usd(v)} · ${pct(v / totales[l])}` }, svg);
+      conTip(g, `${f} · ${l}`, [[usd(v), "coste medio por turno"], [pct(v / totales[l]), "del coste medio del turno"],
+        [`${entero(r.ent / nTurnos[l])} / ${entero(r.sal / nTurnos[l])}`, "tokens medios ent. / sal."],
+        [nf(1).format(r.llamadas / nTurnos[l]), "llamadas por turno"], [l, "lote", color(l)]]);
+    });
+  });
+  const cuerpo = orden.flatMap(f => lotes.filter(l => fases.get(f)[l]).map(l => {
+    const r = fases.get(f)[l];
+    return [f, l, usd(r.coste / nTurnos[l]), pct(r.coste / nTurnos[l] / totales[l]), entero(r.ent / nTurnos[l]),
+            entero(r.sal / nTurnos[l]), nf(1).format(r.llamadas / nTurnos[l])];
+  }));
+  tabla("tabla-coste", ["Fase", "Lote", "Coste medio por turno", "Parte del turno", "Tokens ent.", "Tokens sal.", "Llamadas por turno"],
+        cuerpo, [2, 3, 4, 5, 6]);
+}
+
+// Barra horizontal: esquinas redondeadas solo en el extremo del dato, recta en la base.
+function barraRedondeada(x, y, w, h, r) {
+  r = Math.min(r, w, h / 2);
+  return `M${x},${y}H${x + w - r}Q${x + w},${y} ${x + w},${y + r}V${y + h - r}Q${x + w},${y + h} ${x + w - r},${y + h}H${x}Z`;
+}
+
+// ------------------------------------------------------------------ tabla de turnos
+
+const COLUMNAS = [
+  { col: "inicio", titulo: "Inicio", valor: t => t.inicio, texto: t => fecha(t.inicio) },
+  { col: "lote", titulo: "Lote", valor: t => t.lote },
+  { col: "ruta", titulo: "Ruta", valor: t => t.ruta },
+  { col: "intencion", titulo: "Intención", valor: t => t.intencion },
+  { col: "pregunta", titulo: "Pregunta", valor: t => t.pregunta || "" },
+  { col: "duracion_ms", titulo: "Latencia", num: true, valor: t => t.duracion_ms, texto: t => ms(t.duracion_ms) },
+  { col: "tokens", titulo: "Tokens ent. / sal.", num: true, valor: t => t.tokens_entrada ?? -1,
+    texto: t => t.tokens_entrada == null ? "incompletos" : `${entero(t.tokens_entrada)} / ${entero(t.tokens_salida)}` },
+  { col: "coste_usd", titulo: "Coste", num: true, valor: t => t.coste_usd ?? -1, texto: t => usd(t.coste_usd) },
+  { col: "llm", titulo: "Llamadas LLM", num: true, valor: t => t.spans.filter(x => x.tipo === "LLM").length },
+  { col: "estado", titulo: "Estado", valor: t => t.error ? 0 : 1 },
+];
+
+function pintarTurnos(ts) {
+  const n = vaciar("turnos");
+  if (!ts.length) { n.append(el("div", { clase: "vacio", texto: "Ningún turno con estos filtros." })); return; }
+  const { col, asc } = estado.orden;
+  const c = COLUMNAS.find(x => x.col === col);
+  const orden = [...ts].sort((a, b) => {
+    const va = c.valor(a), vb = c.valor(b);
+    return (va < vb ? -1 : va > vb ? 1 : 0) * (asc ? 1 : -1);
+  });
+  const cab = el("tr");
+  for (const x of COLUMNAS) {
+    const th = el("th", { clase: x.num ? "num" : "", scope: "col", tabindex: "0", texto: x.titulo });
+    if (x.col === col) th.setAttribute("aria-sort", asc ? "ascending" : "descending");
+    const ordenar = () => { estado.orden = { col: x.col, asc: x.col === col ? !asc : !x.num }; pintarTurnos(filtrados()); };
+    th.addEventListener("click", ordenar);
+    th.addEventListener("keydown", e => { if (e.key === "Enter") ordenar(); });
+    cab.append(th);
+  }
+  const cuerpo = el("tbody");
+  for (const t of orden) {
+    const tr = el("tr", { tabindex: "0" });
+    if (t.id === estado.elegido) tr.className = "elegido";
+    for (const x of COLUMNAS) {
+      const td = el("td", { clase: x.num ? "num" : "" });
+      if (x.col === "lote") td.append(el("span", { clase: "muestra", style: `background:${color(t.lote)};margin-right:6px` }), t.lote);
+      else if (x.col === "pregunta") { td.className = "pregunta"; td.textContent = recorte(t.pregunta || "—", 120); }
+      else if (x.col === "estado") td.append(estadoTurno(t));
+      else td.textContent = x.texto ? x.texto(t) : String(x.valor(t));
+      tr.append(td);
+    }
+    tr.addEventListener("click", () => elegir(t.id, true));
+    tr.addEventListener("keydown", e => { if (e.key === "Enter") elegir(t.id, true); });
+    cuerpo.append(tr);
+  }
+  n.append(el("table", {}, el("thead", {}, cab), cuerpo));
+}
+
+function estadoTurno(t) {
+  if (t.error) return el("span", { clase: "estado-error", texto: "⚠ error" });
+  const partes = [];
+  if (t.valida === true) partes.push(t.reparaciones ? "válida tras reparar" : "válida");
+  if (t.valida === false) partes.push("inválida");
+  if (t.busqueda_forzada) partes.push("búsqueda forzada");
+  if (t.sintesis_forzada) partes.push("síntesis forzada");
+  return el("span", { clase: "estado-ok", texto: partes.join(" · ") || "ok" });
+}
+
+// ------------------------------------------------------------------ cascada de un turno
+
+function elegir(id, desplazar) {
+  estado.elegido = id;
+  pintar();
+  if (desplazar !== false) document.getElementById("seccion-cascada").scrollIntoView({ behavior: "smooth", block: "start" });
+}
+
+function pintarCascada(ts) {
+  const n = vaciar("cascada");
+  const t = ts.find(x => x.id === estado.elegido);
+  if (!t) { n.append(el("div", { clase: "vacio", texto: "Elige un turno en la tabla o en las gráficas." })); return; }
+  n.append(el("p", { texto: t.pregunta || "—" }));
+  n.append(el("div", { clase: "cascada-meta" },
+    el("span", {}, el("span", { clase: "muestra", style: `background:${color(t.lote)};margin-right:6px` }), t.lote),
+    el("span", { texto: `ruta ${t.ruta} · ${t.intencion}${t.tema ? ` · ${t.tema}` : ""}` }),
+    el("span", { texto: ms(t.duracion_ms) }),
+    el("span", { texto: t.tokens_entrada == null ? "tokens incompletos" : `${entero(t.tokens_entrada)} / ${entero(t.tokens_salida)} tokens` }),
+    el("span", { texto: usd(t.coste_usd) }),
+    el("span", { clase: "nota", texto: t.id })));
+
+  // Orden en profundidad: cada hijo detrás de su padre, los hermanos por inicio.
+  const hijos = new Map();
+  for (const sp of t.spans) { if (!hijos.has(sp.padre)) hijos.set(sp.padre, []); hijos.get(sp.padre).push(sp); }
+  const ids = new Set(t.spans.map(x => x.id));
+  const filas = [];
+  const recorrer = (sp, nivel) => {
+    filas.push([sp, nivel]);
+    for (const h of (hijos.get(sp.id) || []).sort((a, b) => a.inicio_ms - b.inicio_ms)) recorrer(h, nivel + 1);
+  };
+  for (const raiz of t.spans.filter(x => !ids.has(x.padre)).sort((a, b) => a.inicio_ms - b.inicio_ms)) recorrer(raiz, 0);
+
+  const leyendaTipos = el("div", { clase: "leyenda" });
+  for (const [etq, fondo] of [["llamada al LLM", color(t.lote)], ["herramienta", `color-mix(in srgb, ${color(t.lote)} 45%, var(--surface))`],
+                              ["fase / turno", "var(--neutral)"], ["error", "var(--critical)"]])
+    leyendaTipos.append(el("span", {}, el("span", { clase: "clave", style: `background:${fondo}` }), etq));
+  n.append(leyendaTipos);
+
+  const caja = el("div", { clase: "grafica" });
+  n.append(caja);
+  const W = Math.max(260, n.clientWidth), etqW = Math.min(230, W * 0.32), fila = 22, m = { t: 22, b: 8 };
+  const H = m.t + filas.length * fila + m.b;
+  const svg = s("svg", { width: W, height: H, role: "img", "aria-label": "Cascada de spans del turno" }, caja);
+  const fin = Math.max(...t.spans.map(x => x.inicio_ms + (x.duracion_ms || 0)));
+  const ex = escala(0, fin, etqW + 8, W - 70, false);
+  for (const v of ex.ticks) {
+    s("line", { class: "rejilla", x1: ex.f(v), x2: ex.f(v), y1: m.t - 4, y2: H - m.b }, svg);
+    s("text", { x: ex.f(v), y: 12, "text-anchor": "middle", texto: ms(v) }, svg);
+  }
+  filas.forEach(([sp, nivel], i) => {
+    const y = m.t + i * fila;
+    const etq = `${sp.error ? "⚠ " : ""}${sp.nombre}`;
+    s("text", { class: "etq-fila", x: nivel * 12, y: y + 15, texto: recorte(etq, Math.max(8, 30 - nivel * 2)) }, svg);
+    const relleno = sp.error ? "var(--critical)" : sp.tipo === "LLM" ? color(t.lote)
+      : sp.tipo === "TOOL" ? `color-mix(in srgb, ${color(t.lote)} 45%, var(--surface))` : "var(--neutral)";
+    const x0 = ex.f(sp.inicio_ms), w = Math.max(2, ex.f(sp.inicio_ms + (sp.duracion_ms || 0)) - x0);
+    const g = s("g", {}, svg);
+    s("rect", { x: etqW, y: y + 1, width: W - etqW, height: fila - 2, fill: "transparent" }, g);
+    s("rect", { class: "barra", x: x0, y: y + 5, width: w, height: 12, rx: Math.min(3, w / 2), fill: relleno }, g);
+    const texto = ms(sp.duracion_ms);
+    const derecha = x0 + w + 6 + texto.length * 6 < W;
+    s("text", { class: "valor", x: derecha ? x0 + w + 6 : x0 - 6, y: y + 15, "text-anchor": derecha ? "start" : "end", texto }, svg);
+    conTip(g, sp.nombre, () => filasSpan(sp));
+  });
+
+  if (t.respuesta) n.append(el("details", {}, el("summary", { texto: "Respuesta del turno" }), el("div", { clase: "respuesta", texto: t.respuesta })));
+}
+
+function filasSpan(sp) {
+  const f = [[ms(sp.duracion_ms), "duración"], [ms(sp.inicio_ms), "inicio desde el turno"], [sp.tipo, "tipo"]];
+  if (sp.tipo === "LLM") {
+    f.push([sp.tokens_entrada == null ? "ausentes" : `${entero(sp.tokens_entrada)} / ${entero(sp.tokens_salida)}`, "tokens ent. / sal."]);
+    f.push([usd(sp.coste_usd), "coste"], [sp.modelo || "—", "modelo"]);
+  }
+  for (const [k, v] of Object.entries(sp.atributos)) if (v !== "" && v != null) f.push([recorte(String(v), 60), k]);
+  for (const d of sp.decisiones) f.push([d, "decisión del código"]);
+  if (sp.error) f.push([recorte(sp.error_descripcion || "error", 80), "error"]);
+  return f;
+}
+
+// ------------------------------------------------------------------ calidad y decisiones
+
+function pintarCalidad(ts) {
+  const n = vaciar("calidad");
+  const grupos = porLote(ts);
+  if (!grupos.length) return;
+  const docs = g => g.filter(t => t.valida != null);
+  const herr = g => g.flatMap(t => t.spans.filter(x => x.tipo === "TOOL" && x.nombre !== "validar"));
+  const indicadores = [
+    ["Síntesis documentales", g => docs(g).length],
+    ["Válida a la primera (/rag/validar)", g => docs(g).filter(t => t.valida === true && t.reparaciones === 0).length],
+    ["Válido tras reparación", g => docs(g).filter(t => t.valida === true && t.reparaciones > 0).length],
+    ["Inválido tras reparar (insuficiencia)", g => docs(g).filter(t => t.valida === false).length],
+    ["Búsquedas forzadas por el código", g => g.filter(t => t.busqueda_forzada).length],
+    ["Síntesis forzadas (límite de vueltas)", g => g.filter(t => t.sintesis_forzada).length],
+    ["Llamadas a herramientas", g => herr(g).length],
+    ["Herramientas vetadas pedidas por el modelo", g => herr(g).filter(x => x.atributos.permitida === false).length],
+    ["Herramientas con error", g => herr(g).filter(x => x.error).length],
+    ["Turnos con error (excepción)", g => g.filter(t => t.error).length],
+    ["Turnos con tokens incompletos", g => g.filter(t => t.tokens_entrada == null).length],
+  ];
+  const lotes = grupos.map(([l]) => l);
+  const cuerpo = indicadores.map(([etq, f]) => [etq, ...grupos.map(([, g]) => entero(f(g)))]);
+  const decisiones = new Map();
+  for (const [l, g] of grupos) for (const t of g) for (const sp of t.spans) for (const d of sp.decisiones) {
+    if (!decisiones.has(d)) decisiones.set(d, {});
+    decisiones.get(d)[l] = (decisiones.get(d)[l] || 0) + 1;
+  }
+  for (const [d, cuenta] of decisiones) cuerpo.push([`Decisión: ${d}`, ...lotes.map(l => entero(cuenta[l] || 0))]);
+  n.append(tablaNodo(["Indicador", ...lotes], cuerpo, lotes.map((_, i) => i + 1)));
+}
+
+// ------------------------------------------------------------------ utilidades finales
+
+function tablaNodo(cab, filas, numericas = []) {
+  const num = new Set(numericas);
+  return el("table", {},
+    el("thead", {}, el("tr", {}, ...cab.map((c, i) => el("th", { clase: num.has(i) ? "num" : "", scope: "col", texto: c })))),
+    el("tbody", {}, ...filas.map(f => el("tr", {}, ...f.map((v, i) => el("td", { clase: num.has(i) ? "num" : "", texto: v }))))));
+}
+function tabla(id, cab, filas, numericas) { const n = vaciar(id); if (cab.length) n.append(tablaNodo(cab, filas, numericas)); }
+function recorte(texto, max) { texto = texto == null ? "—" : String(texto); return texto.length > max ? `${texto.slice(0, max - 1)}…` : texto; }
+function fecha(iso) {
+  const d = new Date(iso);
+  return isNaN(d) ? "—" : d.toLocaleString("es-ES", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit", second: "2-digit" });
+}
+
+function pintar() {
+  const ts = filtrados();
+  if (!ts.some(t => t.id === estado.elegido)) {  // por defecto, el turno más lento del filtro
+    estado.elegido = ts.length ? ts.reduce((a, b) => (b.duracion_ms > a.duracion_ms ? b : a)).id : null;
+  }
+  pintarResumen(ts);
+  pintarDispersion(ts);
+  pintarFases(ts);
+  pintarRutas(ts);
+  pintarCoste(ts);
+  pintarTurnos(ts);
+  pintarCascada(ts);
+  pintarCalidad(ts);
+}
+
+const lotesTexto = LOTES.length === 1 ? "1 lote" : `${LOTES.length} lotes`;
+document.getElementById("meta").textContent =
+  `${DATOS.turnos.length} turnos en ${lotesTexto} · generado ${fecha(DATOS.generado)} · precios ${DATOS.precios.fecha}` +
+  (DATOS.huerfanas ? ` · ${DATOS.huerfanas} traza(s) sin span turno descartadas` : "");
+construirFiltros();
+pintar();
+let espera;
+window.addEventListener("resize", () => { clearTimeout(espera); espera = setTimeout(pintar, 150); });
+</script>
+</body>
+</html>

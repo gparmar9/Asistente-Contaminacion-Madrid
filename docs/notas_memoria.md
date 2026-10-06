@@ -420,7 +420,7 @@ el agente nuevo añadirá `AGENTE_URL`). El agente nuevo ya se ha probado contra
 
 #### 7.3.1 `Agente` — rediseño por fases (en construcción)
 
-**Estado (2026-10-06): fases 1 a 3 de 7 hechas, más la observabilidad (parte A)** (rama `feature/Agente`). Servicio FastAPI en `Agente/`
+**Estado (2026-10-06): fases 1 a 3 de 7 hechas, más la observabilidad (partes A, B y C; el lote de C con Bedrock, sin ejecutar)** (rama `feature/Agente`). Servicio FastAPI en `Agente/`
 (paquete `agente`, puerto 8200, `GET /salud`, `POST /responder` con el mismo contrato que reenvía
 `ApiUsuario`), misma convención por capas que `ApiUsuario`.
 
@@ -530,15 +530,46 @@ cada decisión y de la elección de LlamaIndex está en `docs/agente/decisiones_
     búsqueda forzada y esperó otros 20 s. Corregido el mismo día: si la búsqueda del modelo
     encuentra el RAG sin servicio (red, timeout, 5xx), frase fija sin repetirla; un 422 sí se
     reintenta con la búsqueda del código.
-  - Pendiente: el informe agregado (parte B) y una evaluación pequeña con resultado esperado por
-    caso (parte C).
-- **Tests**: 26, sin red, sin claves y sin torch: LLM falso con guion que hereda de
+  - **Informe agregado (parte B, 2026-10-06)**: `Agente/evaluacion/informe_trazas.py`, solo con la
+    biblioteca estándar, lee los JSONL, agrupa por turno y lote (la etiqueta del turno) y saca tablas
+    markdown: turnos por ruta e intención, latencia por fase (**mediana con n; p95 solo
+    descriptivo**), tokens y coste con la tabla de precios de Bedrock en Irlanda fechada en el
+    propio script, síntesis válidas a la primera, reparaciones, búsquedas forzadas, herramientas
+    vetadas y decisiones del código. Un turno con una llamada sin tokens queda **incompleto**: no
+    entra en las medianas de tokens y su coste no se suma. `--traza-id` imprime un turno como tabla
+    (alternativa a Phoenix en la terminal). Sobre la traza de la verificación: turno documental de
+    3.440 tokens de entrada y 687 de salida, unos 0,001 $ con Ministral 14B.
+  - **Informe visual (2026-10-06)**: el mismo script genera, con `--salida x.html`, una página
+    autocontenida para analizar latencia y coste: filtros por lote, ruta e intención, cifras por
+    lote (incluido el coste por 1.000 turnos), dispersión latencia–coste por turno, latencia por
+    fase y por ruta mostrando cada span (con n pequeños se ven los puntos, no solo la mediana),
+    coste medio por fase y la cascada de cada turno con su coste, que Phoenix no da para Bedrock.
+    Python extrae un conjunto de datos JSON (`--salida x.json`) y la página lo dibuja con JS y SVG
+    sin librerías: se abre sin red y el JSON es el contrato de una posible web de análisis. Coste:
+    las agregaciones existen dos veces (Python para el markdown, JS para la página), con las mismas
+    reglas.
+  - **Evaluación pequeña (parte C, 2026-10-06)**: `evaluar_turnos.py` pasa 12 casos
+    (`casos_turno.json`: 6 documentales, 2 de charla, 2 fuera de alcance y 2 sin evidencias) por el
+    mismo `Bucle` que monta el servicio. Cada caso declara lo esperado (intención, ruta, si se busca
+    en el RAG, si cita) y el script marca las diferencias. Tres criterios separados: **JSON a la
+    primera** (la primera salida de la síntesis es un objeto JSON, leído en la traza), **referencias
+    válidas** (lo acepta `/rag/validar`) y **respuesta correcta** (lectura humana: sí, no o
+    parcial). Sin jueces LLM: con 12 casos la lectura humana es asumible y no añade otro modelo que
+    evaluar. Cada lote deja su JSONL y un markdown fechado con el informe de trazas.
+  - Los dos casos sin evidencias se eligieron consultando el índice con la pregunta literal (umbral
+    0,1754): «temporada de polen de las gramíneas» y «efectos del benceno en la salud» devuelven 0
+    fragmentos. Otras candidatas cercanas al dominio sí pasan el umbral: radón (3 fragmentos),
+    monóxido de carbono (4) y la guía de la OMS para el benceno (3). Es otra muestra de que el
+    umbral deja pasar preguntas próximas al corpus (§7.2); la síntesis tiene que reconocerlo.
+- **Tests**: 29, sin red, sin claves y sin torch: LLM falso con guion que hereda de
   `FunctionCallingLLM` (mismo camino que un proveedor real) y RAG fingido con
   `httpx.MockTransport`. **Política de tests mínima** (decisión del 2026-10-04): solo los casos
   que fija el plan de cada fase (bucle con 0, 1 y 2 llamadas, límite de vueltas, RAG caído,
   contrato HTTP; en la fase 2, JSON válido, reparación, doble fallo y `sin_evidencia`; en la fase 3,
   cada intención, clasificador caído, herramienta vetada, RAG caído con intención documental y
-  clasificación en negrita; después, la búsqueda con el RAG caído que no se repite), sin tests de detalle interno; se partió de 25 y se recortaron. Verificado además, sin red, que `OpenAILike` serializa la herramienta cruda
+  clasificación en negrita; después, la búsqueda con el RAG caído que no se repite; en la
+  observabilidad, el árbol de spans, turnos concurrentes, LLM caído, JSONL que falla, medianas del
+  informe, tokens incompletos y el evaluador que marca un caso fallido), sin tests de detalle interno; se partió de 25 y se recortaron. Verificado además, sin red, que `OpenAILike` serializa la herramienta cruda
   y los mensajes `assistant(tool_calls)`/`tool` como espera la API. Quinto job del workflow de CI.
 - **Probado contra Bedrock (2026-10-04)**, desde local con credenciales SSO temporales: los dos
   candidatos están bajo demanda en `eu-west-1` con streaming, y los dos **piden la herramienta por
@@ -573,8 +604,35 @@ cada decisión y de la elección de LlamaIndex está en `docs/agente/decisiones_
     `stopReason=end_turn` en llamadas que gastaron 497 y 505 de 512 tokens, así que el corte no se
     detecta por el motivo de parada `[por confirmar en una llamada cortada]`. El razonamiento no se
     cuela en el texto: todas las salidas empiezan por el JSON. Ministral 14B no razona y cabe en 512.
-    Arreglo propuesto, sin aplicar: `LLM_MAX_TOKENS` configurable (2048) y repetir la comparación en
-    igualdad de condiciones.
+    **Arreglo aplicado el 2026-10-06**: `LLM_MAX_TOKENS` configurable (2048 por defecto) para los dos
+    proveedores. La comparación en igualdad de condiciones es el lote de la parte C (abajo).
+  - **Lote de evaluación (2026-10-06, `evaluar_turnos.py`, 12 casos, `LLM_MAX_TOKENS`=2048)**:
+    medianas sobre n=12 turnos por modelo, salvo la ruta documental (n=6).
+
+    | Modelo | Cumplen lo esperado | JSON a la primera | Referencias válidas | Latencia mediana (turno / documental) | Tokens salida mediana (documental) | Coste del lote |
+    |-|-|-|-|-|-|-|
+    | Ministral 14B | 11/12 | 6/6 | 6/6, 0 reparaciones | 4,0 s / 8,3 s | 562 | 0,0059 $ |
+    | gpt-oss-120b | 11/12 | 6/6 | 6/6, 0 reparaciones | 2,9 s / 7,5 s | 1.108 | 0,0087 $ |
+
+    Con 2048 tokens desaparecen los fallos de gpt-oss del 2026-10-05. El único caso fallido es el
+    mismo en los dos (`sin-01`, temporada de polen): ninguno lo clasifica como `DOCUMENTAL` (Ministral
+    `DATOS`, gpt-oss `FUERA_DE_ALCANCE`). El error estaba en el caso: las estaciones no miden polen,
+    así que la pregunta queda fuera de alcance (decisión del equipo; el caso pasa a ser `fue-03`). Con
+    esa lectura, gpt-oss 12/12 y Ministral 11/12.
+  - **Segunda ejecución (2026-10-06, 20 min después, con Phoenix):** misma calidad (gpt-oss 12/12,
+    Ministral 11/12 con el polen como `DATOS`, 6/6 válidas a la primera los dos) y mismo coste
+    (0,0060 $ y 0,0089 $). La latencia de Ministral casi se duplicó: mediana del turno 6,8 s
+    (documental 14,9 s) frente a 4,0 s (8,3 s), con el clasificador en 1,8 s frente a 0,3 s.
+    gpt-oss se mantuvo (3,2 s; documental 7,4 s). Con dos ejecuciones, la latencia de Ministral 14B
+    bajo demanda en `eu-west-1` es variable; la de gpt-oss, estable `[n=2 lotes]`. Revisar el prompt del clasificador queda en el plan
+    del agente (fase 5): el alcance debe definirse por lo que el sistema mide, no por el tema.
+  - **Hallazgo: Bedrock rechaza la síntesis forzada** (2026-10-06, los dos modelos). Cuando el bucle
+    llega al límite de vueltas sin evidencias, el agente vuelve a llamar al modelo sin herramientas
+    pero con el historial, que lleva bloques de llamada y resultado de herramienta. Converse exige
+    entonces `toolConfig` (`ValidationException`) y el turno acaba en 503. Se forzó con un script
+    (una vuelta y una herramienta que falla): 3 de 3 turnos con búsqueda fallaron. Los tests con el
+    LLM falso no lo detectan porque no imitan esa regla del proveedor. Arreglo pendiente: mensajes
+    nuevos, como ya hace la síntesis documental. Revisión humana de la columna «Correcta» y del español `[pendiente]`.
   - Hallazgo: `BedrockConverse` 0.15.3 rechaza los IDs de modelo que no conoce, como el de Ministral
     14B (`ValueError: Unknown model`). Resuelto con una subclase en la fábrica que declara a mano los
     metadatos de los modelos fuera de su lista.
@@ -927,6 +985,11 @@ la enciende a mano para trabajar o hacer una demo.
   automatización (por ejemplo, con una programación de un solo uso dentro de unos minutos) en vez
   de esperar a la noche, y leer el `errorMessage` de CloudTrail, que dice exactamente qué acción y
   qué recurso se denegaron.
+- **Los caminos de emergencia también hay que probarlos con el proveedor real** (2026-10-06). La
+  síntesis forzada del agente pasaba los tests con el LLM falso, pero Bedrock rechaza su historial
+  (bloques de herramienta sin `toolConfig`). En los lotes normales no aparece nunca (0 de 24 turnos),
+  así que solo se vio forzando el caso. Lección: los dobles de prueba no reproducen las reglas del
+  proveedor; los caminos raros necesitan una prueba dirigida contra el servicio real.
 
 ---
 
@@ -1085,6 +1148,11 @@ la enciende a mano para trabajar o hacer una demo.
 | 2026-10-05 | **Agente LLM: ruta documental de punta a punta en Bedrock** (Carlos): `rag.api` real y los dos candidatos, 18 turnos cada uno. Ministral 14B 18/18 con JSON válido a la primera (3,0–7,3 s). gpt-oss-120b 10 a la primera, 4 tras reparación y 4 fallidos (4,5–10,2 s): su razonamiento agota los 512 tokens de salida que `BedrockConverse` usa por defecto y corta el JSON; con 2048, 6/6. Sin cambios de código: arreglo (`LLM_MAX_TOKENS`) propuesto y comparación en igualdad pendiente. Queda abierto si las preguntas de datos (SQL) necesitarán un modelo de razonamiento |
 | 2026-10-06 | **Agente LLM: observabilidad, parte A** (Carlos, rama `feature/Agente`): spans OpenTelemetry con atributos OpenInference en todo el turno (clasificar, bucle, búsqueda forzada, síntesis, validar, cada llamada al LLM y cada herramienta), eventos de decisión del código, exportador JSONL propio y servicio Phoenix en el compose (perfil `observabilidad`). `traza_id` opcional en `/responder` y una línea de resumen por turno en el log. 25 tests (4 nuevos). Pendiente: verlo con Bedrock en Phoenix, el informe agregado y la evaluación pequeña |
 | 2026-10-06 | **Agente LLM: observabilidad verificada con Bedrock** (Carlos): Phoenix en Docker, `rag.api` y Ministral 14B; cascada completa con tokens reales (turno documental de 5,5 s; captura en `docs/agente/img/PhoenixTraza.PNG`). La traza mostró una doble espera de 20 s con el RAG sin servicio (turno de 43 s): corregida, ya no se repite la búsqueda. 26 tests. Pendiente: informe agregado (parte B) y evaluación pequeña (parte C) |
+| 2026-10-06 | **Agente LLM: observabilidad, partes B y C, y `LLM_MAX_TOKENS`** (Carlos, rama `feature/Agente`): `informe_trazas.py` (tablas markdown desde los JSONL: medianas con n, tokens y coste con precios fechados, turnos incompletos sin coste) y `evaluar_turnos.py` con 12 casos con resultado esperado y tres criterios separados (JSON, referencias, revisión humana). `LLM_MAX_TOKENS` (2048) en los dos proveedores y log de síntesis inválida a `warning`. 29 tests. Pendiente: ejecutar el lote con los dos modelos de Bedrock y elegir modelo |
+| 2026-10-06 | **Agente LLM: informe visual de trazas** (Carlos, rama `feature/Agente`): `informe_trazas.py --salida x.html` genera una página autocontenida (JS y SVG sin librerías) para analizar latencia y coste por lote, fase, ruta y turno, con la cascada de cada turno y su coste; `--salida x.json` da el conjunto de datos, pensado como contrato de una futura web de análisis. 30 tests |
+| 2026-10-06 | **Agente LLM: lote de evaluación en Bedrock** (Carlos): 12 casos por modelo con `rag.api` real y `LLM_MAX_TOKENS`=2048. Ministral 14B y gpt-oss-120b: 11/12 lo esperado y 6/6 síntesis válidas a la primera, sin reparaciones. Medianas del turno: 4,0 s y 2,9 s; coste del lote: 0,0059 $ y 0,0087 $. Mismo fallo en los dos (`sin-01`, polen): el error era del caso, que pasa a fuera de alcance (las estaciones no miden polen); con esa lectura, gpt-oss 12/12 y Ministral 11/12. Pendiente: revisión humana y elección del modelo |
+| 2026-10-06 | **Agente LLM: síntesis forzada probada en Bedrock** (Carlos): falla con los dos modelos (`ValidationException`, falta `toolConfig` con bloques de herramienta en el historial) y el turno acaba en 503. Arreglo y revisión del prompt del clasificador (alcance: el polen no se mide) añadidos al plan del agente |
+| 2026-10-06 | **Agente LLM: lote repetido con Phoenix** (Carlos): el primero se lanzó sin `PHOENIX_ENDPOINT` (el script no lee `.env`) y solo quedó en JSONL. Misma calidad y coste; Ministral casi duplica su latencia (mediana 6,8 s frente a 4,0 s) y gpt-oss se mantiene (3,2 s). Cada lote es un proyecto en Phoenix |
 
 
 ---
@@ -1094,8 +1162,10 @@ la enciende a mano para trabajar o hacer una demo.
 - [ ] ¿Qué límite de gasto o créditos tiene la cuenta AWS del máster?
 - [ ] Agente nuevo: ¿Ministral 14B 3.0 o gpt-oss-120b en Bedrock? Empatan en clasificador y uso de
   herramientas. Ruta documental (2026-10-05): Ministral 18/18 a la primera; gpt-oss 4 fallos de 18
-  por el límite de 512 tokens de salida. Falta repetirla con `LLM_MAX_TOKENS` y medir el español.
-  (§7.3.1)
+  por el límite de 512 tokens de salida. Con `LLM_MAX_TOKENS`=2048 (lote del 2026-10-06): empate,
+  6/6 válidas a la primera con los dos (12/12 gpt-oss y 11/12 Ministral con el caso del polen
+  corregido); gpt-oss algo más rápido y ~50 % más caro. Falta la
+  revisión humana de las respuestas y del español. (§7.3.1)
 - [ ] Agente nuevo: ¿necesitan las preguntas de datos (herramienta SQL) un modelo de razonamiento?
   Para la ruta documental no hace falta. Analizarlo cuando exista la herramienta SQL. (§11)
 - [x] Agente nuevo: precisión del clasificador con un proveedor real → 20/20 en intención y 5/5 en

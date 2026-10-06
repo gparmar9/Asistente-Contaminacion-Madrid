@@ -103,6 +103,28 @@ respuesta HTTP y la línea `turno traza=...` de los logs llevan al mismo turno. 
 responde, el SDK lo avisa en el log y el turno sigue igual: los spans se envían por lotes en
 segundo plano.
 
+Informe agregado desde los JSONL (solo biblioteca estándar): turnos por ruta e intención,
+latencia por fase (mediana con n; p95 solo descriptivo), tokens y coste con precios fechados en
+el script, síntesis válidas a la primera, reparaciones, búsquedas forzadas y decisiones. Un turno
+al que le faltan tokens queda como incompleto y su coste no se suma.
+
+```bash
+.venv/bin/python evaluacion/informe_trazas.py trazas/*.jsonl                       # por lote (etiqueta)
+.venv/bin/python evaluacion/informe_trazas.py trazas/*.jsonl --salida informe.md
+.venv/bin/python evaluacion/informe_trazas.py trazas/x.jsonl --traza-id 5534d0f4  # un turno, como tabla
+.venv/bin/python evaluacion/informe_trazas.py trazas/*.jsonl --salida informe.html  # informe visual
+.venv/bin/python evaluacion/informe_trazas.py trazas/*.jsonl --salida datos.json    # solo los datos
+```
+
+La extensión de `--salida` elige el formato. El HTML es un único fichero que se abre en el
+navegador sin red (plantilla en `evaluacion/plantilla_informe.html`, sin librerías externas):
+filtros por lote, ruta e intención; cifras por lote (latencia mediana y p95, coste total, por
+1.000 turnos y mediano, tokens); dispersión latencia–coste por turno; latencia por fase y por ruta
+con cada span visible; coste medio por fase; tabla de turnos ordenable y cascada de cada turno con
+su coste. Lleva la pregunta y la respuesta de cada turno (no los mensajes al LLM): tratarlo como
+las trazas, fuera de git. El `.json` es el conjunto de datos que dibuja la página; una futura web
+de análisis podría servirlo desde un endpoint y reutilizar la plantilla.
+
 ## Tests
 
 Sin red, sin claves y sin servicio RAG (LLM falso con guion y transporte HTTP fingido):
@@ -120,3 +142,20 @@ Con un proveedor real en `.env`: 20 preguntas etiquetadas a mano en `evaluacion/
 set -a && . ./.env && set +a
 python evaluacion/evaluar_clasificador.py
 ```
+
+## Evaluar turnos completos (fuera de CI)
+
+12 casos en `evaluacion/casos_turno.json` (6 documentales, 2 de charla, 2 fuera de alcance y 2
+sin evidencias), cada uno con lo esperado: intención, ruta, si se busca en el RAG y si cita.
+Necesita `rag.api` levantado. Cada lote deja su JSONL en `trazas/` (etiqueta = modelo, también
+proyecto de Phoenix si hay `PHOENIX_ENDPOINT`) y un markdown en `evaluacion/resultados/` con las
+comprobaciones automáticas, las respuestas para revisarlas a mano (correcta: sí / no / parcial)
+y el informe de trazas. Sin jueces LLM.
+
+```bash
+LLM_PROVEEDOR=bedrock LLM_MODELO=mistral.ministral-3-14b-instruct AWS_REGION=eu-west-1 \
+  AWS_PROFILE=pontia RAG_URL=http://localhost:8010 .venv/bin/python evaluacion/evaluar_turnos.py
+# --caso doc-01 --caso sin-02 para repetir solo algunos
+```
+
+La carpeta `resultados/` no se versiona; los resultados revisados se añaden con `git add -f`.

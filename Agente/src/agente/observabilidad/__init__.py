@@ -45,8 +45,9 @@ _razonamiento = False
 _etiqueta = ""
 
 
-def configurar(settings: Settings) -> None:
-    """Una vez por proceso, en el arranque. Los destinos vacíos no se configuran."""
+def configurar(settings: Settings) -> Path | None:
+    """Una vez por proceso, en el arranque. Los destinos vacíos no se configuran.
+    Devuelve el fichero JSONL de este proceso (None sin `TRAZAS_RUTA`)."""
     guardar = settings.traza_guardar_texto
     proveedor = TracerProvider(
         resource=Resource.create({ResourceAttributes.PROJECT_NAME: settings.phoenix_proyecto}),
@@ -56,6 +57,7 @@ def configurar(settings: Settings) -> None:
     if settings.phoenix_endpoint:
         from phoenix.otel import BatchSpanProcessor as ProcesadorPhoenix
         proveedor.add_span_processor(ProcesadorPhoenix(endpoint=settings.phoenix_endpoint))
+    fichero = None
     if settings.trazas_ruta:
         fichero = _fichero_trazas(Path(settings.trazas_ruta), settings.traza_etiqueta)
         if fichero is not None:
@@ -64,6 +66,7 @@ def configurar(settings: Settings) -> None:
                    etiqueta=settings.traza_etiqueta)
     logger.info("Trazas: Phoenix=%s, JSONL=%s, texto=%s", settings.phoenix_endpoint or "no",
                 settings.trazas_ruta or "no", guardar)
+    return fichero
 
 
 def usar_proveedor(proveedor: TracerProvider, *, guardar_texto: bool = True,

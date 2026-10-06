@@ -100,7 +100,7 @@ async def _sintesis(llamar: Llamar, rag: HerramientaRag, pregunta: str,
                 valida=True,
                 reparaciones=intento,
             )
-        logger.info("Salida documental inválida (intento %d): %s", intento + 1,
+        logger.warning("Salida documental inválida (intento %d): %s", intento + 1,
                     validacion["mensaje_reparacion"])
         mensajes = mensajes + [
             ChatMessage(role=MessageRole.ASSISTANT, content=salida_texto),

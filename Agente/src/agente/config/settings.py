@@ -28,6 +28,9 @@ class Settings:
     max_vueltas: int
     # Tiempo límite del clasificador de intención; si se agota, el turno sigue como DESCONOCIDA.
     clasificador_timeout_s: float
+    # Tokens de salida por llamada, razonamiento incluido. BedrockConverse usa 512 si no se fija,
+    # y eso corta el JSON de la síntesis con modelos que razonan (gpt-oss).
+    llm_max_tokens: int = 2048
     # Observabilidad (ver agente/observabilidad). Vacío = ese destino no se configura.
     phoenix_endpoint: str = ""          # p. ej. http://localhost:6006/v1/traces
     phoenix_proyecto: str = "agente"    # proyecto de Phoenix; en evaluación, la etiqueta del lote
@@ -50,6 +53,7 @@ def get_settings() -> Settings:
         llm_temperatura=float(os.getenv("LLM_TEMPERATURA", "0.2")),
         llm_timeout_s=float(os.getenv("LLM_TIMEOUT_S", "30")),
         llm_max_reintentos=int(os.getenv("LLM_MAX_REINTENTOS", "2")),
+        llm_max_tokens=int(os.getenv("LLM_MAX_TOKENS", "2048")),
         aws_region=os.getenv("AWS_REGION", "eu-west-1"),
         aws_profile=os.getenv("AWS_PROFILE", ""),
         rag_url=os.getenv("RAG_URL", ""),

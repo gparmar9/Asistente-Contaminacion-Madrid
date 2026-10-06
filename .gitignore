@@ -42,6 +42,8 @@ __pycache__/
 /Agente/.venv/
 # Trazas del agente (JSONL): llevan preguntas y respuestas
 /Agente/trazas/
+# Resultados de la evaluación de turnos: solo entran los revisados a mano (git add -f)
+/Agente/evaluacion/resultados/
 
 #documentación
 # Informes, revisiones y estados generados a partir del código: no son fuente, se

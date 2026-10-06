@@ -13,7 +13,7 @@ from fastapi import Depends, FastAPI, HTTPException, Request
 
 from agente import observabilidad
 from agente.business.bucle import Bucle, LLMNoDisponible
-from agente.config.settings import get_settings
+from agente.config.settings import Settings, get_settings
 from agente.entities.chat import Pregunta, Respuesta
 from agente.llm.cliente import ConfiguracionLLMInvalida, crear_llm
 from agente.tools.rag import HerramientaRag
@@ -24,8 +24,9 @@ log_turnos = observabilidad.configurar_resumen()
 settings = get_settings()
 
 
-def construir_bucle() -> Bucle | None:
-    """Monta LLM + clasificador + herramientas. Devuelve None si la configuración no permite arrancar el LLM."""
+def construir_bucle(settings: Settings = settings) -> Bucle | None:
+    """Monta LLM + clasificador + herramientas. Devuelve None si la configuración no permite arrancar el LLM.
+    `settings`: la del proceso; el evaluador de turnos pasa la suya."""
     try:
         llm = crear_llm(settings)
         llm_clasificador = crear_llm(settings, temperatura=0.0)
