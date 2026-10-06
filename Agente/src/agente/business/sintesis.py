@@ -17,6 +17,7 @@ from typing import Any, Awaitable, Callable
 
 from llama_index.core.base.llms.types import ChatMessage, ChatResponse, MessageRole
 
+from agente import observabilidad
 from agente.business import frases
 from agente.entities.chat import Fuente
 from agente.tools.base import ResultadoHerramienta
@@ -74,6 +75,16 @@ class ResultadoDocumental:
 
 async def sintesis_documental(llamar: Llamar, rag: HerramientaRag, pregunta: str,
                               evidencias: EvidenciasTurno) -> ResultadoDocumental:
+    with observabilidad.span("sintesis_documental", "chain") as span:
+        resultado = await _sintesis(llamar, rag, pregunta, evidencias)
+        span.set_attributes({"agente.valida": resultado.valida, "agente.reparaciones": resultado.reparaciones})
+        if not resultado.valida:
+            observabilidad.decision("insuficiencia")
+        return resultado
+
+
+async def _sintesis(llamar: Llamar, rag: HerramientaRag, pregunta: str,
+                    evidencias: EvidenciasTurno) -> ResultadoDocumental:
     mensajes = _mensajes_sintesis(pregunta, evidencias, rag.esquema_salida)
     for intento in range(MAX_REPARACIONES + 1):
         respuesta = await llamar(mensajes, [])

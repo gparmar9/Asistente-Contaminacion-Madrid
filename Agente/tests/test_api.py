@@ -28,7 +28,9 @@ def test_responder_devuelve_el_contrato(cliente):
 
     r = cliente.post("/responder", json={"pregunta": "¿Qué efectos tiene el NO2?"})
     assert r.status_code == 200
-    assert r.json() == {
+    cuerpo = r.json()
+    assert len(cuerpo.pop("traza_id")) == 32  # id de la traza, para buscar el turno en Phoenix
+    assert cuerpo == {
         "respuesta": TEXTO_NO2,
         "fuentes": [{"tipo": "documento", "referencia": "Efectos del NO2 en la salud"}],
         "advertencia": frases.AVISO_SANITARIO,

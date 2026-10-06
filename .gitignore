@@ -40,6 +40,8 @@ __pycache__/
 
 #Agente
 /Agente/.venv/
+# Trazas del agente (JSONL): llevan preguntas y respuestas
+/Agente/trazas/
 
 #documentación
 # Informes, revisiones y estados generados a partir del código: no son fuente, se
@@ -58,3 +60,4 @@ docs/agente/plan_observabilidad_agente.md
 docs/agente/estado_agente.md
 docs/agente/decisiones_agente.md
 docs/agente/estado_agente.md
+docker-compose.yml

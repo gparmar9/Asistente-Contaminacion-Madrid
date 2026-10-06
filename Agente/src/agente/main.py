@@ -6,10 +6,12 @@ Arranque:
 from __future__ import annotations
 
 import logging
+import time
 from contextlib import asynccontextmanager
 
 from fastapi import Depends, FastAPI, HTTPException, Request
 
+from agente import observabilidad
 from agente.business.bucle import Bucle, LLMNoDisponible
 from agente.config.settings import get_settings
 from agente.entities.chat import Pregunta, Respuesta
@@ -17,6 +19,7 @@ from agente.llm.cliente import ConfiguracionLLMInvalida, crear_llm
 from agente.tools.rag import HerramientaRag
 
 logger = logging.getLogger("agente")
+log_turnos = observabilidad.configurar_resumen()
 
 settings = get_settings()
 
@@ -40,8 +43,10 @@ def construir_bucle() -> Bucle | None:
 
 @asynccontextmanager
 async def lifespan(app_: FastAPI):
+    observabilidad.configurar(settings)
     app_.state.bucle = construir_bucle()
     yield
+    observabilidad.cerrar()
 
 
 app = FastAPI(
@@ -72,9 +77,13 @@ def salud() -> dict:
 async def responder(entrada: Pregunta, bucle: Bucle | None = Depends(get_bucle)) -> Respuesta:
     if bucle is None:
         raise HTTPException(status_code=503, detail="El agente no tiene un LLM configurado")
+    inicio = time.perf_counter()
     try:
         resultado = await bucle.responder(entrada.pregunta)
     except LLMNoDisponible as exc:
+        log_turnos.info("turno fallido: LLM no disponible (%.0f ms)", (time.perf_counter() - inicio) * 1000)
         raise HTTPException(status_code=503, detail="El asistente no está disponible en este momento") from exc
+    log_turnos.info("turno traza=%s ruta=%s intencion=%s vueltas=%d duracion_ms=%.0f", resultado.traza_id,
+                    resultado.ruta, resultado.intencion, resultado.vueltas, (time.perf_counter() - inicio) * 1000)
     return Respuesta(respuesta=resultado.respuesta, fuentes=resultado.fuentes,
-                     advertencia=resultado.advertencia)
+                     advertencia=resultado.advertencia, traza_id=resultado.traza_id)

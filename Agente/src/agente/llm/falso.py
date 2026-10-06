@@ -6,6 +6,9 @@ proveedor real (`astream_chat_with_tools`, `get_tool_calls_from_response`).
 Guion: lista de `ChatMessage` de asistente (ver `texto()` y `llamada()`) o de
 excepciones, que se consumen en orden. Cada llamada queda en `registro` con los
 mensajes recibidos y los nombres de las herramientas ofrecidas.
+
+Como los proveedores reales, deja los tokens en `additional_kwargs` de la respuesta
+completa (el último trozo del stream): `TOKENS`, fijos.
 """
 from __future__ import annotations
 
@@ -29,6 +32,9 @@ from llama_index.core.bridge.pydantic import Field
 from llama_index.core.llms.function_calling import FunctionCallingLLM
 from llama_index.core.llms.llm import ToolSelection
 from llama_index.core.tools.types import BaseTool
+
+
+TOKENS = {"prompt_tokens": 100, "completion_tokens": 20}
 
 
 def texto(contenido: str) -> ChatMessage:
@@ -80,7 +86,7 @@ class LLMFalso(FunctionCallingLLM):
     def _deltas(self, mensaje: ChatMessage) -> list[ChatResponse]:
         contenido = mensaje.content or ""
         if not contenido or self.trozos <= 1:
-            return [ChatResponse(message=mensaje, delta=contenido)]
+            return [ChatResponse(message=mensaje, delta=contenido, additional_kwargs=dict(TOKENS))]
         paso = max(1, -(-len(contenido) // self.trozos))  # división hacia arriba
         respuestas = []
         for i in range(0, len(contenido), paso):
@@ -89,7 +95,8 @@ class LLMFalso(FunctionCallingLLM):
                 message=ChatMessage(role=MessageRole.ASSISTANT, content=parcial),
                 delta=contenido[i: i + paso],
             ))
-        respuestas[-1] = ChatResponse(message=mensaje, delta=respuestas[-1].delta)
+        respuestas[-1] = ChatResponse(message=mensaje, delta=respuestas[-1].delta,
+                                      additional_kwargs=dict(TOKENS))
         return respuestas
 
     # ----------------------------------------------------------------- tools
@@ -130,7 +137,7 @@ class LLMFalso(FunctionCallingLLM):
     # ----------------------------------------------------------------- chat
 
     def chat(self, messages: Sequence[ChatMessage], **kwargs: Any) -> ChatResponse:
-        return ChatResponse(message=self._siguiente(messages, kwargs))
+        return ChatResponse(message=self._siguiente(messages, kwargs), additional_kwargs=dict(TOKENS))
 
     async def achat(self, messages: Sequence[ChatMessage], **kwargs: Any) -> ChatResponse:
         return self.chat(messages, **kwargs)

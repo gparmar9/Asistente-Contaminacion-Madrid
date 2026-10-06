@@ -46,6 +46,9 @@ def _openai_compatible(settings: Settings, temperatura: float) -> FunctionCallin
         # Sin estas dos marcas LlamaIndex trataría el modelo como de completado sin tools.
         is_chat_model=True,
         is_function_calling_model=True,
+        # En streaming los tokens solo llegan si se piden (último trozo). LlamaIndex lo quita en
+        # las llamadas sin stream. Que cada proveedor lo respete está [por confirmar].
+        additional_kwargs={"stream_options": {"include_usage": True}},
     )
 
 

@@ -24,3 +24,4 @@ class Respuesta(BaseModel):
     respuesta: str
     fuentes: list[Fuente] = []
     advertencia: str | None = None
+    traza_id: str | None = Field(default=None, description="Traza del turno en Phoenix y en el JSONL")

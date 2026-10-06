@@ -6,6 +6,7 @@
       -> vuelta 1..MAX: el modelo pide herramientas -> el código las ejecuta y añade el mensaje `tool`
       -> el modelo deja de pedir herramientas (o se agotan las vueltas) y:
            búsqueda obligada sin hacer -> la hace el código con la pregunta y el tema
+                                          (salvo que la del modelo encontrara el RAG caído: frase fija)
            hubo evidencias del RAG     -> ruta documental (sintesis.py): JSON validado y passthrough
            no las hubo                 -> su texto es el final (o síntesis forzada sin herramientas)
 
@@ -13,6 +14,9 @@ Intervención: si una búsqueda devuelve `sin_evidencia` y el turno no tiene evi
 el código cierra el turno con una frase fija sin volver a llamar al modelo.
 
 Las fases de sesión y comprobaciones se añaden encima de este esqueleto sin cambiar su forma.
+
+Cada paso deja un span (ver `agente.observabilidad`): turno > clasificar | bucle |
+busqueda_forzada | sintesis_documental | sintesis_forzada > llm y herramientas.
 """
 from __future__ import annotations
 
@@ -24,7 +28,9 @@ from llama_index.core.base.llms.types import ChatMessage, ChatResponse, MessageR
 from llama_index.core.llms.function_calling import FunctionCallingLLM
 from llama_index.core.llms.llm import ToolSelection
 from llama_index.core.tools.types import BaseTool
+from opentelemetry.trace import Status, StatusCode
 
+from agente import observabilidad
 from agente.business import frases
 from agente.business.intencion import Decision, clasificar, decidir
 from agente.business.sintesis import EvidenciasTurno, sintesis_documental
@@ -34,6 +40,8 @@ from agente.tools import rag
 from agente.tools.base import Herramienta, ResultadoHerramienta, como_llamaindex
 
 logger = logging.getLogger("agente.bucle")
+
+ID_BUSQUEDA_FORZADA = "busqueda_forzada"  # tool_id de la búsqueda que lanza el código
 
 
 class LLMNoDisponible(RuntimeError):
@@ -46,11 +54,15 @@ class ResultadoTurno:
     fuentes: list[Fuente] = field(default_factory=list)
     advertencia: str | None = None
     intencion: str = DESCONOCIDA.intencion.value
+    tema: str = DESCONOCIDA.tema.value
     vueltas: int = 0                                   # llamadas al LLM con herramientas ofrecidas
     herramientas_usadas: list[str] = field(default_factory=list)
     busqueda_forzada: bool = False                     # la búsqueda obligada la lanzó el código
     sintesis_forzada: bool = False
     ruta: str = "libre"                                # libre | documental | sin_evidencia | fija
+    valida: bool | None = None                         # ruta documental: /rag/validar la aceptó
+    reparaciones: int = 0                              # ruta documental: reintentos tras validar
+    traza_id: str | None = None
 
 
 class Bucle:
@@ -66,13 +78,24 @@ class Bucle:
         self._clasificador_timeout_s = clasificador_timeout_s
 
     async def responder(self, pregunta: str) -> ResultadoTurno:
+        with observabilidad.turno(pregunta) as span:
+            resultado = ResultadoTurno(respuesta="", traza_id=observabilidad.trace_id_actual())
+            await self._turno(pregunta, resultado)
+            span.set_output(resultado.respuesta)
+            span.set_attributes(_atributos_turno(resultado))
+            return resultado
+
+    async def _turno(self, pregunta: str, resultado: ResultadoTurno) -> ResultadoTurno:
         clasificacion = await self._clasificar(pregunta)
         decision = decidir(clasificacion.intencion)
-        resultado = ResultadoTurno(respuesta="", intencion=clasificacion.intencion.value)
+        resultado.intencion = clasificacion.intencion.value
+        resultado.tema = clasificacion.tema.value
         if decision.frase:
+            observabilidad.decision(f"frase_fija:{resultado.intencion}")
             return _fija(resultado, decision.frase)
         disponibles = await self._herramientas_disponibles(decision)
         if decision.busqueda_obligada and rag.NOMBRE not in disponibles:
+            observabilidad.decision("documentacion_no_disponible")
             return _fija(resultado, frases.DOCUMENTACION_NO_DISPONIBLE)
 
         mensajes = [
@@ -81,35 +104,48 @@ class Bucle:
         ]
         evidencias = EvidenciasTurno()
         final: ChatResponse | None = None  # respuesta del modelo sin peticiones de herramienta
+        rag_caido = False  # una búsqueda del modelo encontró el RAG sin servicio
 
-        for _ in range(self._max_vueltas):
-            resultado.vueltas += 1
-            respuesta = await self._llamar(mensajes, list(disponibles.values()))
-            llamadas = self._llamadas_pedidas(respuesta) if disponibles else []
-            if not llamadas:
-                final = respuesta
-                break
-            mensajes.append(respuesta.message)
-            hubo_sin_evidencia = False
-            for llamada in llamadas:
-                r, sin_evidencia = await self._ejecutar_y_anotar(llamada, disponibles, evidencias, resultado)
-                hubo_sin_evidencia |= sin_evidencia
-                mensajes.append(_mensaje_tool(llamada, r))
-            if hubo_sin_evidencia and not evidencias:
-                return _sin_evidencia(resultado)
+        with observabilidad.span("bucle", "chain"):
+            for _ in range(self._max_vueltas):
+                resultado.vueltas += 1
+                respuesta = await self._llamar(mensajes, list(disponibles.values()))
+                llamadas = self._llamadas_pedidas(respuesta) if disponibles else []
+                if not llamadas:
+                    final = respuesta
+                    break
+                mensajes.append(respuesta.message)
+                hubo_sin_evidencia = False
+                for llamada in llamadas:
+                    r, sin_evidencia = await self._ejecutar_y_anotar(llamada, disponibles, evidencias, resultado)
+                    hubo_sin_evidencia |= sin_evidencia
+                    rag_caido |= bool(r.internos) and r.internos.get("estado") == rag.ESTADO_NO_DISPONIBLE
+                    mensajes.append(_mensaje_tool(llamada, r))
+                if hubo_sin_evidencia and not evidencias:
+                    observabilidad.decision("sin_evidencia")
+                    return _sin_evidencia(resultado)
+            if final is None:
+                observabilidad.decision("limite_vueltas")
 
+        if decision.busqueda_obligada and not evidencias and rag_caido:
+            # Repetir la búsqueda solo añadiría otra espera (hasta el timeout del RAG).
+            observabilidad.decision("documentacion_no_disponible")
+            return _fija(resultado, frases.DOCUMENTACION_NO_DISPONIBLE)
         if decision.busqueda_obligada and not evidencias:
-            # El modelo no buscó (o su búsqueda falló): busca el código. Su texto se descarta.
-            resultado.busqueda_forzada = True
-            argumentos = {"pregunta": pregunta}
-            if clasificacion.tema is not Tema.NINGUNO:
-                argumentos["tema"] = clasificacion.tema.value
-            llamada = ToolSelection(tool_id="busqueda_forzada", tool_name=rag.NOMBRE, tool_kwargs=argumentos)
-            r, sin_evidencia = await self._ejecutar_y_anotar(llamada, disponibles, evidencias, resultado)
-            if sin_evidencia:
-                return _sin_evidencia(resultado)
-            if not r.ok:
-                return _fija(resultado, frases.DOCUMENTACION_NO_DISPONIBLE)
+            # El modelo no buscó (o su búsqueda falló por la petición): busca el código. Su texto se descarta.
+            with observabilidad.span("busqueda_forzada", "chain"):
+                resultado.busqueda_forzada = True
+                argumentos = {"pregunta": pregunta}
+                if clasificacion.tema is not Tema.NINGUNO:
+                    argumentos["tema"] = clasificacion.tema.value
+                llamada = ToolSelection(tool_id=ID_BUSQUEDA_FORZADA, tool_name=rag.NOMBRE, tool_kwargs=argumentos)
+                r, sin_evidencia = await self._ejecutar_y_anotar(llamada, disponibles, evidencias, resultado)
+                if sin_evidencia:
+                    observabilidad.decision("sin_evidencia")
+                    return _sin_evidencia(resultado)
+                if not r.ok:
+                    observabilidad.decision("documentacion_no_disponible")
+                    return _fija(resultado, frases.DOCUMENTACION_NO_DISPONIBLE)
 
         if evidencias:  # el texto libre del modelo se descarta: lo sustituye la ruta documental
             return await self._cerrar_documental(pregunta, evidencias, resultado)
@@ -117,10 +153,11 @@ class Bucle:
             resultado.respuesta = _texto(final)
             return resultado
         # Límite de vueltas: cerrar sin herramientas para que el usuario siempre reciba respuesta.
-        mensajes.append(ChatMessage(role=MessageRole.SYSTEM, content=frases.PROMPT_SINTESIS_FORZADA))
-        respuesta = await self._llamar(mensajes, [])
-        resultado.respuesta = _texto(respuesta)
-        resultado.sintesis_forzada = True
+        with observabilidad.span("sintesis_forzada", "chain"):
+            mensajes.append(ChatMessage(role=MessageRole.SYSTEM, content=frases.PROMPT_SINTESIS_FORZADA))
+            respuesta = await self._llamar(mensajes, [])
+            resultado.respuesta = _texto(respuesta)
+            resultado.sintesis_forzada = True
         return resultado
 
     # ------------------------------------------------------------------ pasos
@@ -132,6 +169,8 @@ class Bucle:
         resultado.ruta = "documental"
         resultado.respuesta = documental.respuesta
         resultado.advertencia = documental.advertencia
+        resultado.valida = documental.valida
+        resultado.reparaciones = documental.reparaciones
         _acumular_fuentes(resultado.fuentes, documental.fuentes)  # solo los documentos citados
         return resultado
 
@@ -149,26 +188,31 @@ class Bucle:
             definicion = await herramienta.definicion()
             if definicion is None:
                 logger.warning("La herramienta %s no se ofrece en este turno", nombre)
+                observabilidad.decision(f"herramienta_no_disponible:{nombre}")
                 continue
             disponibles[nombre] = como_llamaindex(definicion)
         return disponibles
 
     async def _llamar(self, mensajes: list[ChatMessage], herramientas: list[BaseTool]) -> ChatResponse:
-        """Una llamada al LLM, drenando el stream. Devuelve la última respuesta (mensaje completo)."""
-        try:
-            if herramientas:
-                flujo = await self._llm.astream_chat_with_tools(herramientas, chat_history=list(mensajes))
-            else:
-                flujo = await self._llm.astream_chat(list(mensajes))
-            ultima: ChatResponse | None = None
-            async for trozo in flujo:
-                ultima = trozo
-        except Exception as exc:  # el proveedor puede lanzar de todo: se traduce a un error propio
-            logger.error("Fallo del LLM: %s", exc)
-            raise LLMNoDisponible(str(exc)) from exc
-        if ultima is None:
-            raise LLMNoDisponible("El LLM no devolvió ninguna respuesta")
-        return ultima
+        """Una llamada al LLM, drenando el stream. Devuelve la última respuesta (mensaje completo).
+        La fase a la que pertenece la da el span padre (bucle, síntesis...)."""
+        nombres = [h.metadata.name for h in herramientas]
+        with observabilidad.llamada_llm(self._llm, mensajes, nombres) as span:
+            try:
+                if herramientas:
+                    flujo = await self._llm.astream_chat_with_tools(herramientas, chat_history=list(mensajes))
+                else:
+                    flujo = await self._llm.astream_chat(list(mensajes))
+                ultima: ChatResponse | None = None
+                async for trozo in flujo:
+                    ultima = trozo
+            except Exception as exc:  # el proveedor puede lanzar de todo: se traduce a un error propio
+                logger.error("Fallo del LLM: %s", exc)
+                raise LLMNoDisponible(str(exc)) from exc
+            if ultima is None:
+                raise LLMNoDisponible("El LLM no devolvió ninguna respuesta")
+            observabilidad.anotar_respuesta(span, ultima)
+            return ultima
 
     def _llamadas_pedidas(self, respuesta: ChatResponse) -> list[ToolSelection]:
         return self._llm.get_tool_calls_from_response(respuesta, error_on_no_tool_call=False)
@@ -192,17 +236,30 @@ class Bucle:
                                  evidencias: EvidenciasTurno, resultado: ResultadoTurno,
                                  ) -> tuple[ResultadoHerramienta, bool]:
         """Ejecuta una llamada, incorpora las evidencias del RAG y la anota en el resultado.
-        Devuelve el resultado (renumerado si trae evidencias) y si la búsqueda salió vacía."""
-        r = await self._ejecutar(llamada, disponibles)
-        sin_evidencia = False
-        if llamada.tool_name == rag.NOMBRE and r.ok and r.internos:
-            if r.internos["estado"] == "sin_evidencia":
-                sin_evidencia = True
-            else:
-                r = evidencias.incorporar(r)
-        resultado.herramientas_usadas.append(llamada.tool_name)
-        _acumular_fuentes(resultado.fuentes, r.fuentes)
-        return r, sin_evidencia
+        Devuelve el resultado (renumerado si trae evidencias) y si la búsqueda salió vacía.
+        El span guarda lo que vio el modelo: el resultado ya renumerado."""
+        argumentos = llamada.tool_kwargs if isinstance(llamada.tool_kwargs, dict) else {}
+        with observabilidad.herramienta(llamada.tool_name, argumentos) as span:
+            r = await self._ejecutar(llamada, disponibles)
+            sin_evidencia = False
+            if llamada.tool_name == rag.NOMBRE and r.ok and r.internos:
+                if r.internos["estado"] == "sin_evidencia":
+                    sin_evidencia = True
+                else:
+                    r = evidencias.incorporar(r)
+            resultado.herramientas_usadas.append(llamada.tool_name)
+            _acumular_fuentes(resultado.fuentes, r.fuentes)
+            span.set_output(r.para_el_modelo())
+            span.set_attributes({
+                "agente.ok": r.ok,
+                "agente.permitida": llamada.tool_name in disponibles,
+                "agente.forzada": llamada.tool_id == ID_BUSQUEDA_FORZADA,
+            })
+            if r.internos and "estado" in r.internos:
+                span.set_attribute("agente.estado", r.internos["estado"])
+            if not r.ok:
+                span.set_status(Status(StatusCode.ERROR, r.error))
+            return r, sin_evidencia
 
 
 # ---------------------------------------------------------------------- utilidades
@@ -217,6 +274,22 @@ def _sin_evidencia(resultado: ResultadoTurno) -> ResultadoTurno:
     resultado.respuesta = frases.SIN_EVIDENCIA
     resultado.ruta = "sin_evidencia"
     return resultado
+
+
+def _atributos_turno(resultado: ResultadoTurno) -> dict:
+    atributos = {
+        "agente.ruta": resultado.ruta,
+        "agente.intencion": resultado.intencion,
+        "agente.tema": resultado.tema,
+        "agente.vueltas": resultado.vueltas,
+        "agente.busqueda_forzada": resultado.busqueda_forzada,
+        "agente.sintesis_forzada": resultado.sintesis_forzada,
+        "agente.herramientas": resultado.herramientas_usadas,
+    }
+    if resultado.valida is not None:
+        atributos["agente.valida"] = resultado.valida
+        atributos["agente.reparaciones"] = resultado.reparaciones
+    return atributos
 
 
 def _texto(respuesta: ChatResponse) -> str:

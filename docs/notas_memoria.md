@@ -420,7 +420,7 @@ el agente nuevo añadirá `AGENTE_URL`). El agente nuevo ya se ha probado contra
 
 #### 7.3.1 `Agente` — rediseño por fases (en construcción)
 
-**Estado (2026-10-04): fases 1 a 3 de 7 hechas** (rama `feature/Agente`). Servicio FastAPI en `Agente/`
+**Estado (2026-10-06): fases 1 a 3 de 7 hechas, más la observabilidad (parte A)** (rama `feature/Agente`). Servicio FastAPI en `Agente/`
 (paquete `agente`, puerto 8200, `GET /salud`, `POST /responder` con el mismo contrato que reenvía
 `ApiUsuario`), misma convención por capas que `ApiUsuario`.
 
@@ -496,13 +496,49 @@ cada decisión y de la elección de LlamaIndex está en `docs/agente/decisiones_
     quita `*` y `` ` `` antes de comparar. Con el prompt nuevo Ministral ya no usa negritas (0/20),
     así que la tolerancia del parser queda como red de seguridad. Descartado un parser tolerante que
     busque la palabra en el texto: un formato dudoso no debe disparar frases fijas.
-- **Tests**: 21, sin red, sin claves y sin torch: LLM falso con guion que hereda de
+- **Observabilidad (2026-10-06, adelantada de la fase 6)**: cada turno deja un árbol de **spans
+  OpenTelemetry con atributos OpenInference**: `turno` (pregunta, respuesta, ruta, intención,
+  vueltas, reparaciones) > `clasificar`, `bucle`, `busqueda_forzada`, `sintesis_documental`,
+  `sintesis_forzada` > cada llamada `llm` (mensajes, herramientas ofrecidas, respuesta, tokens) y
+  cada herramienta (argumentos y lo que vio el modelo). Lo que decide el código (frase fija,
+  `sin_evidencia`, límite de vueltas) queda como evento `decision`. **Una sola instrumentación,
+  dos destinos**: **Phoenix** (un contenedor con SQLite, perfil `observabilidad` del compose) para
+  ver la cascada de cada turno, y un **exportador JSONL propio** (un span por línea) del que saldrán
+  las cifras agregadas para la memoria. `/responder` devuelve además un `traza_id` opcional.
+  - El SDK de OpenTelemetry resuelve lo delicado: mantiene separados los turnos concurrentes
+    (contexto por `contextvars`, comprobado con dos turnos solapados en un test), cierra los spans
+    aunque haya excepción y aísla los fallos de los exportadores: un JSONL que no se puede escribir
+    no cambia la respuesta (test).
+  - Tokens: se toman del último trozo del stream; si el proveedor no los envía quedan **ausentes,
+    nunca a cero**, para no abaratar el coste calculado. Texto de prompts y respuestas guardado por
+    defecto; con `TRAZA_GUARDAR_TEXTO=false` queda como `__REDACTED__`.
+  - Descartado: una traza propia del turno en paralelo a los spans (dos fuentes que pueden
+    discrepar); la instrumentación automática de LlamaIndex (ve las llamadas al LLM, no el bucle);
+    Langfuse u Opik (cuatro servicios y 16 GiB recomendados); SaaS como LangSmith (los prompts
+    salen fuera); los decoradores de OpenInference (no permiten elegir qué argumentos se guardan y
+    fijan el tracer al importar).
+  - **Verificado con Bedrock (2026-10-06)**: Phoenix en Docker, `rag.api` real y Ministral 14B.
+    En la cascada del turno documental «¿Qué efectos tiene el NO2 en la salud?» se ve el árbol
+    completo (captura: `docs/agente/img/PhoenixTraza.PNG`): clasificar 0,28 s; bucle 2,5 s (dos
+    llamadas y una búsqueda de 0,13 s); síntesis 2,7 s (llamada de 2,6 s y validación de 0,09 s);
+    5,5 s en total, JSON válido sin reparación. Las cuatro llamadas llevan tokens reales (de 273 a
+    1.742 por llamada) y el JSONL contiene lo mismo. Phoenix marca coste 0 $ porque no conoce los
+    precios de Bedrock: el coste lo calculará el informe.
+  - **Primer fallo encontrado gracias a las trazas**: el otro turno tardó 43 s para acabar en la
+    frase de documentación no disponible. La búsqueda del modelo agotó el timeout de 20 s del RAG
+    (probablemente aún cargando `[por confirmar]`) y el código, al no haber evidencias, lanzó la
+    búsqueda forzada y esperó otros 20 s. Corregido el mismo día: si la búsqueda del modelo
+    encuentra el RAG sin servicio (red, timeout, 5xx), frase fija sin repetirla; un 422 sí se
+    reintenta con la búsqueda del código.
+  - Pendiente: el informe agregado (parte B) y una evaluación pequeña con resultado esperado por
+    caso (parte C).
+- **Tests**: 26, sin red, sin claves y sin torch: LLM falso con guion que hereda de
   `FunctionCallingLLM` (mismo camino que un proveedor real) y RAG fingido con
   `httpx.MockTransport`. **Política de tests mínima** (decisión del 2026-10-04): solo los casos
   que fija el plan de cada fase (bucle con 0, 1 y 2 llamadas, límite de vueltas, RAG caído,
   contrato HTTP; en la fase 2, JSON válido, reparación, doble fallo y `sin_evidencia`; en la fase 3,
   cada intención, clasificador caído, herramienta vetada, RAG caído con intención documental y
-  clasificación en negrita), sin tests de detalle interno; se partió de 25 y se recortaron. Verificado además, sin red, que `OpenAILike` serializa la herramienta cruda
+  clasificación en negrita; después, la búsqueda con el RAG caído que no se repite), sin tests de detalle interno; se partió de 25 y se recortaron. Verificado además, sin red, que `OpenAILike` serializa la herramienta cruda
   y los mensajes `assistant(tool_calls)`/`tool` como espera la API. Quinto job del workflow de CI.
 - **Probado contra Bedrock (2026-10-04)**, desde local con credenciales SSO temporales: los dos
   candidatos están bajo demanda en `eu-west-1` con streaming, y los dos **piden la herramienta por
@@ -775,6 +811,10 @@ la enciende a mano para trabajar o hacer una demo.
 - **CI con dos jobs:** unitarios sin base de datos e **integración contra un PostgreSQL efímero**
   como servicio. Los de integración solo corren con `RUN_DB_TESTS=1`, para no tocar nunca la base
   local por accidente.
+- **Observabilidad del agente:** spans OpenTelemetry por turno, visibles en Phoenix y guardados en
+  JSONL (§7.3.1). Los tests de trazas usan el exportador en memoria del SDK: comprueban el árbol de
+  spans de un turno, que dos turnos concurrentes no se mezclen y que un exportador caído no afecte
+  a la respuesta.
 - **Reproducibilidad:** PostgreSQL en Docker con volumen nombrado, `.env.example` y parser y features
   compartidos entre notebooks y producción.
 - **Documentación viva:** planes de arquitectura v2 y v3, y README con puesta en marcha.
@@ -843,6 +883,11 @@ la enciende a mano para trabajar o hacer una demo.
   empieza bien y se queda sin espacio. Lecciones: fijar siempre `max_tokens` en vez de heredar el
   valor por defecto de la librería, y registrar a nivel visible por qué falla una validación (el
   aviso iba a nivel INFO y uvicorn no lo mostraba; hizo falta un script de diagnóstico). §7.3.1.
+- **La primera traza real encontró un fallo que los tests no cubrían** (2026-10-06): con el RAG sin
+  responder, el turno esperaba dos veces el timeout (43 s) porque la búsqueda forzada no distinguía
+  «el modelo no buscó» de «buscó y el servicio no respondió». Los tests probaban el RAG caído desde
+  el principio (la herramienta ni se ofrece), no el que cae después. En la cascada se veían los dos
+  tramos de 20 s a simple vista. §7.3.1.
 
 **Seguridad**
 - En abril la contraseña de la base de datos quedó **escrita en el código y commiteada**. Se corrigió
@@ -1038,6 +1083,8 @@ la enciende a mano para trabajar o hacer una demo.
 | 2026-10-04 | **Agente LLM: candidatos de Bedrock** (Carlos): se compararán Ministral 14B 3.0 y gpt-oss-120b en `eu-west-1`. Descartados Mistral Small 3.2 (no está en Bedrock), Magistral Small 1.2 (caro y lento por el razonamiento) y Mistral Large 3 (no está en la UE). Detectado que `BedrockConverse` 0.15.3 no admite el ID de Ministral 14B sin ajustar la fábrica. Sin credenciales ni pruebas contra AWS todavía |
 | 2026-10-04 | **Agente LLM: primera prueba contra Bedrock** (Carlos): perfil SSO local y fábrica ajustada para Ministral 14B (metadatos declarados a mano). Los dos candidatos usan herramientas por Converse con streaming. Clasificador: primera medición 4/20 (Ministral) y 19/20 (gpt-oss) por formato (negritas, tema fuera de lista); tras ajustar el prompt y quitar adornos de markdown en el parser, **20/20 en intención y 5/5 en tema con los dos**. 21 tests. Pendiente: ruta documental de punta a punta y elección del modelo |
 | 2026-10-05 | **Agente LLM: ruta documental de punta a punta en Bedrock** (Carlos): `rag.api` real y los dos candidatos, 18 turnos cada uno. Ministral 14B 18/18 con JSON válido a la primera (3,0–7,3 s). gpt-oss-120b 10 a la primera, 4 tras reparación y 4 fallidos (4,5–10,2 s): su razonamiento agota los 512 tokens de salida que `BedrockConverse` usa por defecto y corta el JSON; con 2048, 6/6. Sin cambios de código: arreglo (`LLM_MAX_TOKENS`) propuesto y comparación en igualdad pendiente. Queda abierto si las preguntas de datos (SQL) necesitarán un modelo de razonamiento |
+| 2026-10-06 | **Agente LLM: observabilidad, parte A** (Carlos, rama `feature/Agente`): spans OpenTelemetry con atributos OpenInference en todo el turno (clasificar, bucle, búsqueda forzada, síntesis, validar, cada llamada al LLM y cada herramienta), eventos de decisión del código, exportador JSONL propio y servicio Phoenix en el compose (perfil `observabilidad`). `traza_id` opcional en `/responder` y una línea de resumen por turno en el log. 25 tests (4 nuevos). Pendiente: verlo con Bedrock en Phoenix, el informe agregado y la evaluación pequeña |
+| 2026-10-06 | **Agente LLM: observabilidad verificada con Bedrock** (Carlos): Phoenix en Docker, `rag.api` y Ministral 14B; cascada completa con tokens reales (turno documental de 5,5 s; captura en `docs/agente/img/PhoenixTraza.PNG`). La traza mostró una doble espera de 20 s con el RAG sin servicio (turno de 43 s): corregida, ya no se repite la búsqueda. 26 tests. Pendiente: informe agregado (parte B) y evaluación pequeña (parte C) |
 
 
 ---

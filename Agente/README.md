@@ -14,7 +14,7 @@ Decisiones de diseño, alternativas descartadas y estado por fases:
 | Método | Ruta | Qué devuelve |
 |-|-|-|
 | GET | `/salud` | Estado del servicio, proveedor y modelo configurados |
-| POST | `/responder` | `{pregunta}` → `{respuesta, fuentes[{tipo, referencia}], advertencia}` (mismo contrato que reenvía `ApiUsuario` desde `/chat`) |
+| POST | `/responder` | `{pregunta}` → `{respuesta, fuentes[{tipo, referencia}], advertencia, traza_id}` (mismo contrato que reenvía `ApiUsuario` desde `/chat`; `traza_id` es opcional y sirve para buscar el turno en las trazas) |
 
 Documentación interactiva en `/docs`.
 
@@ -53,6 +53,55 @@ pip install -r requirements.txt
 cp .env.example .env       # y rellenar el proveedor del LLM y RAG_URL
 uvicorn agente.main:app --reload --app-dir src --port 8200 --env-file .env
 ```
+
+## Observabilidad: trazas de cada turno
+
+Cada turno deja un árbol de spans OpenTelemetry con atributos OpenInference
+(`src/agente/observabilidad/`). Hay dos destinos y se pueden usar a la vez:
+
+- **Phoenix**: la cascada interactiva del turno (UI web).
+- **JSONL**: un fichero por arranque en `TRAZAS_RUTA` (`trazas_<etiqueta>_<fecha>.jsonl`, un span por
+  línea), que lee el informe agregado. La carpeta `trazas/` no se versiona.
+
+```text
+turno (agent)                       pregunta -> respuesta; ruta, intención, vueltas, reparaciones...
+    clasificar (chain)              salida cruda del clasificador; si fue válida
+        llm
+    bucle (chain)                   una llamada llm por vuelta y cada herramienta pedida
+        llm                         mensajes, herramientas ofrecidas, respuesta, tokens
+        buscar_evidencias (tool)    argumentos y lo que vio el modelo (evidencias ya renumeradas)
+    busqueda_forzada (chain)        solo si el modelo no buscó y la intención lo exige
+    sintesis_documental (chain)     llm, validar (y llm, validar otra vez si hubo reparación)
+    sintesis_forzada (chain)        solo si se agotaron las vueltas
+```
+
+Las decisiones del código (frase fija, `sin_evidencia`, límite de vueltas, herramienta no
+disponible) quedan como eventos `decision` en el span en curso. Los tokens que no envía el
+proveedor no aparecen (nunca valen cero).
+
+| Variable | Por defecto | Para qué |
+|-|-|-|
+| `PHOENIX_ENDPOINT` | vacía (sin Phoenix) | `http://localhost:6006/v1/traces` |
+| `PHOENIX_PROYECTO` | `agente` | Proyecto en Phoenix; un lote de evaluación puede usar su propio proyecto |
+| `TRAZAS_RUTA` | vacía (sin fichero) | Carpeta de los JSONL, p. ej. `trazas` |
+| `TRAZA_GUARDAR_TEXTO` | `true` | `false` = prompts, preguntas y respuestas quedan como `__REDACTED__` |
+| `TRAZA_RAZONAMIENTO` | `false` | Guarda el razonamiento del modelo si el proveedor lo devuelve |
+| `TRAZA_ETIQUETA` | `agente` | Nombre del fichero JSONL y atributo `agente.etiqueta` del turno |
+
+Phoenix en local (imagen fijada, datos en el volumen `phoenix_data`):
+
+```bash
+docker compose --profile observabilidad up -d phoenix     # desde la raíz del repo
+# sin compose: docker run -p 127.0.0.1:6006:6006 -e PHOENIX_WORKING_DIR=/mnt/data \
+#   -v phoenix_data:/mnt/data arizephoenix/phoenix:version-20.19.0
+```
+
+Con `PHOENIX_ENDPOINT=http://localhost:6006/v1/traces` en `.env`, abre `http://localhost:6006`,
+elige el proyecto y entra en una traza: a la izquierda está el árbol de spans y a la derecha,
+para cada span, la entrada, la salida, los atributos `agente.*` y los eventos. El `traza_id` de la
+respuesta HTTP y la línea `turno traza=...` de los logs llevan al mismo turno. Si Phoenix no
+responde, el SDK lo avisa en el log y el turno sigue igual: los spans se envían por lotes en
+segundo plano.
 
 ## Tests
 

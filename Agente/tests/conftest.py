@@ -85,12 +85,15 @@ class RagFingido:
     """Transporte HTTP que imita rag.api y guarda las búsquedas y validaciones pedidas.
 
     `respuestas`: lo que devuelve cada búsqueda, en orden (la última se repite).
+    `busqueda_caida`: la herramienta se ofrece, pero cada búsqueda agota el timeout.
     `/rag/validar` acepta la salida si es un objeto con afirmaciones que citan IDs entregados,
     y la "renderiza" como `texto [Dn]` por afirmación.
     """
 
-    def __init__(self, caido: bool = False, respuestas: list[dict] | None = None):
+    def __init__(self, caido: bool = False, respuestas: list[dict] | None = None,
+                 busqueda_caida: bool = False):
         self.caido = caido
+        self.busqueda_caida = busqueda_caida  # ofrece la herramienta pero /rag/evidencias no responde
         self.respuestas = list(respuestas or [EVIDENCIAS_NO2])
         self.busquedas: list[dict] = []
         self.validaciones: list[dict] = []
@@ -102,6 +105,8 @@ class RagFingido:
             return httpx.Response(200, json={"herramienta": HERRAMIENTA_RAG, "esquema_salida": {}})
         if request.url.path == "/rag/evidencias":
             self.busquedas.append(json.loads(request.content))
+            if self.busqueda_caida:
+                raise httpx.ReadTimeout("sin respuesta", request=request)
             i = min(len(self.busquedas), len(self.respuestas)) - 1
             return httpx.Response(200, json=self.respuestas[i])
         if request.url.path == "/rag/validar":

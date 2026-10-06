@@ -106,3 +106,12 @@ async def test_documental_con_rag_caido_da_frase_fija():
     llm, bucle = _bucle([_clase("DOCUMENTAL", "salud")], [], RagFingido(caido=True))
     r = await bucle.responder(PREGUNTA)
     assert r.respuesta == frases.DOCUMENTACION_NO_DISPONIBLE and llm.registro == []
+
+
+async def test_documental_con_busqueda_caida_no_repite_la_busqueda():
+    rag = RagFingido(busqueda_caida=True)
+    llm, bucle = _bucle([_clase("DOCUMENTAL", "salud")],
+                        [llamada("buscar_evidencias", {"pregunta": PREGUNTA}, "c1"), texto("Ahora no puedo.")], rag)
+    r = await bucle.responder(PREGUNTA)
+    assert r.respuesta == frases.DOCUMENTACION_NO_DISPONIBLE and r.ruta == "fija"
+    assert len(rag.busquedas) == 1 and not r.busqueda_forzada

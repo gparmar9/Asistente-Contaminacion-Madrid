@@ -38,8 +38,8 @@ class ResultadoHerramienta:
         return ResultadoHerramienta(ok=True, datos=datos, fuentes=fuentes, internos=internos)
 
     @staticmethod
-    def fallo(error: str) -> "ResultadoHerramienta":
-        return ResultadoHerramienta(ok=False, error=error)
+    def fallo(error: str, internos: dict[str, Any] | None = None) -> "ResultadoHerramienta":
+        return ResultadoHerramienta(ok=False, error=error, internos=internos)
 
     def para_el_modelo(self) -> str:
         """Texto del mensaje `tool`: JSON compacto, nunca vacío."""

@@ -19,6 +19,7 @@ from dataclasses import dataclass
 from llama_index.core.base.llms.types import ChatMessage, MessageRole
 from llama_index.core.llms.function_calling import FunctionCallingLLM
 
+from agente import observabilidad
 from agente.business import frases
 from agente.entities.intencion import DESCONOCIDA, Clasificacion, Intencion, Tema
 from agente.tools import rag
@@ -35,16 +36,23 @@ async def clasificar(llm: FunctionCallingLLM, pregunta: str, timeout_s: float) -
         ChatMessage(role=MessageRole.SYSTEM, content=frases.PROMPT_CLASIFICADOR),
         ChatMessage(role=MessageRole.USER, content=pregunta),
     ]
-    try:
-        respuesta = await asyncio.wait_for(llm.achat(mensajes), timeout=timeout_s)
-    except Exception as exc:  # caída, cuota o tiempo agotado: el turno sigue con el valor seguro
-        logger.warning("Clasificador no disponible (%s): se usa DESCONOCIDA", type(exc).__name__)
-        return DESCONOCIDA
-    clasificacion = interpretar(respuesta.message.content or "")
-    if clasificacion is None:
-        logger.warning("Respuesta del clasificador con formato inválido: %r", respuesta.message.content)
-        return DESCONOCIDA
-    return clasificacion
+    with observabilidad.span("clasificar", "chain", entrada=pregunta) as span:
+        try:
+            with observabilidad.llamada_llm(llm, mensajes, []) as span_llm:
+                respuesta = await asyncio.wait_for(llm.achat(mensajes), timeout=timeout_s)
+                observabilidad.anotar_respuesta(span_llm, respuesta)
+        except Exception as exc:  # caída, cuota o tiempo agotado: el turno sigue con el valor seguro
+            logger.warning("Clasificador no disponible (%s): se usa DESCONOCIDA", type(exc).__name__)
+            span.set_attribute("agente.clasificacion_valida", False)
+            observabilidad.decision("clasificador_no_disponible")
+            return DESCONOCIDA
+        span.set_output(respuesta.message.content or "")
+        clasificacion = interpretar(respuesta.message.content or "")
+        span.set_attribute("agente.clasificacion_valida", clasificacion is not None)
+        if clasificacion is None:
+            logger.warning("Respuesta del clasificador con formato inválido: %r", respuesta.message.content)
+            return DESCONOCIDA
+        return clasificacion
 
 
 def interpretar(texto: str) -> Clasificacion | None:

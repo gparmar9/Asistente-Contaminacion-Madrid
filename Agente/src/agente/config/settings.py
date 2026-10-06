@@ -28,6 +28,13 @@ class Settings:
     max_vueltas: int
     # Tiempo límite del clasificador de intención; si se agota, el turno sigue como DESCONOCIDA.
     clasificador_timeout_s: float
+    # Observabilidad (ver agente/observabilidad). Vacío = ese destino no se configura.
+    phoenix_endpoint: str = ""          # p. ej. http://localhost:6006/v1/traces
+    phoenix_proyecto: str = "agente"    # proyecto de Phoenix; en evaluación, la etiqueta del lote
+    trazas_ruta: str = ""               # carpeta de los ficheros JSONL (un span por línea)
+    traza_guardar_texto: bool = True    # false = prompts, preguntas y respuestas como __REDACTED__
+    traza_razonamiento: bool = False    # guarda el razonamiento del modelo (ThinkingBlock) si lo hay
+    traza_etiqueta: str = "agente"      # nombre del fichero JSONL y atributo `agente.etiqueta`
 
 
 def get_settings() -> Settings:
@@ -49,4 +56,14 @@ def get_settings() -> Settings:
         rag_timeout_s=float(os.getenv("RAG_TIMEOUT_S", "20")),
         max_vueltas=int(os.getenv("MAX_VUELTAS", "3")),
         clasificador_timeout_s=float(os.getenv("CLASIFICADOR_TIMEOUT_S", "10")),
+        phoenix_endpoint=os.getenv("PHOENIX_ENDPOINT", ""),
+        phoenix_proyecto=os.getenv("PHOENIX_PROYECTO", "agente"),
+        trazas_ruta=os.getenv("TRAZAS_RUTA", ""),
+        traza_guardar_texto=_booleano(os.getenv("TRAZA_GUARDAR_TEXTO", "true")),
+        traza_razonamiento=_booleano(os.getenv("TRAZA_RAZONAMIENTO", "false")),
+        traza_etiqueta=os.getenv("TRAZA_ETIQUETA", "agente"),
     )
+
+
+def _booleano(valor: str) -> bool:
+    return valor.strip().lower() in ("1", "true", "si", "sí", "yes")

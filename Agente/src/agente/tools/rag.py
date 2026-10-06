@@ -17,6 +17,9 @@ from typing import Any
 
 import httpx
 
+from opentelemetry.trace import Status, StatusCode
+
+from agente import observabilidad
 from agente.entities.chat import Fuente
 from agente.tools.base import Herramienta, ResultadoHerramienta
 
@@ -24,6 +27,9 @@ logger = logging.getLogger("agente.tools.rag")
 
 NOMBRE = "buscar_evidencias"
 ERROR_NO_DISPONIBLE = "El servicio documental no está disponible en este momento"
+# Estado en `internos` de un fallo del servicio (red, timeout, 5xx, respuesta rota), no de la
+# petición (422): el bucle no repite la búsqueda, porque solo añadiría otra espera.
+ESTADO_NO_DISPONIBLE = "no_disponible"
 
 
 class HerramientaRag(Herramienta):
@@ -79,8 +85,10 @@ class HerramientaRag(Herramienta):
                 r = await cliente.post("/rag/evidencias", json=cuerpo)
         except httpx.HTTPError as exc:
             logger.warning("Fallo al llamar a %s: %s", NOMBRE, exc)
-            return ResultadoHerramienta.fallo(ERROR_NO_DISPONIBLE)
+            return _no_disponible(ERROR_NO_DISPONIBLE)
 
+        if r.status_code >= 500:
+            return _no_disponible(_detalle_error(r))
         if r.status_code >= 400:
             return ResultadoHerramienta.fallo(_detalle_error(r))
         try:
@@ -92,29 +100,39 @@ class HerramientaRag(Herramienta):
             }
         except (ValueError, KeyError, TypeError):
             logger.warning("Respuesta del RAG sin el formato esperado")
-            return ResultadoHerramienta.fallo(ERROR_NO_DISPONIBLE)
+            return _no_disponible(ERROR_NO_DISPONIBLE)
 
         return ResultadoHerramienta.exito(para_el_modelo, internos=internos)
 
     async def validar(self, pregunta: str, evidencias: list[dict], salida: Any) -> dict | None:
         """POST /rag/validar. Devuelve {valida, mensaje_reparacion, texto, aviso_sanitario, fuentes}
         o None si el RAG no responde o rechaza la petición."""
-        try:
-            async with self._cliente() as cliente:
-                r = await cliente.post("/rag/validar", json={
-                    "pregunta": pregunta, "evidencias": evidencias, "salida": salida})
-            r.raise_for_status()
-            datos = r.json()
-            return {
-                "valida": bool(datos["valida"]),
-                "mensaje_reparacion": datos.get("mensaje_reparacion") or "",
-                "texto": datos.get("texto") or "",
-                "aviso_sanitario": bool(datos.get("aviso_sanitario")),
-                "fuentes": _fuentes(datos),
-            }
-        except (httpx.HTTPError, ValueError, KeyError, TypeError) as exc:
-            logger.warning("No se pudo validar la salida documental: %s", exc)
-            return None
+        with observabilidad.herramienta("validar", {"salida": salida}) as span:
+            try:
+                async with self._cliente() as cliente:
+                    r = await cliente.post("/rag/validar", json={
+                        "pregunta": pregunta, "evidencias": evidencias, "salida": salida})
+                r.raise_for_status()
+                datos = r.json()
+                validacion = {
+                    "valida": bool(datos["valida"]),
+                    "mensaje_reparacion": datos.get("mensaje_reparacion") or "",
+                    "texto": datos.get("texto") or "",
+                    "aviso_sanitario": bool(datos.get("aviso_sanitario")),
+                    "fuentes": _fuentes(datos),
+                }
+            except (httpx.HTTPError, ValueError, KeyError, TypeError) as exc:
+                logger.warning("No se pudo validar la salida documental: %s", exc)
+                span.set_status(Status(StatusCode.ERROR, f"/rag/validar no disponible: {exc}"))
+                return None
+            span.set_output(validacion["texto"] or validacion["mensaje_reparacion"])
+            span.set_attributes({"agente.valida": validacion["valida"],
+                                 "agente.mensaje_reparacion": validacion["mensaje_reparacion"]})
+            return validacion
+
+
+def _no_disponible(error: str) -> ResultadoHerramienta:
+    return ResultadoHerramienta.fallo(error, internos={"estado": ESTADO_NO_DISPONIBLE})
 
 
 def _detalle_error(r: httpx.Response) -> str:
