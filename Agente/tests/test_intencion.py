@@ -59,6 +59,12 @@ async def test_intenciones_con_frase_fija_no_llaman_al_modelo(intencion, frase):
     assert llm.registro == []
 
 
+
+async def test_clasificacion_en_negrita_se_acepta():
+    llm, bucle = _bucle([texto("intencion: **FUERA_DE_ALCANCE**\ntema: **ninguno**")], [])
+    r = await bucle.responder("¿Me recomiendas un restaurante?")
+    assert r.intencion == "FUERA_DE_ALCANCE" and r.ruta == "fija"
+
 async def test_documental_sin_peticion_busca_el_codigo_con_el_tema():
     rag = RagFingido()
     llm, bucle = _bucle([_clase("DOCUMENTAL", "salud")],

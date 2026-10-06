@@ -415,7 +415,8 @@ de conversación, *streaming* y consulta de mediciones.
 
 Hay dos implementaciones del agente, independientes entre sí (sin código, dependencias ni imágenes
 compartidas). `ApiUsuario` reenvía `/chat` a una u otra por configuración (hoy `ORCHESTRATOR_URL`;
-el agente nuevo añadirá `AGENTE_URL`). Ninguna tiene aún proveedor de LLM conectado.
+el agente nuevo añadirá `AGENTE_URL`). El agente nuevo ya se ha probado contra Amazon Bedrock
+(clasificador y uso de herramientas, 2026-10-04); el orquestador sigue sin proveedor conectado.
 
 #### 7.3.1 `Agente` — rediseño por fases (en construcción)
 
@@ -465,7 +466,8 @@ cada decisión y de la elección de LlamaIndex está en `docs/agente/decisiones_
 - **Clasificador de intención y decisión en código (fase 3)**: antes del bucle, una llamada corta
   (mismo modelo, temperatura 0, tiempo límite propio de 10 s) responde dos líneas: intención
   (`DOCUMENTAL`, `DATOS`, `PREDICCION`, `CHARLA`, `FUERA_DE_ALCANCE`) y tema (salud, normativa,
-  proyecto, ninguno). Parser estricto: error, tiempo agotado o formato inválido dan el valor seguro
+  proyecto, ninguno). Parser estricto (dos líneas, valores conocidos; solo quita adornos de
+  markdown como `**`): error, tiempo agotado o formato inválido dan el valor seguro
   `DESCONOCIDA`, que ofrece todas las herramientas y no usa frases fijas (un clasificador caído no
   debe quitar herramientas). Una tabla en código decide:
   - `DATOS`, `PREDICCION` y `FUERA_DE_ALCANCE` → frase fija, sin llamar más al modelo (el agente aún
@@ -482,26 +484,64 @@ cada decisión y de la elección de LlamaIndex está en `docs/agente/decisiones_
   - Coste en llamadas al LLM: frase fija 1; charla 2; documental 4 (5 con reparación; 3 si busca el
     código).
   - Guion de medición fuera de CI (`Agente/evaluacion/`): 20 preguntas etiquetadas a mano, 15 de
-    `Preguntas.txt` y 5 nuevas para charla y fuera de alcance. **Sin ejecutar** hasta tener
-    proveedor: precisión del clasificador `[por confirmar]`.
-- **Tests**: 20, sin red, sin claves y sin torch: LLM falso con guion que hereda de
+    `Preguntas.txt` y 5 nuevas para charla y fuera de alcance. **Resultado en Bedrock
+    (2026-10-04): 20/20 en intención y 5/5 en tema con los dos modelos candidatos**. Latencia típica
+    del clasificador: ~0,3 s con Ministral 14B y ~0,5–1 s con gpt-oss-120b (un caso aislado de 7 s).
+  - **Hallazgo de la primera medición: 4/20 con Ministral 14B por formato, no por comprensión.** El
+    modelo escribía `intencion: **DOCUMENTAL**`; el parser estricto rechazaba la respuesta y el
+    turno caía a `DESCONOCIDA`. Las 16 respuestas rechazadas tenían intención y tema correctos.
+    gpt-oss-120b sacó 19/20: devolvió `tema: conceptos generales`, una expresión que el prompt usaba
+    para describir `DOCUMENTAL`. Arreglo en dos capas: el prompt pide texto plano sin negritas, deja
+    claro que el tema es uno de cuatro y ya no menciona «conceptos generales»; además, el parser
+    quita `*` y `` ` `` antes de comparar. Con el prompt nuevo Ministral ya no usa negritas (0/20),
+    así que la tolerancia del parser queda como red de seguridad. Descartado un parser tolerante que
+    busque la palabra en el texto: un formato dudoso no debe disparar frases fijas.
+- **Tests**: 21, sin red, sin claves y sin torch: LLM falso con guion que hereda de
   `FunctionCallingLLM` (mismo camino que un proveedor real) y RAG fingido con
   `httpx.MockTransport`. **Política de tests mínima** (decisión del 2026-10-04): solo los casos
   que fija el plan de cada fase (bucle con 0, 1 y 2 llamadas, límite de vueltas, RAG caído,
   contrato HTTP; en la fase 2, JSON válido, reparación, doble fallo y `sin_evidencia`; en la fase 3,
-  cada intención, clasificador caído, herramienta vetada y RAG caído con intención documental), sin tests de detalle interno; se partió de 25 y se recortaron. Verificado además, sin red, que `OpenAILike` serializa la herramienta cruda
+  cada intención, clasificador caído, herramienta vetada, RAG caído con intención documental y
+  clasificación en negrita), sin tests de detalle interno; se partió de 25 y se recortaron. Verificado además, sin red, que `OpenAILike` serializa la herramienta cruda
   y los mensajes `assistant(tool_calls)`/`tool` como espera la API. Quinto job del workflow de CI.
-- **Sin probar aún**: `BedrockConverse` contra AWS (fase 7) y cualquier proveedor real.
+- **Probado contra Bedrock (2026-10-04)**, desde local con credenciales SSO temporales: los dos
+  candidatos están bajo demanda en `eu-west-1` con streaming, y los dos **piden la herramienta por
+  Converse con streaming** (`astream_chat_with_tools`), con la consulta reformulada y `tema=salud`.
+  Ruta documental de punta a punta con `rag.api`: medida el 2026-10-05 (abajo). Queda por probar la
+  síntesis forzada.
 - **Modelo en Bedrock: dos candidatos a comparar** (decisión del 2026-10-04): **Ministral 14B 3.0**
   ($0,24 / $0,24 por 1M de tokens de entrada / salida en Irlanda) y **gpt-oss-120b** ($0,18 / $0,70).
   Ministral 14B es el Mistral actual más parecido a Mistral Small 3.2 24B, que era la referencia del
   equipo. gpt-oss-120b tiene una arquitectura parecida a la de Mistral Small 4.
   - Descartados: Small 3.2 (no está en Bedrock ni se puede importar); Magistral Small 1.2 (razonamiento:
     unas 3 veces más caro y más lento); Mistral Large 3 (no está en regiones de la UE).
-  - Coste estimado de los dos: unos $0,003 por pregunta documental. Decidirá la calidad medida
-    (herramientas, JSON a la primera, español, latencia) `[por medir]`.
+  - Coste estimado de los dos: unos $0,003 por pregunta documental. Decidirá la calidad medida.
+    Clasificador y uso de herramientas: empate (ver arriba). Calidad del español `[por medir]`.
+  - **Ruta documental (2026-10-05)**: 18 turnos por modelo (las 6 preguntas documentales del guion,
+    2 veces cada una, más la del NO2 repetida). En todos los turnos el modelo pidió la búsqueda por
+    sí mismo, sin que la lanzara el código.
+
+    | Modelo | JSON válido a la primera | Tras una reparación | Fallidos (frase de insuficiencia) | Latencia del turno |
+    |-|-|-|-|-|
+    | Ministral 14B | 18 | 0 | 0 | 3,0–7,3 s |
+    | gpt-oss-120b | 10 | 4 | 4 | 4,5–10,2 s |
+
+  - **Hallazgo: gpt-oss-120b se queda sin tokens de salida.** El agente no fija `max_tokens` y
+    `BedrockConverse` usa 512 por defecto. gpt-oss es un modelo de razonamiento: lo que razona antes
+    de responder cuenta dentro de ese límite, y como razona más o menos cada vez, el JSON de la
+    síntesis sale cortado en un punto distinto (238, 393 o 632 caracteres en tres turnos). El RAG
+    lo rechaza («la salida debe ser un objeto JSON»), la reparación vuelve a cortarse y el usuario
+    recibe la frase de insuficiencia. Falla sobre todo en las respuestas largas (NO2, PM10 frente a
+    PM2.5). Con 2048 tokens, la misma síntesis salió válida 6 de 6 veces (con 512, 3 de 6); gastó
+    540–637 tokens de salida para un JSON visible de 500–1000 caracteres. Bedrock respondió
+    `stopReason=end_turn` en llamadas que gastaron 497 y 505 de 512 tokens, así que el corte no se
+    detecta por el motivo de parada `[por confirmar en una llamada cortada]`. El razonamiento no se
+    cuela en el texto: todas las salidas empiezan por el JSON. Ministral 14B no razona y cabe en 512.
+    Arreglo propuesto, sin aplicar: `LLM_MAX_TOKENS` configurable (2048) y repetir la comparación en
+    igualdad de condiciones.
   - Hallazgo: `BedrockConverse` 0.15.3 rechaza los IDs de modelo que no conoce, como el de Ministral
-    14B. Hay que declarar sus metadatos en la fábrica.
+    14B (`ValueError: Unknown model`). Resuelto con una subclase en la fábrica que declara a mano los
+    metadatos de los modelos fuera de su lista.
 
 **Fases pendientes** (4–7): streaming SSE y sesión (`session_id` opaco, un turno a
 la vez); memoria con `turn_state` tipado; comprobaciones posteriores en modo observación con
@@ -779,6 +819,11 @@ la enciende a mano para trabajar o hacer una demo.
   `chunk_id` leyendo el corpus. Una URL que invente el modelo no puede llegar a la bibliografía.
   Convertir una promesa de comportamiento en una comprobación determinista es lo que hace la
   trazabilidad defendible.
+- **Al medir un LLM, mirar las respuestas crudas antes de juzgar al modelo.** La primera medición
+  del clasificador dio a Ministral 14B un 4/20, pero las 16 respuestas «malas» eran correctas en
+  negrita (`**DOCUMENTAL**`) y el parser estricto las descartaba. Una línea en el prompt («texto
+  plano, sin negritas») lo llevó a 20/20. Un parser estricto mide el formato a la vez que la
+  comprensión: las dos cosas deben salir por separado en el informe de evaluación.
 - **Un índice se reconstruye sin ventana de indisponibilidad** calculando los embeddings antes de
   borrar la colección anterior. El orden ingenuo (borrar y luego calcular) deja el sistema sin
   índice si el cálculo falla.
@@ -789,6 +834,15 @@ la enciende a mano para trabajar o hacer una demo.
   `postgresql://` y el job falló con `No module named 'psycopg'` en un PR que no tocaba la base de
   datos. En local no pasaba porque `requirements.txt` fija `SQLAlchemy==2.0.49`. Corregido fijando
   en CI las mismas versiones (2026-09-27).
+
+**LLM**
+- **Un modelo de razonamiento gasta en pensar los tokens de salida** (2026-10-05). Con el límite
+  por defecto de `BedrockConverse` (512), gpt-oss-120b cortaba el JSON de la síntesis en un punto
+  distinto cada vez y 4 de 18 preguntas documentales acabaron en la frase de insuficiencia; con
+  2048, 6 de 6 bien. El síntoma engaña: parece que el modelo «no sabe» devolver JSON, pero lo
+  empieza bien y se queda sin espacio. Lecciones: fijar siempre `max_tokens` en vez de heredar el
+  valor por defecto de la librería, y registrar a nivel visible por qué falla una validación (el
+  aviso iba a nivel INFO y uvicorn no lo mostraba; hizo falta un script de diagnóstico). §7.3.1.
 
 **Seguridad**
 - En abril la contraseña de la base de datos quedó **escrita en el código y commiteada**. Se corrigió
@@ -850,6 +904,12 @@ la enciende a mano para trabajar o hacer una demo.
   del corpus y las ajenas, y sin casos de evaluación todavía.
 
 **Trabajo futuro**
+- **¿Hace falta un modelo de razonamiento para el agente?** En la ruta documental no: el modelo sin
+  razonamiento (Ministral 14B) acertó 18 de 18 turnos y es más rápido (§7.3.1). Queda por analizar
+  con las preguntas de datos, cuando exista la herramienta SQL: elegir consulta y parámetros, o
+  combinar varias mediciones, puede beneficiarse del razonamiento. Depende de si la herramienta usa
+  consultas predefinidas (como `LLMOrchestrator`, §2 2026-09-28) o SQL generado. Si se usa un modelo
+  razonador, hay que darle margen de tokens de salida (§10).
 - LSTM Autoencoder o PCA para anomalías de forma del perfil horario.
 - Baseline ponderado por recencia y ajustado solo con el periodo de entrenamiento.
 - Módulo de *forecasting* para las preguntas de planificación.
@@ -976,6 +1036,8 @@ la enciende a mano para trabajar o hacer una demo.
 | 2026-10-04 | **Agente LLM, fase 2 de 7** (Carlos, rama `feature/Agente`): ruta documental determinista. Síntesis JSON sin herramientas, validación con `POST /rag/validar`, una reparación y frase de insuficiencia; passthrough del texto del RAG; `fuentes` solo citadas y advertencia sanitaria solo con afirmaciones de salud; `sin_evidencia` cierra el turno sin modelo; renumeración de evidencias entre búsquedas. 11 tests. Probada contra el `rag.api` real con el LLM falso |
 | 2026-10-04 | **Agente LLM, fase 3 de 7** (Carlos, rama `feature/Agente`): clasificador de intención (temperatura 0, tiempo límite propio, parser estricto, valor seguro `DESCONOCIDA`) y tabla de decisión en código: frase fija para datos, predicción y fuera de alcance; charla sin herramientas; búsqueda documental obligatoria que lanza el código si el modelo no la pide; frase fija si el RAG está caído; herramientas vetadas rechazadas. Guion de 20 preguntas etiquetadas para medir el clasificador (sin ejecutar: falta proveedor). 20 tests |
 | 2026-10-04 | **Agente LLM: candidatos de Bedrock** (Carlos): se compararán Ministral 14B 3.0 y gpt-oss-120b en `eu-west-1`. Descartados Mistral Small 3.2 (no está en Bedrock), Magistral Small 1.2 (caro y lento por el razonamiento) y Mistral Large 3 (no está en la UE). Detectado que `BedrockConverse` 0.15.3 no admite el ID de Ministral 14B sin ajustar la fábrica. Sin credenciales ni pruebas contra AWS todavía |
+| 2026-10-04 | **Agente LLM: primera prueba contra Bedrock** (Carlos): perfil SSO local y fábrica ajustada para Ministral 14B (metadatos declarados a mano). Los dos candidatos usan herramientas por Converse con streaming. Clasificador: primera medición 4/20 (Ministral) y 19/20 (gpt-oss) por formato (negritas, tema fuera de lista); tras ajustar el prompt y quitar adornos de markdown en el parser, **20/20 en intención y 5/5 en tema con los dos**. 21 tests. Pendiente: ruta documental de punta a punta y elección del modelo |
+| 2026-10-05 | **Agente LLM: ruta documental de punta a punta en Bedrock** (Carlos): `rag.api` real y los dos candidatos, 18 turnos cada uno. Ministral 14B 18/18 con JSON válido a la primera (3,0–7,3 s). gpt-oss-120b 10 a la primera, 4 tras reparación y 4 fallidos (4,5–10,2 s): su razonamiento agota los 512 tokens de salida que `BedrockConverse` usa por defecto y corta el JSON; con 2048, 6/6. Sin cambios de código: arreglo (`LLM_MAX_TOKENS`) propuesto y comparación en igualdad pendiente. Queda abierto si las preguntas de datos (SQL) necesitarán un modelo de razonamiento |
 
 
 ---
@@ -983,10 +1045,14 @@ la enciende a mano para trabajar o hacer una demo.
 ## 13. Preguntas abiertas
 
 - [ ] ¿Qué límite de gasto o créditos tiene la cuenta AWS del máster?
-- [ ] Agente nuevo: ¿Ministral 14B 3.0 o gpt-oss-120b en Bedrock? Hay que comparar la calidad y
-  confirmar que Ministral 14B usa herramientas por Converse. (§7.3.1)
-- [ ] Agente nuevo: precisión del clasificador de intención con un proveedor real (guion de 20
-  preguntas en `Agente/evaluacion/`). (§7.3.1)
+- [ ] Agente nuevo: ¿Ministral 14B 3.0 o gpt-oss-120b en Bedrock? Empatan en clasificador y uso de
+  herramientas. Ruta documental (2026-10-05): Ministral 18/18 a la primera; gpt-oss 4 fallos de 18
+  por el límite de 512 tokens de salida. Falta repetirla con `LLM_MAX_TOKENS` y medir el español.
+  (§7.3.1)
+- [ ] Agente nuevo: ¿necesitan las preguntas de datos (herramienta SQL) un modelo de razonamiento?
+  Para la ruta documental no hace falta. Analizarlo cuando exista la herramienta SQL. (§11)
+- [x] Agente nuevo: precisión del clasificador con un proveedor real → 20/20 en intención y 5/5 en
+  tema con los dos candidatos de Bedrock (2026-10-04), tras corregir el formato. (§7.3.1)
 - [x] Confirmar la opción de red en AWS → **opción A aplicada** desde el 2026-09-16 (RDS público +
   TLS forzado), ver §8.4.
 - [x] ¿Permite la organización crear roles IAM? → sí: se creó el rol de ejecución de la Lambda

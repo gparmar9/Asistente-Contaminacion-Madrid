@@ -52,9 +52,27 @@ def _openai_compatible(settings: Settings, temperatura: float) -> FunctionCallin
 def _bedrock(settings: Settings, temperatura: float) -> FunctionCallingLLM:
     if not settings.llm_modelo:
         raise ConfiguracionLLMInvalida("Con LLM_PROVEEDOR=bedrock hace falta LLM_MODELO (ID del modelo o perfil de inferencia)")
+    from llama_index.core.base.llms.types import LLMMetadata
     from llama_index.llms.bedrock_converse import BedrockConverse
 
-    return BedrockConverse(
+    class _BedrockConverse(BedrockConverse):
+        # LlamaIndex lleva una lista fija de modelos y `metadata` lanza `ValueError: Unknown model`
+        # con los que no conoce (p. ej. mistral.ministral-3-14b-instruct). Fuera de la lista se
+        # declaran a mano; el uso de herramientas lo confirma (o no) la prueba contra Bedrock.
+        @property
+        def metadata(self) -> LLMMetadata:
+            try:
+                return super().metadata
+            except ValueError:
+                return LLMMetadata(
+                    context_window=32_000,  # conservador; el agente no lo usa todavía
+                    num_output=self.max_tokens,
+                    is_chat_model=True,
+                    model_name=self.model,
+                    is_function_calling_model=True,
+                )
+
+    return _BedrockConverse(
         model=settings.llm_modelo,
         region_name=settings.aws_region,
         profile_name=settings.aws_profile or None,

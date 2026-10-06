@@ -2,7 +2,8 @@
 
 - `clasificar()`: una llamada corta al LLM (temperatura 0) que responde en dos líneas
   `intencion: ...` y `tema: ...`. Parser estricto: cualquier desviación, error o tiempo
-  agotado da el valor seguro `DESCONOCIDA`.
+  agotado da el valor seguro `DESCONOCIDA`. Solo tolera adornos de markdown (`*`, `` ` ``):
+  Ministral 14B en Bedrock escribe los valores en negrita aunque el prompt lo prohíba.
 - `decidir()`: tabla en código con lo que se permite en el turno según la intención:
   herramientas ofrecidas, búsqueda obligatoria, frase fija o prompt del bucle.
 
@@ -25,6 +26,8 @@ from agente.tools import rag
 logger = logging.getLogger("agente.intencion")
 
 _CLAVES = {"intencion": "intencion", "intención": "intencion", "tema": "tema"}
+# Adornos que se quitan antes de comparar. No el guion bajo: forma parte de FUERA_DE_ALCANCE.
+_ADORNOS = str.maketrans("", "", "*`")
 
 
 async def clasificar(llm: FunctionCallingLLM, pregunta: str, timeout_s: float) -> Clasificacion:
@@ -46,6 +49,7 @@ async def clasificar(llm: FunctionCallingLLM, pregunta: str, timeout_s: float) -
 
 def interpretar(texto: str) -> Clasificacion | None:
     """Exactamente dos líneas `clave: valor` con valores conocidos; si no, None."""
+    texto = texto.translate(_ADORNOS)
     lineas = [ln.strip() for ln in texto.strip().splitlines() if ln.strip()]
     if len(lineas) != 2:
         return None
