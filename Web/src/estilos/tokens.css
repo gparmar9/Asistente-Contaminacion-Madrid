@@ -1,0 +1,134 @@
+/* Tokens de diseño del frontend.
+ *
+ * Una sola fuente de verdad para color, tipografía y espaciado. El modo oscuro
+ * define sus PROPIOS valores (validados sobre #1a1a19): no es un filtro invertido.
+ * La paleta de estado (good/warning/serious/critical) es fija en ambos modos y
+ * se reserva para el ESTADO DE ANOMALÍA; nunca para bandas de calidad del aire.
+ */
+:root {
+  color-scheme: light;
+
+  /* Superficies y tinta */
+  --plano: #f9f9f7;
+  --superficie: #fcfcfb;
+  --superficie-2: #f1f1ee;
+  --tinta-1: #0b0b0b;
+  --tinta-2: #52514e;
+  --apagado: #898781;
+  --rejilla: #e1e0d9;
+  --linea-base: #c3c2b7;
+  --borde: rgba(11, 11, 11, 0.1);
+  --borde-fuerte: rgba(11, 11, 11, 0.22);
+
+  /* Fondo de la cabecera y la navegación */
+  --superficie-nav: var(--plano);
+
+  /* Dato principal (una sola serie) */
+  --dato: #2a78d6;
+  --dato-suave: #cde2fb;
+  --sobre-dato: #ffffff;
+
+  /* Botones y enlaces (en la paleta original coinciden con el dato) */
+  --interactivo: #2a78d6;
+  --interactivo-hover: #256abf;
+  --sobre-interactivo: #ffffff;
+
+  /* Acento decorativo (solo lo usa la paleta «Cielo») */
+  --acento: #9ec5f4;
+
+  /* Categóricos: comparar estaciones (máximo 3, orden fijo) */
+  --cat-1: #2a78d6;
+  --cat-2: #eb6834;
+  --cat-3: #1baf7a;
+
+  /* Rampa secuencial: magnitud (heatmap). Orden canónico claro → oscuro */
+  --seq-1: #cde2fb;
+  --seq-2: #9ec5f4;
+  --seq-3: #5598e7;
+  --seq-4: #2a78d6;
+  --seq-5: #256abf;
+  --seq-6: #184f95;
+  --seq-7: #0d366b;
+
+  /* Pasos del heatmap según el tema: --heat-1 = "bajo" … --heat-7 = "alto".
+     En claro, más = más oscuro. En oscuro se invierte el orden de los mismos
+     pasos para que más = más luminoso y el valor alto no desaparezca sobre el fondo. */
+  --heat-1: var(--seq-1);
+  --heat-2: var(--seq-2);
+  --heat-3: var(--seq-3);
+  --heat-4: var(--seq-4);
+  --heat-5: var(--seq-5);
+  --heat-6: var(--seq-6);
+  --heat-7: var(--seq-7);
+
+  /* Estado de anomalía (fijo, con icono y texto siempre) */
+  --good: #0ca30c;
+  --warning: #fab219;
+  --serious: #ec835a;
+  --critical: #d03b3b;
+
+  /* Forma */
+  --sombra: 0 1px 2px rgba(11, 11, 11, 0.04), 0 8px 24px rgba(11, 11, 11, 0.05);
+  --radio: 12px;
+  --radio-s: 8px;
+  --radio-xs: 4px;
+
+  /* Tipografía: sin fuente display; tabular-nums solo en tablas y ticks */
+  --fuente: system-ui, -apple-system, "Segoe UI", sans-serif;
+  --fuente-mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  --t-xs: 11px;
+  --t-s: 12px;
+  --t-base: 14px;
+  --t-m: 16px;
+  --t-l: 20px;
+  --t-xl: 26px;
+  --t-hero: 56px;
+
+  /* Espaciado */
+  --e-1: 4px;
+  --e-2: 8px;
+  --e-3: 12px;
+  --e-4: 16px;
+  --e-5: 24px;
+  --e-6: 32px;
+  --e-7: 48px;
+
+  --ancho-max: 1200px;
+}
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
+
+  --plano: #0d0d0d;
+  --superficie: #1a1a19;
+  --superficie-2: #242423;
+  --tinta-1: #ffffff;
+  --tinta-2: #c3c2b7;
+  --apagado: #898781;
+  --rejilla: #2c2c2a;
+  --linea-base: #383835;
+  --borde: rgba(255, 255, 255, 0.1);
+  --borde-fuerte: rgba(255, 255, 255, 0.22);
+
+  --dato: #3987e5;
+  --dato-suave: #184f95;
+  --sobre-dato: #ffffff;
+  --interactivo: #3987e5;
+  --interactivo-hover: #5598e7;
+  --sobre-interactivo: #ffffff;
+  --acento: #256abf;
+
+  --cat-1: #3987e5;
+  --cat-2: #d95926;
+  --cat-3: #199e70;
+
+  --heat-1: var(--seq-7);
+  --heat-2: var(--seq-6);
+  --heat-3: var(--seq-5);
+  --heat-4: var(--seq-4);
+  --heat-5: var(--seq-3);
+  --heat-6: var(--seq-2);
+  --heat-7: var(--seq-1);
+
+  --sombra: none;
+}

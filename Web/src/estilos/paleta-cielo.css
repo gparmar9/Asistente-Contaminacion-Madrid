@@ -1,0 +1,136 @@
+/* Paleta alternativa «Cielo» (EN PRUEBA).
+ *
+ * Claro «Clear sky» y oscuro «Night sky». Se activa con ?paleta=cielo en la URL
+ * (se recuerda en localStorage) y se desactiva con ?paleta=original; ver index.html.
+ * Para descartarla del todo: borrar este fichero, su import en main.tsx y las
+ * dos líneas de `paleta` del script de index.html.
+ *
+ * Botones y enlaces usan los colores de la paleta (texto blanco en claro, azul
+ * noche en oscuro). Los colores de DATO de las gráficas se derivan de ellos pero
+ * están validados con scripts/validate_palette.js de la guía de dataviz: en
+ * oscuro, el azul cielo de los botones (#8AC8FF) es demasiado claro para una
+ * línea de datos, así que las series usan #4A9BE0. Verde, ámbar y rojo quedan
+ * reservados a los estados de anomalía (siempre con icono y etiqueta).
+ */
+:root[data-paleta="cielo"] {
+  --plano: #f5fafd;
+  --superficie: #ffffff;
+  --superficie-2: #e5f2fc;
+  --superficie-nav: #ffffff;
+  --tinta-1: #183247;
+  --tinta-2: #546b7d;
+  --apagado: #6f8497;
+  --rejilla: #e3edf4;
+  --linea-base: #d8e5ee;
+  --borde: #d8e5ee;
+  --borde-fuerte: #b9cedc;
+
+  --dato: #176bba;
+  --dato-suave: #e5f2fc;
+  --sobre-dato: #ffffff;
+  --interactivo: #176bba;
+  --interactivo-hover: #125697;
+  --sobre-interactivo: #ffffff;
+  --acento: #bdebe7;
+
+  /* Categóricos validados (claro, sobre #ffffff): azul, naranja, violeta */
+  --cat-1: #176bba;
+  --cat-2: #eb6834;
+  --cat-3: #7048e8;
+
+  /* Rampa secuencial derivada del azul claro */
+  --seq-1: #e5f2fc;
+  --seq-2: #c3dff5;
+  --seq-3: #93c2eb;
+  --seq-4: #5aa0dc;
+  --seq-5: #2f82c9;
+  --seq-6: #176bba;
+  --seq-7: #0f4a85;
+
+  --sombra: 0 1px 2px rgba(24, 50, 71, 0.04), 0 6px 20px rgba(24, 50, 71, 0.06);
+  --radio: 14px;
+
+  /* Más aire entre bloques */
+  --e-4: 20px;
+  --e-5: 28px;
+  --e-6: 40px;
+
+  --hero-degradado: linear-gradient(180deg, #ffffff 0%, #e5f2fc 100%);
+}
+
+:root[data-paleta="cielo"][data-theme="dark"] {
+  --plano: #101c2a;
+  --superficie: #1a2b3d;
+  --superficie-2: #263f58;
+  --superficie-nav: #1a2b3d;
+  --tinta-1: #edf5fc;
+  --tinta-2: #b0c2d3;
+  --apagado: #8fa3b6;
+  --rejilla: #2c4259;
+  --linea-base: #38516a;
+  --borde: #38516a;
+  --borde-fuerte: #4e6a86;
+
+  --dato: #4a9be0;
+  --dato-suave: #263f58;
+  --sobre-dato: #101c2a;
+  --interactivo: #8ac8ff;
+  --interactivo-hover: #acd8ff;
+  --sobre-interactivo: #101c2a;
+  --acento: #8cd9d0;
+
+  /* Categóricos validados (oscuro, sobre #1a2b3d) */
+  --cat-1: #4a9be0;
+  --cat-2: #d9733f;
+  --cat-3: #9d7be8;
+
+  --sombra: none;
+  --hero-degradado: linear-gradient(180deg, #1a2b3d 0%, #22364b 100%);
+}
+
+/* Zona de bienvenida: degradado blanco → azul pálido y perfil de Madrid */
+:root[data-paleta="cielo"] .hero-bienvenida {
+  background: var(--hero-degradado);
+}
+
+/* El texto y los contadores ocupan la mitad izquierda; el perfil de Madrid, la derecha, sin solaparse */
+:root[data-paleta="cielo"] .hero-bienvenida > .hero {
+  max-width: 72%;
+}
+
+:root[data-paleta="cielo"] .decoracion-cielo {
+  display: block;
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  height: 100%;
+  max-height: 130px;
+  width: auto;
+  max-width: 26%;
+  /* Sobre fondo claro el aqua suave desaparece: se mezcla un cuarto con el azul del dato */
+  color: color-mix(in srgb, var(--acento) 72%, var(--dato));
+  pointer-events: none;
+}
+
+:root[data-paleta="cielo"][data-theme="dark"] .decoracion-cielo {
+  color: var(--acento);
+}
+
+@media (max-width: 900px) {
+  :root[data-paleta="cielo"] .hero-bienvenida > .hero {
+    max-width: none;
+  }
+
+  :root[data-paleta="cielo"] .decoracion-cielo {
+    display: none;
+  }
+}
+
+/* Cabecera y burbuja ligeramente más suaves */
+:root[data-paleta="cielo"] .burbuja-chat {
+  box-shadow: 0 6px 20px rgba(24, 50, 71, 0.25);
+}
+
+:root[data-paleta="cielo"] .panel-chat {
+  box-shadow: 0 12px 40px rgba(24, 50, 71, 0.2);
+}

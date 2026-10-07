@@ -1,0 +1,585 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "ApiUsuario",
+    "version": "1.0.0"
+  },
+  "paths": {
+    "/health": {
+      "get": {
+        "tags": [
+          "health"
+        ],
+        "summary": "Endpoint para comprobar que la api funciona",
+        "operationId": "get_health_health_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": {
+                    "type": "string"
+                  },
+                  "type": "object",
+                  "title": "Response Get Health Health Get"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/estaciones": {
+      "get": {
+        "tags": [
+          "estaciones"
+        ],
+        "summary": "Catálogo de estaciones de control",
+        "operationId": "get_estaciones_estaciones_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/Estacion"
+                  },
+                  "type": "array",
+                  "title": "Response Get Estaciones Estaciones Get"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/estaciones/{codigo_corto}/series": {
+      "get": {
+        "tags": [
+          "estaciones"
+        ],
+        "summary": "Serie por bloques horarios de una estación",
+        "description": "Bloques (madrugada/manana/tarde/noche) con estadísticos y salida del detector de anomalías, desde `resumen_datos_ml`. Sin fechas, devuelve los últimos 7 días. Interpretar `is_anomaly` solo con `cobertura >= 0.7`.",
+        "operationId": "get_serie_estaciones__codigo_corto__series_get",
+        "parameters": [
+          {
+            "name": "codigo_corto",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Codigo Corto"
+            }
+          },
+          {
+            "name": "contaminante",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/Contaminante",
+              "description": "Uno de los 6 contaminantes objetivo"
+            },
+            "description": "Uno de los 6 contaminantes objetivo"
+          },
+          {
+            "name": "desde",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "date"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Primer día del rango (incluido)",
+              "title": "Desde"
+            },
+            "description": "Primer día del rango (incluido)"
+          },
+          {
+            "name": "hasta",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "date"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Último día del rango (incluido); por defecto, hoy",
+              "title": "Hasta"
+            },
+            "description": "Último día del rango (incluido); por defecto, hoy"
+          },
+          {
+            "name": "bloque",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/Bloque"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Filtrar por un único bloque del día",
+              "title": "Bloque"
+            },
+            "description": "Filtrar por un único bloque del día"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SerieBloques"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/chat": {
+      "post": {
+        "tags": [
+          "chat"
+        ],
+        "summary": "Pregunta en lenguaje natural al asistente",
+        "operationId": "post_chat_chat_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PreguntaChat"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RespuestaChat"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "Bloque": {
+        "type": "string",
+        "enum": [
+          "madrugada",
+          "manana",
+          "tarde",
+          "noche"
+        ],
+        "title": "Bloque"
+      },
+      "Contaminante": {
+        "type": "string",
+        "enum": [
+          "NO",
+          "NO2",
+          "NOx",
+          "O3",
+          "PM10",
+          "PM2.5"
+        ],
+        "title": "Contaminante"
+      },
+      "Estacion": {
+        "properties": {
+          "codigo_corto": {
+            "type": "integer",
+            "title": "Codigo Corto"
+          },
+          "nombre": {
+            "type": "string",
+            "title": "Nombre"
+          },
+          "direccion": {
+            "type": "string",
+            "title": "Direccion"
+          },
+          "tipo": {
+            "type": "string",
+            "title": "Tipo"
+          },
+          "distrito": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Distrito"
+          },
+          "latitud": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Latitud"
+          },
+          "longitud": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Longitud"
+          },
+          "altitud": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Altitud"
+          },
+          "contaminantes_medidos": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Contaminantes Medidos",
+            "default": []
+          }
+        },
+        "type": "object",
+        "required": [
+          "codigo_corto",
+          "nombre",
+          "direccion",
+          "tipo"
+        ],
+        "title": "Estacion"
+      },
+      "FuenteChat": {
+        "properties": {
+          "tipo": {
+            "type": "string",
+            "enum": [
+              "sql",
+              "documento"
+            ],
+            "title": "Tipo"
+          },
+          "referencia": {
+            "type": "string",
+            "title": "Referencia"
+          }
+        },
+        "type": "object",
+        "required": [
+          "tipo",
+          "referencia"
+        ],
+        "title": "FuenteChat",
+        "description": "De dónde salió la información: consulta SQL o documento del corpus RAG."
+      },
+      "HTTPValidationError": {
+        "properties": {
+          "detail": {
+            "items": {
+              "$ref": "#/components/schemas/ValidationError"
+            },
+            "type": "array",
+            "title": "Detail"
+          }
+        },
+        "type": "object",
+        "title": "HTTPValidationError"
+      },
+      "PreguntaChat": {
+        "properties": {
+          "pregunta": {
+            "type": "string",
+            "maxLength": 2000,
+            "minLength": 1,
+            "title": "Pregunta",
+            "description": "Pregunta del usuario en lenguaje natural"
+          }
+        },
+        "type": "object",
+        "required": [
+          "pregunta"
+        ],
+        "title": "PreguntaChat"
+      },
+      "PuntoSerie": {
+        "properties": {
+          "fecha": {
+            "type": "string",
+            "format": "date",
+            "title": "Fecha"
+          },
+          "bloque": {
+            "type": "string",
+            "title": "Bloque"
+          },
+          "media": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Media"
+          },
+          "maximo": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Maximo"
+          },
+          "minimo": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Minimo"
+          },
+          "n_horas": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "N Horas"
+          },
+          "cobertura": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cobertura"
+          },
+          "z_score": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Z Score"
+          },
+          "anomaly_score": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Anomaly Score"
+          },
+          "is_anomaly": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Is Anomaly"
+          }
+        },
+        "type": "object",
+        "required": [
+          "fecha",
+          "bloque"
+        ],
+        "title": "PuntoSerie",
+        "description": "Un bloque horario de un día: estadísticos + salida del detector de anomalías."
+      },
+      "RespuestaChat": {
+        "properties": {
+          "respuesta": {
+            "type": "string",
+            "title": "Respuesta"
+          },
+          "fuentes": {
+            "items": {
+              "$ref": "#/components/schemas/FuenteChat"
+            },
+            "type": "array",
+            "title": "Fuentes",
+            "default": []
+          },
+          "advertencia": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Advertencia"
+          }
+        },
+        "type": "object",
+        "required": [
+          "respuesta"
+        ],
+        "title": "RespuestaChat"
+      },
+      "SerieBloques": {
+        "properties": {
+          "estacion": {
+            "type": "integer",
+            "title": "Estacion"
+          },
+          "contaminante": {
+            "type": "string",
+            "title": "Contaminante"
+          },
+          "desde": {
+            "type": "string",
+            "format": "date",
+            "title": "Desde"
+          },
+          "hasta": {
+            "type": "string",
+            "format": "date",
+            "title": "Hasta"
+          },
+          "puntos": {
+            "items": {
+              "$ref": "#/components/schemas/PuntoSerie"
+            },
+            "type": "array",
+            "title": "Puntos"
+          }
+        },
+        "type": "object",
+        "required": [
+          "estacion",
+          "contaminante",
+          "desde",
+          "hasta",
+          "puntos"
+        ],
+        "title": "SerieBloques"
+      },
+      "ValidationError": {
+        "properties": {
+          "loc": {
+            "items": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer"
+                }
+              ]
+            },
+            "type": "array",
+            "title": "Location"
+          },
+          "msg": {
+            "type": "string",
+            "title": "Message"
+          },
+          "type": {
+            "type": "string",
+            "title": "Error Type"
+          },
+          "input": {
+            "title": "Input"
+          },
+          "ctx": {
+            "type": "object",
+            "title": "Context"
+          }
+        },
+        "type": "object",
+        "required": [
+          "loc",
+          "msg",
+          "type"
+        ],
+        "title": "ValidationError"
+      }
+    }
+  }
+}
