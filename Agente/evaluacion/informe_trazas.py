@@ -9,7 +9,8 @@ Solo biblioteca estándar. Agrupa los spans por `trace_id` (un turno), reconstru
   los tokens (o su modelo no tiene precio), el turno queda **incompleto**: no cuenta en las
   medianas de tokens y su coste no se suma. Ausente nunca es cero;
 - síntesis válida a la primera (/rag/validar), reparaciones, búsquedas y síntesis forzadas, herramientas vetadas,
-  errores y decisiones del código.
+  errores y decisiones del código;
+- hallazgos de las comprobaciones posteriores (eventos `comprobacion` del span `turno`) por regla y ruta.
 
 El formato de `--salida` lo da la extensión: `.md` (estas tablas), `.html` (informe visual
 autocontenido para analizar latencias y costes: filtros, gráficas y cascada de cada turno; sin
@@ -230,7 +231,28 @@ def _detalle_lote(etiqueta: str, lista: list[Turno]) -> str:
     if decisiones:
         filas = [["Decisión del código", "n"]] + [[d, str(n)] for d, n in decisiones.most_common()]
         partes.append("### Decisiones del código\n\n" + tabla(filas))
+
+    if comprobaciones := _comprobaciones(lista):
+        partes.append("### Comprobaciones posteriores\n\n"
+                      "Un hallazgo por regla y texto comprobado (la ruta documental comprueba cada "
+                      "afirmación y limitación).\n\n" + comprobaciones)
     return "\n\n".join(partes)
+
+
+def _comprobaciones(lista: list[Turno]) -> str:
+    """Hallazgos, turnos con hallazgo y bloqueos por regla y ruta. Vacío si no hubo ninguno."""
+    por_clave: dict[tuple[str, str], list[tuple[Turno, dict]]] = defaultdict(list)
+    for t in lista:
+        for e in t.raiz["events"]:
+            if e["name"] == "comprobacion":
+                por_clave[(e["attributes"].get("agente.regla", "?"), t.ruta)].append((t, e))
+    if not por_clave:
+        return ""
+    filas = [["Regla", "Ruta", "Hallazgos", "Turnos", "Bloqueados"]]
+    for (regla, ruta), eventos in sorted(por_clave.items()):
+        filas.append([regla, ruta, str(len(eventos)), str(len({t.trace_id for t, _ in eventos})),
+                      str(sum(bool(e["attributes"].get("agente.bloquea")) for _, e in eventos))])
+    return tabla(filas)
 
 
 def detalle_traza(turno: Turno) -> str:
@@ -249,6 +271,9 @@ def detalle_traza(turno: Turno) -> str:
         detalle = [f"{k.removeprefix('agente.')}={a[k]}" for k in sorted(a)
                    if k.startswith("agente.") and k != "agente.etiqueta"]
         detalle += [f"decision={e['attributes'].get('agente.decision')}" for e in s["events"] if e["name"] == "decision"]
+        detalle += [f"comprobacion={e['attributes'].get('agente.regla')}: {e['attributes'].get('agente.detalle')}"
+                    + (" (bloquea)" if e["attributes"].get("agente.bloquea") else "")
+                    for e in s["events"] if e["name"] == "comprobacion"]
         if s["status"] == "ERROR":
             detalle.append(f"ERROR: {s.get('status_descripcion') or ''}".strip())
         filas.append(["\u00a0\u00a0" * nivel + s["name"], s["kind"] or "",

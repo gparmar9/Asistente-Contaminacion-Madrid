@@ -10,6 +10,9 @@ escribe en `resultados/` un markdown fechado con tres criterios separados:
 - Referencias válidas: `/rag/validar` acepta la salida final, con su número de reparaciones.
 - Respuesta correcta: lectura humana (sí / no / parcial). El markdown deja la columna en blanco.
 
+La columna «Comprobaciones» lista las reglas posteriores que saltaron en el turno (fase 6); el
+detalle de cada hallazgo va bajo su respuesta.
+
 Sin jueces LLM. Al final va el informe de trazas del lote (latencia, tokens y coste).
 
 Conversaciones (`casos_conversacion.json`, o un caso con `turnos`): cada turno pasa por la capa
@@ -145,18 +148,21 @@ def informe_lote(resultados: list[ResultadoCaso], cabecera: str, trazas: str) ->
               f"Síntesis documentales: {len(sintesis)}; JSON a la primera "
               f"{sum(rc.json_a_la_primera is True for rc in sintesis)}/{len(sintesis)}; referencias válidas "
               f"{sum(rc.resultado.valida for rc in sintesis)}/{len(sintesis)} "
-              f"(reparaciones: {sum(rc.resultado.reparaciones for rc in sintesis)})."]
+              f"(reparaciones: {sum(rc.resultado.reparaciones for rc in sintesis)}). "
+              f"Turnos con hallazgos de las comprobaciones posteriores: "
+              f"{sum(bool(rc.resultado and rc.resultado.hallazgos) for rc in resultados)}/{len(resultados)}."]
     filas = [["Caso", "Historial", "Intención", "Ruta", "Búsqueda", "Cita", "JSON a la primera",
-              "Referencias válidas", "Reparaciones", "ms", "Fallos"]]
+              "Referencias válidas", "Reparaciones", "Comprobaciones", "ms", "Fallos"]]
     for rc in resultados:
         r = rc.resultado
         if r is None:
-            filas.append([rc.caso["id"]] + ["—"] * 9 + ["; ".join(rc.fallos)])
+            filas.append([rc.caso["id"]] + ["—"] * 10 + ["; ".join(rc.fallos)])
             continue
         filas.append([rc.caso["id"], _si_no(rc.historial), r.intencion, r.ruta,
                       _si_no(rag.NOMBRE in r.herramientas_usadas),
                       _si_no(any(f.tipo == "documento" for f in r.fuentes)), _si_no(rc.json_a_la_primera),
                       _si_no(r.valida), str(r.reparaciones) if r.valida is not None else "—",
+                      ", ".join(dict.fromkeys(h.regla for h in r.hallazgos)) or "—",
                       f"{rc.duracion_ms:.0f}", "; ".join(rc.fallos) or "ok"])
     partes.append(informe_trazas.tabla(filas))
 
@@ -173,6 +179,9 @@ def informe_lote(resultados: list[ResultadoCaso], cabecera: str, trazas: str) ->
             bloque.append(f"Ruta {r.ruta} · traza `{r.traza_id}`"
                           + (f" · fuentes: {', '.join(f.referencia for f in r.fuentes)}" if r.fuentes else ""))
             bloque.append("\n".join("> " + linea for linea in r.respuesta.splitlines()))
+            if r.hallazgos:
+                bloque.append("Comprobaciones: " + "; ".join(
+                    f"{h.regla} `{h.detalle}`" + (" (bloqueó)" if h.bloquea else "") for h in r.hallazgos))
         partes.append("\n\n".join(bloque))
 
     partes.append("## Informe de trazas del lote\n\n" + re.sub(r"^(#+) ", r"##\1 ", trazas, flags=re.M))

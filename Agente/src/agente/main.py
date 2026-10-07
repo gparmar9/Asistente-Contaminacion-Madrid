@@ -55,7 +55,8 @@ def construir_bucle(settings: Settings = settings) -> Bucle | None:
     else:
         logger.warning("RAG_URL vacía: el agente no tendrá la herramienta documental")
     return Bucle(llm, herramientas, max_vueltas=settings.max_vueltas, llm_clasificador=llm_clasificador,
-                 clasificador_timeout_s=settings.clasificador_timeout_s)
+                 clasificador_timeout_s=settings.clasificador_timeout_s,
+                 comprobaciones_bloquean=settings.comprobaciones_bloquean)
 
 
 @asynccontextmanager
@@ -161,9 +162,10 @@ async def _turno_en_sesion(bucle: Bucle, sesiones: Sesiones, session_id: str, pr
     except asyncio.CancelledError:
         log_turnos.info("turno cancelado: el cliente se desconectó (%.0f ms)", (time.perf_counter() - inicio) * 1000)
         raise
-    log_turnos.info("turno traza=%s ruta=%s intencion=%s vueltas=%d historial=%d duracion_ms=%.0f",
-                    resultado.traza_id, resultado.ruta, resultado.intencion, resultado.vueltas, len(historial),
-                    (time.perf_counter() - inicio) * 1000)
+    log_turnos.info("turno traza=%s ruta=%s intencion=%s vueltas=%d historial=%d comprobaciones=%s%s "
+                    "duracion_ms=%.0f", resultado.traza_id, resultado.ruta, resultado.intencion, resultado.vueltas,
+                    len(historial), ",".join(dict.fromkeys(h.regla for h in resultado.hallazgos)) or "-",
+                    " bloqueada" if resultado.bloqueada else "", (time.perf_counter() - inicio) * 1000)
     return resultado
 
 

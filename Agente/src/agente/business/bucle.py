@@ -26,13 +26,20 @@ sigue recibiendo solo la pregunta actual. Sin historial, los mensajes son los de
 Con un emisor (stream), el turno avisa de cada fase y entrega como tokens solo las respuestas
 definitivas: la llamada del bucle sin herramientas ofrecidas y la síntesis forzada. El resto
 (frases fijas, ruta documental, texto libre tras ofrecer herramientas) sale entero al final.
+
+Al final del turno, las comprobaciones posteriores (comprobaciones.py) revisan lo que escribió el
+modelo: el texto libre o las afirmaciones y limitaciones de la ruta documental (las frases fijas
+son del código y no se comprueban). Cada hallazgo es un evento `comprobacion` en el span `turno`.
+Si una regla bloquea, la respuesta pasa a ser una frase fija, sin fuentes ni aviso, y es lo que
+entra en el historial. Con alguna regla en bloqueo no se emiten tokens: la respuesta libre se
+comprueba entera y sale al final como las demás.
 """
 from __future__ import annotations
 
 import asyncio
 import logging
 from dataclasses import dataclass, field
-from typing import Sequence
+from typing import Iterable, Sequence
 
 from llama_index.core.base.llms.types import ChatMessage, ChatResponse, MessageRole
 from llama_index.core.llms.function_calling import FunctionCallingLLM
@@ -41,11 +48,12 @@ from llama_index.core.tools.types import BaseTool
 from opentelemetry.trace import Status, StatusCode
 
 from agente import observabilidad
-from agente.business import frases
+from agente.business import comprobaciones, frases
 from agente.business.intencion import Decision, clasificar, decidir
 from agente.business.memoria import mensajes_historial, pregunta_contextual, texto_historial
 from agente.business.sintesis import EvidenciasTurno, sintesis_documental
 from agente.entities.chat import Fuente
+from agente.entities.comprobaciones import Hallazgo, MaterialTurno
 from agente.entities.eventos import Emisor, Evento, EventoEstado, EventoTexto, Fase
 from agente.entities.intencion import DESCONOCIDA, Clasificacion, Tema
 from agente.entities.memoria import TurnoGuardado
@@ -78,19 +86,27 @@ class ResultadoTurno:
     traza_id: str | None = None
     emitida: bool = False                              # la respuesta ya salió como tokens por el emisor
     respuesta_contexto: str = ""                       # la que entra en el historial; documental: sin [Dn]
+    hallazgos: list[Hallazgo] = field(default_factory=list)  # comprobaciones posteriores que saltaron
+    bloqueada: bool = False                            # una regla que bloquea sustituyó la respuesta
+    material: MaterialTurno | None = field(default=None, repr=False)  # lo que escribió el modelo
 
 
 class Bucle:
-    """`llm_clasificador` None = sin clasificador: todos los turnos son DESCONOCIDA."""
+    """`llm_clasificador` None = sin clasificador: todos los turnos son DESCONOCIDA.
+    `comprobaciones_bloquean`: reglas que sustituyen la respuesta; las demás solo observan."""
 
     def __init__(self, llm: FunctionCallingLLM, herramientas: Sequence[Herramienta],
                  max_vueltas: int = 3, llm_clasificador: FunctionCallingLLM | None = None,
-                 clasificador_timeout_s: float = 10.0):
+                 clasificador_timeout_s: float = 10.0, comprobaciones_bloquean: Iterable[str] = ()):
         self._llm = llm
         self._herramientas = {h.nombre: h for h in herramientas}
         self._max_vueltas = max(1, max_vueltas)
         self._llm_clasificador = llm_clasificador
         self._clasificador_timeout_s = clasificador_timeout_s
+        bloquean = frozenset(comprobaciones_bloquean)
+        if desconocidas := bloquean - set(comprobaciones.REGLAS):
+            logger.warning("COMPROBACIONES_BLOQUEAN: se ignoran las reglas desconocidas %s", sorted(desconocidas))
+        self._bloquean = bloquean & set(comprobaciones.REGLAS)
 
     async def responder(self, pregunta: str, emitir: Emisor | None = None,
                         historial: Sequence[TurnoGuardado] = ()) -> ResultadoTurno:
@@ -102,12 +118,14 @@ class Bucle:
         with observabilidad.turno(pregunta) as span:
             span.set_attribute("agente.historial_turnos", len(historial))
             resultado = ResultadoTurno(respuesta="", traza_id=observabilidad.trace_id_actual())
+            # Con alguna regla en bloqueo, nada sale como token antes de comprobarlo.
+            emitir_texto = None if self._bloquean else _texto_al_cliente(emitir, resultado)
             try:
-                await self._turno(pregunta, historial, resultado, emitir or _no_emitir,
-                                  _texto_al_cliente(emitir, resultado))
+                await self._turno(pregunta, historial, resultado, emitir or _no_emitir, emitir_texto)
             except asyncio.CancelledError:  # el cliente del stream se fue: no se hacen más llamadas
                 span.set_attribute("agente.cancelado", True)
                 raise
+            self._comprobar(resultado)
             resultado.emitida &= resultado.respuesta != frases.RESPUESTA_VACIA  # vacía: sale entera
             resultado.respuesta_contexto = resultado.respuesta_contexto or resultado.respuesta
             span.set_output(resultado.respuesta)
@@ -189,6 +207,7 @@ class Bucle:
             return await self._cerrar_documental(pregunta, historial, evidencias, resultado, emitir)
         if final is not None:
             resultado.respuesta = _texto(final)
+            resultado.material = comprobaciones.material_libre(pregunta, consultas, resultado.respuesta)
             return resultado
         # Límite de vueltas: cerrar sin herramientas para que el usuario siempre reciba respuesta.
         with observabilidad.span("sintesis_forzada", "chain"):
@@ -197,6 +216,7 @@ class Bucle:
                                            emitir_texto)
             resultado.respuesta = _texto(respuesta)
             resultado.sintesis_forzada = True
+        resultado.material = comprobaciones.material_libre(pregunta, consultas, resultado.respuesta)
         return resultado
 
     # ------------------------------------------------------------------ pasos
@@ -213,7 +233,24 @@ class Bucle:
         resultado.reparaciones = documental.reparaciones
         resultado.respuesta_contexto = documental.respuesta_contexto or ""
         _acumular_fuentes(resultado.fuentes, documental.fuentes)  # solo los documentos citados
+        if documental.valida:  # si no, la respuesta es la frase de insuficiencia: nada que comprobar
+            resultado.material = comprobaciones.material_documental(
+                pregunta, evidencias.para_sintesis(), documental.afirmaciones, documental.limitaciones)
         return resultado
+
+    def _comprobar(self, resultado: ResultadoTurno) -> None:
+        """Comprobaciones posteriores sobre lo que escribió el modelo; sin material, nada."""
+        if resultado.material is None:
+            return
+        resultado.hallazgos = comprobaciones.comprobar(resultado.material, self._herramientas, self._bloquean)
+        for h in resultado.hallazgos:
+            observabilidad.comprobacion(h.regla, h.detalle, h.bloquea)
+        if any(h.bloquea for h in resultado.hallazgos):
+            # La ruta no cambia. El texto bloqueado no entra en el historial: entra la frase.
+            frase = frases.INSUFICIENCIA if resultado.ruta == "documental" else frases.RESPUESTA_RETENIDA
+            resultado.respuesta = resultado.respuesta_contexto = frase
+            resultado.fuentes, resultado.advertencia = [], None
+            resultado.bloqueada = True
 
     async def _clasificar(self, pregunta: str, historial: list[TurnoGuardado],
                           emitir: Emisor) -> Clasificacion:
@@ -353,6 +390,10 @@ def _atributos_turno(resultado: ResultadoTurno) -> dict:
     if resultado.valida is not None:
         atributos["agente.valida"] = resultado.valida
         atributos["agente.reparaciones"] = resultado.reparaciones
+    if resultado.hallazgos:
+        atributos["agente.comprobaciones"] = list(dict.fromkeys(h.regla for h in resultado.hallazgos))
+    if resultado.bloqueada:
+        atributos["agente.bloqueada"] = True
     return atributos
 
 

@@ -13,7 +13,8 @@ Sin `configurar()` (tests) los spans se crean pero no se exportan.
         llm (llm) y herramientas (tool)
 
 Las decisiones del código (frase fija, sin evidencia, límite de vueltas...) son eventos
-`decision` en el span en curso.
+`decision` en el span en curso, y cada hallazgo de las comprobaciones posteriores, un evento
+`comprobacion` en el span `turno`.
 """
 from __future__ import annotations
 
@@ -141,6 +142,12 @@ def anotar_respuesta(s: Span, respuesta: ChatResponse) -> None:
 def decision(texto: str) -> None:
     """Decisión del código, como evento en el span en curso."""
     trace.get_current_span().add_event("decision", {"agente.decision": texto})
+
+
+def comprobacion(regla: str, detalle: str, bloquea: bool) -> None:
+    """Hallazgo de una comprobación posterior, como evento en el span en curso (el del turno)."""
+    trace.get_current_span().add_event("comprobacion", {
+        "agente.regla": regla, "agente.detalle": detalle, "agente.bloquea": bloquea})
 
 
 def trace_id_actual() -> str | None:

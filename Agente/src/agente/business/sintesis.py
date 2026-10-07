@@ -79,6 +79,9 @@ class ResultadoDocumental:
     valida: bool = False
     reparaciones: int = 0
     respuesta_contexto: str | None = None  # válida: las afirmaciones sin [Dn], aviso ni bibliografía
+    # Válida: lo que escribió el modelo, para las comprobaciones posteriores.
+    afirmaciones: list[dict] = field(default_factory=list)  # [{texto, evidencias: [IDs citados]}]
+    limitaciones: list[str] = field(default_factory=list)
 
 
 async def sintesis_documental(llamar: Llamar, rag: HerramientaRag, pregunta: str,
@@ -113,6 +116,8 @@ async def _sintesis(llamar: Llamar, rag: HerramientaRag, pregunta: str, evidenci
                 valida=True,
                 reparaciones=intento,
                 respuesta_contexto=_texto_afirmaciones(salida),
+                afirmaciones=list(salida["afirmaciones"]),
+                limitaciones=list(salida.get("limitaciones") or []),
             )
         logger.warning("Salida documental inválida (intento %d): %s", intento + 1,
                     validacion["mensaje_reparacion"])

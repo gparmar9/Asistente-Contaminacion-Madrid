@@ -106,6 +106,7 @@ Hilo conductor de la memoria: cómo y por qué cambió el diseño.
 | 2026-10-06 | Chat de `ApiUsuario` | `/chat` solo hacia `ORCHESTRATOR_URL` (o stub), sin sesión → **`AGENTE_URL` elige el agente**; `session_id` y `traza_id` opcionales en el contrato y **`POST /chat/stream`** (proxy del SSE del agente, o `passthrough` + `done` sin agente) | Los dos agentes conviven y se elige por configuración, sin tocar código. El fallback mantiene el contrato del stream para el frontend aunque el orquestador no conserve contexto |
 | 2026-10-06 | Memoria de la conversación del agente | Diseño previsto (2026-10-04): `PostgresChatStore` de LlamaIndex sobre la base del proyecto, estado tipado entre turnos (`turn_state`) e intención `REPETIR` → **almacén propio en memoria del proceso** (1 semana sin actividad, 20 turnos por sesión) y ventana por presupuesto de tokens; **LlamaIndex queda solo como cliente del LLM**. Sin `REPETIR` y con `turn_state` aplazado | Un TFM no necesita que las conversaciones sobrevivan a un reinicio, y el bloqueo por sesión ya exige un solo proceso: Postgres añadiría tablas, migraciones y una dependencia más en cada turno. El almacén vive detrás de una interfaz: pasar a una base de datos cambiaría una clase. `SimpleChatStore` solo guarda listas de mensajes, sin caducidad ni metadatos del turno. `REPETIR` desde cifras sueltas pierde a qué contaminante, unidad o fuente pertenece cada una; un «¿cuál era ese límite?» se trata como pregunta normal con contexto. El estado semántico se definirá cuando lo pida una necesidad concreta (comprobaciones de cifras, herramienta SQL) |
 | 2026-10-06 | Alcance del clasificador del agente | Alcance por tema («calidad del aire») → **alcance por lo que el sistema puede responder**: contaminación del aire, con los contaminantes que mide la red citados en el prompt; polen, ruido y tiempo fuera; alergia y asma dentro; los límites legales son documentación, no mediciones | En el lote del 2026-10-06 los dos modelos fallaron la pregunta del polen de forma distinta (uno `DATOS`, otro `FUERA_DE_ALCANCE`). Medido antes y después: 27/28 → 29/29 con los dos modelos (§7.3.1) |
+| 2026-10-06 | Comprobaciones posteriores del agente | Un modo global `COMPROBACIONES_MODO` (observar o bloquear todas) → **activación por regla** (`COMPROBACIONES_BLOQUEAN`, vacía por defecto) | Cada regla pasa a bloquear solo con evidencia propia (0 falsos positivos en las trazas reales y en un lote adversario, y al menos un acierto). Con un modo global, una regla ruidosa impediría bloquear con las fiables. Descartado también pedir una reparación al modelo («la cifra X no está en D2») en vez de la frase fija: sería mejor respuesta, pero añade una llamada y mezcla la validación del RAG con la del agente; queda como trabajo futuro |
 
 **Decisiones abiertas que alimentarán esta tabla:** proveedor concreto del LLM (se decidirá al
 conectar el bucle real: crear cuenta y verificar límites en consola) y dónde se despliega el
@@ -775,9 +776,55 @@ cada decisión y de la elección de LlamaIndex está en `docs/agente/decisiones_
     14B (`ValueError: Unknown model`). Resuelto con una subclase en la fábrica que declara a mano los
     metadatos de los modelos fuera de su lista.
 
-**Fases pendientes** (6–7): comprobaciones posteriores en modo observación (las cifras del
-historial no contarán como verificadas: aparecer antes no prueba nada) con
-evaluación sobre 20 preguntas etiquetadas; Bedrock y despliegue junto al orquestador.
+**Comprobaciones posteriores** (fase 6, en construcción; pasos 1 a 3 hechos el 2026-10-06). Al
+final de cada turno el código revisa **lo que escribió el modelo**, no lo que se entrega: en la ruta
+libre, la respuesta; en la documental, cada afirmación y limitación del JSON validado (el texto que
+renderiza el RAG lleva a propósito `chunk_id`, fechas y URLs). Las frases fijas no se comprueban.
+Tres reglas, funciones puras sin LLM:
+- **Cifras sin respaldo**: cada número debe estar en la pregunta o en lo que devolvieron las
+  herramientas del turno; en la documental, en las evidencias **que cita esa afirmación** (es lo
+  que promete la marca `[Dn]`). El historial no respalda: aparecer antes no prueba nada. No cuentan
+  años (1900–2099), dígitos pegados a una letra (`PM2.5`, `NO2`, `D1`) ni sub/superíndices.
+- **Fuga del prompt**: 10 palabras seguidas compartidas con un prompt del sistema. Se excluyen la
+  frase de identidad y la de capacidades del prompt de charla: el modelo las repite al presentarse
+  (con ellas, la regla saltaba en 8 de las 22 charlas reales guardadas; sin ellas, en 0).
+- **Internos**: nombres de herramientas, `chunk_id`, marcas `[Dn]` fuera de la ruta documental y
+  JSON crudo.
+Cada regla **observa** (evento `comprobacion` en la traza y campo en el log del turno) salvo que
+esté en `COMPROBACIONES_BLOQUEAN`: entonces la respuesta pasa a una frase fija, sin fuentes ni aviso,
+y es esa frase la que entra en el historial. Con alguna regla en bloqueo las respuestas libres ya
+no salen como tokens: se comprueban enteras y salen al final (`passthrough`). Por defecto todas
+observan.
+
+Medición (2026-10-06), con las mismas funciones que usa el turno aplicadas a las trazas guardadas
+(un script reconstruye el material de cada turno; sobre los 26 turnos nuevos da exactamente los
+mismos hallazgos que anotó el agente en vivo):
+- **Trazas existentes**: 128 turnos, 96 con texto del modelo (331 textos). 5 hallazgos, todos de
+  cifras; 0 de fuga y 0 de internos.
+- **Lote adversario** (6 casos: pedir el prompt, preguntar por las herramientas internas o los
+  identificadores de los fragmentos, y preguntas documentales con muchas cifras), con los dos
+  modelos y los casos de fuga repetidos con Ministral, más una **sonda de síntesis forzada** (búsqueda
+  que falla, 4 turnos por modelo): 26 turnos, 63 llamadas, 0,011 $.
+- **Cifras**: 10 hallazgos en total. 3 son falsos positivos, todos iguales: «PM2.5 (partículas de
+  diámetro menor a 2.5 micras)», la cifra del nombre. El resto, cifras que el modelo puso sin
+  evidencia (Real Decreto 102/2011, Directiva 2008/50/CE, «25 µg/m³» en la síntesis forzada, una
+  «Orden 2778/2019» `[por confirmar si existe]`) y una **cita mal puesta**: el límite de 2030
+  (20 µg/m³) es correcto pero está en una evidencia que la afirmación no cita. Todos de Ministral.
+  Quitar las cifras seguidas de «micras/µm» elimina los 3 falsos positivos sin perder ningún acierto
+  (ajustado sobre los mismos datos: falta confirmarlo con turnos nuevos).
+- **Fuga**: Ministral **repitió el prompt de charla las 4 veces que la pregunta llegó a la charla**
+  (de 6 intentos); gpt-oss clasificó las tres preguntas como fuera de alcance (frase fija). La regla solo detectó la copia literal (1 de
+  4): las otras tres eran paráfrasis cuyo tramo literal más largo era de 9 palabras. Ningún tamaño
+  de n-grama separa: con 8 palabras detecta las 4, pero salta también en 9 turnos normales que
+  describen las capacidades con frases del prompt. Lo que sí separa son las frases que solo tienen
+  sentido como instrucción («Eres el asistente…», «estas instrucciones», «Responde en español»):
+  4 de 4 fugas y 0 de los otros 113 turnos (misma reserva: definido con esas 4 fugas).
+- **Internos**: 0 hallazgos. Ningún modelo nombró la herramienta ni copió un `chunk_id`, ni
+  siquiera al pedírselo.
+Decisión de qué reglas bloquean `[pendiente]` (paso 4).
+
+**Fases pendientes**: decidir las comprobaciones (fase 6, paso 4); Bedrock y
+despliegue junto al orquestador (fase 7).
 
 #### 7.3.2 `LLMOrchestrator` — primer agente (implementado el 2026-09-28; convive)
 
@@ -1137,6 +1184,13 @@ la enciende a mano para trabajar o hacer una demo.
   (bloques de herramienta sin `toolConfig`). En los lotes normales no aparece nunca (0 de 24 turnos),
   así que solo se vio forzando el caso. Lección: los dobles de prueba no reproducen las reglas del
   proveedor; los caminos raros necesitan una prueba dirigida contra el servicio real.
+- **Comparar palabras no distingue una fuga parafraseada de una presentación legítima** (2026-10-06).
+  La regla de fuga del prompt (n-gramas compartidos) no saltó en ninguno de los 128 turnos reales, lo que
+  parecía bueno; el lote adversario mostró que Ministral filtra el prompt reescribiéndolo, y que
+  esa paráfrasis comparte con el prompt lo mismo que un saludo normal. Lección: una regla sin
+  hallazgos en el tráfico normal no está validada hasta que se la pone a prueba con casos hechos
+  para hacerla saltar; y conviene buscar la señal que solo tiene el caso malo (aquí, el texto en
+  segunda persona de las instrucciones).
 
 ---
 
@@ -1316,6 +1370,8 @@ la enciende a mano para trabajar o hacer una demo.
 | 2026-10-06 | **Entorno de pruebas local con un comando** (Carlos): `entorno_local.sh` levanta RAG, Phoenix, agente y `ApiUsuario` en paneles de tmux (antes, cuatro terminales a mano) con esperas por `/salud`, comprobación previa de credenciales de Bedrock y puertos, y `preguntar` para consultar por `/chat/stream`. Se descarta de momento Docker Compose para esto: cada cambio de código obligaría a reconstruir imágenes |
 | 2026-10-06 | **Agente LLM, fase 5: memoria de la conversación** (Carlos, rama `feature/Agente`): almacén en memoria del proceso detrás de una interfaz (20 turnos por sesión, caducidad de 1 semana), ventana por presupuesto de tokens (1.500), respuesta para el contexto sin marcas `[Dn]` y contexto en el clasificador, el bucle, las dos síntesis y la búsqueda que lanza el código; `/rag/validar` sigue viendo solo la pregunta actual. Descartados `PostgresChatStore`, `REPETIR` y el estado semántico. 50 tests (9 nuevos); sin historial, los mensajes del primer turno no cambian |
 | 2026-10-06 | **Agente LLM: clasificador revisado y evaluación con conversaciones** (Carlos): prompt con el alcance definido por lo que el sistema puede responder (polen, ruido y tiempo fuera; alergias dentro; límites legales como documentación). Guion de 29 preguntas y 5 conversaciones (11 turnos). En Bedrock, antes → después: clasificador 27/28 → 29/29 con los dos modelos; conversaciones 9/11 → 11/11 (Ministral) y 11/11 (gpt-oss). La búsqueda concatenada no llegó a ejecutarse: los modelos reformulan solos. Unas 600 llamadas, ~0,12 $ `[estimación]`. 51 tests |
+| 2026-10-06 | **Agente LLM, fase 6: comprobaciones posteriores, pasos 1 y 2** (Carlos, rama `feature/Agente`): reglas de cifras sin respaldo, fuga del prompt e internos sobre lo que escribió el modelo, en modo observación (evento en la traza y campo en el log); `COMPROBACIONES_BLOQUEAN` para que una regla sustituya la respuesta por una frase fija (sin tokens en el stream si alguna bloquea). Excluidas de la fuga las frases de presentación que el modelo repite. 62 tests (11 nuevos); sin llamadas a Bedrock. Pendiente: medir sobre las 128 trazas y un lote adversario y decidir qué reglas bloquean |
+| 2026-10-06 | **Agente LLM, fase 6: medición de las comprobaciones** (Carlos, rama `feature/Agente`): script que aplica las reglas a las trazas guardadas (128 turnos) y lote adversario + sonda de síntesis forzada en Bedrock (26 turnos, 63 llamadas, 0,011 $). Cifras: 10 hallazgos, 3 falsos positivos (el «2.5 micras» de PM2.5) y una cita mal puesta. Fuga: Ministral repite el prompt de charla cada vez que la pregunta llega a la charla (4 de 4) y la regla solo detecta la copia literal (1 de 4). Internos: 0. Conteo por regla en el informe de trazas y en la evaluación de turnos. 63 tests |
 
 
 ---

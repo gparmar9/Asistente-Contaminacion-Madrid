@@ -89,3 +89,18 @@ def test_html_incrusta_los_turnos_sin_romper_la_pagina(tmp_path):
     assert datos_html["turnos"][0]["pregunta"] == "¿</script><b>NO2</b>?"
     assert [s["grupo"] for s in datos_html["turnos"][1]["spans"]].count("llm (sintesis_documental)") == 2
     assert sum(s.get("coste_usd") or 0 for s in datos_html["turnos"][0]["spans"]) == lista[0].coste_usd
+
+
+def test_cuenta_los_hallazgos_por_regla(tmp_path):
+    """Caso 8 de la fase 6: un turno con dos hallazgos, uno de ellos bloqueando."""
+    turno = _span("l", "t", None, "turno", "AGENT", 1000, **{
+        "agente.etiqueta": "lote", "agente.ruta": "libre", "agente.intencion": "CHARLA"})
+    turno["events"] = [{"name": "comprobacion", "time": turno["start"], "attributes": {
+        "agente.regla": regla, "agente.detalle": detalle, "agente.bloquea": bloquea}}
+        for regla, detalle, bloquea in (("cifras", "25", False), ("internos", "buscar_evidencias", True))]
+    ruta = _escribir(tmp_path / "t.jsonl", [turno] + _documental("d", 1000, 0, 5_000))
+
+    texto = informe(turnos(cargar([ruta]))[0])
+    assert "| cifras | libre | 1 | 1 | 0 |" in texto
+    assert "| internos | libre | 1 | 1 | 1 |" in texto
+    assert " | documental | " not in texto.split("### Comprobaciones posteriores")[1]  # sin hallazgos, sin fila

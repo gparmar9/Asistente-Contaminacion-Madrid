@@ -48,6 +48,9 @@ class Settings:
     memoria_presupuesto_tokens: int = 1500
     memoria_max_turnos: int = 20
     memoria_ttl_h: float = 168
+    # Comprobaciones posteriores (cifras, fuga, internos) que sustituyen la respuesta por una frase
+    # fija. Las que no están aquí solo observan (evento en la traza y log).
+    comprobaciones_bloquean: tuple[str, ...] = ()
 
 
 def get_settings() -> Settings:
@@ -81,7 +84,12 @@ def get_settings() -> Settings:
         memoria_presupuesto_tokens=int(os.getenv("MEMORIA_PRESUPUESTO_TOKENS", "1500")),
         memoria_max_turnos=int(os.getenv("MEMORIA_MAX_TURNOS", "20")),
         memoria_ttl_h=float(os.getenv("MEMORIA_TTL_H", "168")),
+        comprobaciones_bloquean=_lista(os.getenv("COMPROBACIONES_BLOQUEAN", "")),
     )
+
+
+def _lista(valor: str) -> tuple[str, ...]:
+    return tuple(v.strip().lower() for v in valor.split(",") if v.strip())
 
 
 def _booleano(valor: str) -> bool:
