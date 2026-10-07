@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="es">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="color-scheme" content="light dark" />
+    <meta name="description" content="Dashboard y asistente de la calidad del aire de Madrid: anomalías por estación y bloque horario, y consultas en lenguaje natural. Demo académica (TFM)." />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <title>Asistente de Calidad del Aire de Madrid</title>
+    <script>
+      // Aplica el tema antes del primer pintado para evitar el destello claro→oscuro.
+      // Prioridad: ?tema=claro|oscuro en la URL (se recuerda), luego el valor guardado,
+      // y si no hay ninguno, la preferencia del sistema.
+      (function () {
+        try {
+          var params = new URLSearchParams(location.search);
+          // Paleta alternativa en prueba: ?paleta=cielo la activa (y se recuerda), ?paleta=original vuelve.
+          var paleta = params.get('paleta');
+          if (paleta === 'cielo' || paleta === 'original') localStorage.setItem('paleta', paleta);
+          if (localStorage.getItem('paleta') === 'cielo') document.documentElement.dataset.paleta = 'cielo';
+          var porUrl = params.get('tema');
+          if (porUrl === 'claro' || porUrl === 'oscuro') localStorage.setItem('tema', porUrl);
+          var guardado = localStorage.getItem('tema');
+          var oscuro = guardado ? guardado === 'oscuro'
+            : window.matchMedia('(prefers-color-scheme: dark)').matches;
+          document.documentElement.dataset.theme = oscuro ? 'dark' : 'light';
+        } catch (e) {
+          document.documentElement.dataset.theme = 'light';
+        }
+      })();
+    </script>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>
