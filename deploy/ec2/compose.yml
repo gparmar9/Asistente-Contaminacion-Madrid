@@ -1,0 +1,53 @@
+# La API en la EC2: los mismos servicios que el perfil "api" del docker-compose.yml de la raíz,
+# pero con las imágenes de ECR (no se construye nada en la máquina) y sin base de datos propia
+# (usa RDS). Lo lanza arrancar.sh, que genera antes los ficheros que se leen aquí:
+#   versiones.env     REGISTRO y VERSION_* (qué imagen de cada servicio está activa, desde SSM)
+#   secretos-bd.env   DATABASE_URL (desde SSM, cifrado)
+#   secretos-llm.env  LLM_BASE_URL, LLM_MODEL, LLM_API_KEY si existen en SSM (si no, vacío)
+#
+# Solo api-usuario publica puerto. orquestador y rag no tienen autenticación y quedan en la red
+# interna de Docker; se encuentran por su nombre (http://rag:8010).
+name: jupiter
+
+x-logs: &logs
+  # Sin límite, los logs de Docker crecen hasta llenar el disco.
+  logging:
+    driver: json-file
+    options:
+      max-size: "10m"
+      max-file: "3"
+
+services:
+  rag:
+    image: ${REGISTRO}/jupiter-rag:${VERSION_RAG}
+    restart: unless-stopped
+    <<: *logs
+
+  orquestador:
+    image: ${REGISTRO}/jupiter-orquestador:${VERSION_ORQUESTADOR}
+    restart: unless-stopped
+    env_file:
+      - secretos-bd.env
+      - secretos-llm.env
+    environment:
+      APP_ENV: produccion
+      RAG_URL: http://rag:8010
+    depends_on:
+      rag:
+        condition: service_healthy
+    <<: *logs
+
+  api-usuario:
+    image: ${REGISTRO}/jupiter-api-usuario:${VERSION_API_USUARIO}
+    restart: unless-stopped
+    env_file:
+      - secretos-bd.env
+    environment:
+      APP_ENV: produccion
+      ORCHESTRATOR_URL: http://orquestador:8100
+    depends_on:
+      orquestador:
+        condition: service_healthy
+    ports:
+      - "8000:8000"
+    <<: *logs

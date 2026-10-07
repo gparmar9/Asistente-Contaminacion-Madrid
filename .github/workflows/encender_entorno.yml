@@ -1,14 +1,15 @@
-# Enciende el entorno del proyecto en AWS para trabajar o hacer una demo.
+# Enciende el entorno del proyecto en AWS para trabajar o hacer una demo: la base de datos
+# (RDS jupiter-postgres) y el servidor de la API (EC2 con tag Name=jupiter-api), si existe.
 #
-# Se lanza a mano: Actions → "Encender entorno" → Run workflow.
-# Hoy solo enciende la base de datos (RDS jupiter-postgres); cuando exista el servidor de la API
-# (EC2) lo encenderá después de la base de datos, que es de la que depende.
+# Se lanza a mano: Actions → "Encender entorno" → Run workflow. Si algo ya está encendido, lo
+# deja como está. Al terminar, el resumen muestra la dirección de la API (la IP cambia en cada
+# encendido).
 #
-# Para apagarla al terminar: "Apagar entorno". Si nadie lo hace, la programación nocturna la apaga
-# a la 01:30 (hora de Madrid). Si ya está encendida, este workflow termina bien sin hacer nada.
+# Para apagarlo al terminar: "Apagar entorno". Si nadie lo hace, la programación nocturna lo
+# apaga a la 01:30 (hora de Madrid).
 #
-# Rol propio (jupiter-github-actions-entorno), separado del de despliegue: solo puede consultar,
-# encender y apagar esta base de datos.
+# Rol propio (jupiter-github-actions-entorno), separado del de despliegue: solo puede encender y
+# apagar estas dos máquinas y comprobar el estado de la API en la EC2.
 name: ▶️ Encender entorno
 
 on:
@@ -28,10 +29,13 @@ env:
 
 jobs:
   encender:
-    name: Encender la base de datos
+    name: Encender la base de datos y la EC2
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 40
     steps:
+      - name: Checkout repositorio
+        uses: actions/checkout@v4
+
       - name: Credenciales de AWS (OIDC)
         uses: aws-actions/configure-aws-credentials@v4
         with:
@@ -41,8 +45,9 @@ jobs:
           mask-aws-account-id: true
 
       # Estados posibles: stopped, starting, available, stopping y otros transitorios
-      # (backing-up, modifying...). Solo se pide arrancar si está parada.
-      - name: Encender la RDS
+      # (backing-up, modifying...). Solo se pide arrancar si está parada; la espera va después,
+      # para que la RDS y la EC2 arranquen a la vez.
+      - name: Pedir el encendido de la RDS
         run: |
           estado() {
             aws rds describe-db-instances --db-instance-identifier "$DB_INSTANCE" \
@@ -50,7 +55,7 @@ jobs:
           }
           ESTADO=$(estado)
           echo "Estado inicial: $ESTADO"
-          echo "INICIAL=$ESTADO" >> "$GITHUB_ENV"
+          echo "RDS_INICIAL=$ESTADO" >> "$GITHUB_ENV"
 
           # A medio apagar no se puede arrancar: hay que esperar a que termine de pararse.
           while [ "$ESTADO" = "stopping" ]; do
@@ -70,14 +75,46 @@ jobs:
               esac
             fi
           elif [ "$ESTADO" = "available" ]; then
-            echo "Ya estaba encendida: no hay nada que hacer."
+            echo "Ya estaba encendida."
           else
-            echo "Estado '$ESTADO': se espera a que quede disponible."
+            echo "Estado '$ESTADO': se esperará a que quede disponible."
           fi
 
-          # Espera hasta 30 min (60 consultas cada 30 s). Arrancar suele tardar unos minutos.
-          aws rds wait db-instance-available --db-instance-identifier "$DB_INSTANCE"
-          echo "Estado final: $(estado)"
+      - name: Encender la EC2
+        run: |
+          EC2=$(bash .github/scripts/ec2.sh instancia)   # si la consulta falla, el paso falla
+          read -r INSTANCIA ESTADO <<< "$EC2"
+          echo "EC2_INICIAL=${ESTADO:-no existe}" >> "$GITHUB_ENV"
+          if [ -z "${INSTANCIA:-}" ]; then
+            echo "No hay ninguna EC2 con Name=jupiter-api: se enciende solo la base de datos."
+            exit 0
+          fi
+          echo "INSTANCIA=$INSTANCIA" >> "$GITHUB_ENV"
+          if [ "$ESTADO" = "stopping" ]; then
+            aws ec2 wait instance-stopped --instance-ids "$INSTANCIA"
+            ESTADO=stopped
+          fi
+          if [ "$ESTADO" = "stopped" ]; then
+            aws ec2 start-instances --instance-ids "$INSTANCIA" \
+              --query "StartingInstances[0].CurrentState.Name" --output text
+          fi
+          aws ec2 wait instance-running --instance-ids "$INSTANCIA"
+          IP=$(aws ec2 describe-instances --instance-ids "$INSTANCIA" \
+                 --query "Reservations[0].Instances[0].PublicIpAddress" --output text)
+          echo "IP=$IP" >> "$GITHUB_ENV"
+          echo "EC2 encendida: $INSTANCIA ($IP)"
+
+      # Espera hasta 30 min (60 consultas cada 30 s). Arrancar suele tardar unos minutos.
+      - name: Esperar a la base de datos
+        run: aws rds wait db-instance-available --db-instance-identifier "$DB_INSTANCE"
+
+      # jupiter.service ejecuta arrancar.sh en cada encendido; termina en "active" cuando los
+      # contenedores pasan su healthcheck, o en "failed" si algo va mal.
+      - name: Esperar a que la API esté lista
+        if: env.INSTANCIA != ''
+        run: |
+          bash .github/scripts/ec2.sh ejecutar \
+            "timeout 900 bash -c 'until systemctl is-active -q jupiter.service || systemctl is-failed -q jupiter.service; do sleep 5; done'; systemctl is-active jupiter.service && docker compose --env-file /opt/jupiter/versiones.env -f /opt/jupiter/compose.yml ps"
 
       - name: Resumen
         run: |
@@ -86,9 +123,11 @@ jobs:
             echo
             echo "| | |"
             echo "|---|---|"
-            echo "| Base de datos | \`$DB_INSTANCE\` |"
-            echo "| Estado al empezar | $INICIAL |"
-            echo "| Estado ahora | available |"
+            echo "| Base de datos | \`$DB_INSTANCE\` (estaba: $RDS_INICIAL) |"
+            echo "| Servidor de la API | ${INSTANCIA:-no existe} (estaba: $EC2_INICIAL) |"
+            if [ -n "${IP:-}" ]; then
+              echo "| API | http://$IP:8000/docs (solo desde las IP autorizadas) |"
+            fi
             echo "| Apagado automático | 01:30 (hora de Madrid) |"
             echo "| Lanzado por | @$GITHUB_ACTOR |"
           } >> "$GITHUB_STEP_SUMMARY"

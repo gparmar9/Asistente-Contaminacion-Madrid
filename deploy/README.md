@@ -274,6 +274,56 @@ aws ssm describe-automation-executions --filters Key=DocumentNamePrefix,Values=A
 aws rds describe-db-instances --db-instance-identifier jupiter-postgres --query "DBInstances[0].DBInstanceStatus" --output text
 ```
 
+## La API en la EC2 (en preparación)
+
+> **Estado:** los ficheros están en el repositorio; la máquina y sus recursos en AWS **aún no
+> existen**. Esta sección describe cómo funcionará.
+
+Una EC2 `t3.medium` (x86, 30 GB) con Amazon Linux 2023 ejecuta con Docker Compose los tres
+servicios de la API, cada uno con su imagen de ECR. Solo `api-usuario` publica puerto (8000,
+abierto solo a las IP del equipo); `orquestador` y `rag` quedan en la red interna de Docker.
+
+| Fichero ([`ec2/`](ec2/)) | Qué hace |
+|---|---|
+| [`compose.yml`](ec2/compose.yml) | Los servicios con imágenes de ECR (`jupiter-api-usuario`, `jupiter-orquestador`, `jupiter-rag`). Sin base de datos: usa RDS |
+| [`arrancar.sh`](ec2/arrancar.sh) | Lee de SSM qué versión de cada servicio está activa y los secretos, inicia sesión en ECR y levanta los contenedores. Con un argumento (`arrancar.sh rag`) actualiza solo ese servicio |
+| [`jupiter.service`](ec2/jupiter.service) | Servicio de systemd: ejecuta `arrancar.sh` en cada arranque de la máquina |
+| [`user-data.sh`](ec2/user-data.sh) | Primer arranque: instala Docker y Compose y deja instalado lo anterior |
+
+De dónde sale cada cosa (todo con el rol de la máquina, `jupiter-ec2-api`, sin claves en disco):
+
+| Origen | Contenido |
+|---|---|
+| `s3://jupiter-calidad-aire-madrid/ec2/` | Los ficheros de esta carpeta, copiados desde el repositorio |
+| SSM `/jupiter/versiones/<servicio>` | Qué imagen está activa (tag = commit). La escribe el despliegue |
+| SSM `/jupiter/database_url` | La misma cadena de conexión que usa la Lambda |
+| SSM `/jupiter/llm/base_url`, `model`, `api_key` | El proveedor del LLM. **Opcionales**: sin ellos `/chat` responde 503 |
+
+Permisos del rol ([`permisos-ec2-api.json`](iam/permisos-ec2-api.json)): descargar **solo** esas
+tres imágenes, leer **solo** esos parámetros y la carpeta `ec2/` del bucket, más la política
+gestionada `AmazonSSMManagedInstanceCore` para entrar con *Session Manager* (sin SSH ni puerto 22).
+
+Los ficheros de `ec2/` llevan finales de línea LF aunque se trabaje en Windows
+([`.gitattributes`](../.gitattributes)): un script con CRLF falla en Linux.
+
+### Operarla desde GitHub Actions
+
+Todo se hace con los mismos workflows que la Lambda; nadie entra en la máquina.
+
+| Workflow | Qué hace con la EC2 |
+|---|---|
+| **Desplegar** → `api-usuario`, `orquestador` o `rag` | Construye la imagen del código de la rama elegida (normalmente `main`), la sube a ECR con el commit como tag, publica `ec2/` en S3 y guarda la versión en SSM con quién y desde dónde. Si la EC2 está encendida, actualiza **solo ese contenedor** y espera a que esté sano; si está apagada, la usará al encenderse |
+| **Rollback** → mismo componente | Sin versión: tabla de imágenes en ECR, la activa y el historial de cambios. Con versión (commit corto) y motivo: la vuelve a activar sin reconstruir nada |
+| **Encender entorno** | Enciende la RDS y la EC2 a la vez, espera a que la API esté sana y muestra su dirección (la IP cambia en cada encendido) |
+| **Apagar entorno** | Apaga la EC2 y después la RDS. Entre las 22:00 y las 00:00 solo la EC2 (la RDS hace falta para la carga) |
+
+Los workflows localizan la máquina por su etiqueta `Name=jupiter-api` y le ejecutan comandos
+con *SSM Run Command* ([`.github/scripts/ec2.sh`](../.github/scripts/ec2.sh)). Los roles solo pueden
+encender, apagar o ejecutar comandos en instancias con esa etiqueta.
+
+Antes de encender la EC2 por primera vez hay que desplegar los tres servicios: sin versión de alguno,
+`arrancar.sh` se detiene con un mensaje claro.
+
 ## Probar en local antes de desplegar
 
 ```powershell

@@ -653,6 +653,38 @@ la enciende a mano para trabajar o hacer una demo.
   coincidir con la Lambda (22:45 UTC) y hacerla fallar esa noche. Lo detecta la alarma de errores y
   la carga es idempotente, así que basta con relanzarla. Ocurre pocas veces al año.
 
+### 8.9 La API en una EC2 — diseño (recursos de AWS pendientes de crear)
+
+- **Máquina:** EC2 `t3.medium` (2 vCPU, 4 GB, x86) con Amazon Linux 2023 y 30 GB de disco. x86
+  y no Graviton (`t4g`, algo más barata) para construir las imágenes en los runners de GitHub, que
+  son x86, sin emular ARM para compilar torch. Encendida solo para trabajar o hacer demos y apagada
+  cada noche, como la RDS: ~2,5 $/mes de disco más ~0,045 $ por hora encendida `[estimación]`.
+- **Un contenedor por servicio** (`api-usuario`, `orquestador`, `rag`), con las imágenes de ECR y
+  la versión activa de cada uno en SSM (`/jupiter/versiones/<servicio>`): se despliega o se vuelve
+  atrás una pieza sin tocar las demás. La máquina no construye nada.
+- **Arranque autónomo:** un servicio de systemd ejecuta `arrancar.sh` en cada encendido, que lee
+  versiones y secretos de SSM con el rol de la máquina y levanta los contenedores. Encender la EC2
+  basta para tener la API.
+- **Ficheros de arranque por S3** (`s3://…/ec2/`): lo que corre en la máquina sale del repositorio
+  y el despliegue lo puede actualizar, sin acceder a la máquina.
+- **Seguridad:** solo `api-usuario` publica puerto, abierto solo a las IP del equipo (la API no tiene
+  autenticación y cada pregunta al chat cuesta dinero). Sin SSH: acceso con *Session Manager*.
+  Secretos en ficheros de solo root y repartidos: la clave del LLM solo la recibe el orquestador.
+- **LLM desacoplado:** `LLM_BASE_URL`, `LLM_MODEL` y `LLM_API_KEY` se leen de SSM si existen; sin
+  ellos todo funciona salvo `/chat`, que responde 503. Elegir proveedor no bloquea el despliegue.
+- **CI/CD solo por GitHub Actions:** «Desplegar» y «Rollback» suman `api-usuario`, `orquestador` y
+  `rag`; si la EC2 está encendida actualizan solo ese contenedor por *SSM Run Command* y esperan a
+  que pase su healthcheck (`docker compose up --wait`), así un despliegue roto falla en GitHub. La
+  versión activa se guarda en SSM con descripción (quién, qué y desde qué rama) y su historial sirve
+  de registro de despliegues y rollbacks. «Encender/Apagar entorno» gestionan también la EC2. Los
+  roles solo actúan sobre instancias con la etiqueta `Name=jupiter-api`.
+- **El orquestador se despliega ya**, aunque su código siga cambiando: `api-usuario` depende de él
+  para arrancar y cada despliegue construye la imagen con el código del momento.
+- **Probado sin AWS:** `arrancar.sh` se ejecutó en local con `aws` y `docker` simulados en cinco
+  escenarios (todo, un solo servicio, sin LLM, servicio inválido y versión ausente). La prueba
+  destapó que el mensaje de error de una versión ausente se escribía dentro de `versiones.env` en
+  vez de en la terminal; corregido enviando los mensajes a stderr.
+
 ---
 
 ## 9. Metodología y calidad del software
@@ -911,6 +943,14 @@ la enciende a mano para trabajar o hacer una demo.
   y `orquestador` (51), cada uno con su `requirements-dev.txt`. Hasta ahora solo corrían en local
   aunque el README decía lo contrario. Reproducidos antes en entornos virtuales limpios. Como
   `desplegar.yml` reutiliza `tests.yml`, ningún despliegue sale ya sin que pasen también estos |
+| 2026-10-05 | **Infraestructura de la EC2, parte del repositorio** (Guillermo, rama
+  `feature/infraestructura-ec2`): compose de producción, `arrancar.sh`, servicio de systemd,
+  `user-data.sh`, rol `jupiter-ec2-api` y `.gitattributes` para forzar LF en los ficheros que se
+  ejecutan en Linux. `arrancar.sh` probado con comandos simulados (§8.9). Mismo día: workflows
+  ampliados (Desplegar, Rollback, Encender y Apagar entorno) con la EC2 y el script `ec2.sh`,
+  también probado con `aws` simulado; la prueba llevó a separar la consulta de la instancia en dos
+  pasos para que un fallo de permisos no se confundiera con «la EC2 no existe». Pendiente: crear
+  los recursos en AWS y la primera ejecución real |
 
 
 ---

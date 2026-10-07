@@ -1,0 +1,19 @@
+# Servicio de systemd: levanta la API cada vez que arranca la EC2.
+# Se instala en /etc/systemd/system/ desde user-data.sh.
+[Unit]
+Description=Jupiter: API en contenedores (api-usuario, orquestador, rag)
+Requires=docker.service
+After=docker.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+WorkingDirectory=/opt/jupiter
+ExecStart=/opt/jupiter/arrancar.sh
+ExecStop=/usr/bin/docker compose --env-file /opt/jupiter/versiones.env -f /opt/jupiter/compose.yml down
+# La primera vez descarga ~3 GB de imágenes.
+TimeoutStartSec=900
+
+[Install]
+WantedBy=multi-user.target
