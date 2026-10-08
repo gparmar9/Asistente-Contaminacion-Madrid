@@ -124,3 +124,28 @@ jobs:
 
       - name: Ejecutar tests
         run: pytest tests -v
+
+  # El agente nuevo (Agente/): LLM falso con guion y RAG fingido con httpx.MockTransport.
+  # Independiente del orquestador: sus propios requirements y su propio job.
+  agente:
+    name: Tests del agente
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: Agente
+    steps:
+      - name: Checkout repositorio
+        uses: actions/checkout@v4
+
+      - name: Configurar Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+          cache-dependency-path: Agente/requirements*.txt
+
+      - name: Instalar dependencias
+        run: pip install -r requirements-dev.txt
+
+      - name: Ejecutar tests
+        run: pytest tests -v

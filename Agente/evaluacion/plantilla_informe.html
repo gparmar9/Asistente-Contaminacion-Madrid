@@ -1,0 +1,796 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Trazas del agente</title>
+<!--
+  Plantilla del informe visual de trazas. informe_trazas.py sustituye el marcador de datos por el
+  JSON de datos(). Sin dependencias externas: se abre sin red. Todas las agregaciones se hacen aquí
+  para poder filtrar; siguen las mismas reglas que el informe markdown (mediana con n, p95 por
+  rango más cercano, turnos sin tokens o sin precio fuera del coste).
+-->
+<style>
+:root {
+  color-scheme: light;
+  --page: #f9f9f7; --surface: #fcfcfb; --ink: #0b0b0b; --ink-2: #52514e; --muted: #898781;
+  --grid: #e1e0d9; --axis: #c3c2b7; --border: rgba(11,11,11,0.10); --wash: rgba(11,11,11,0.04);
+  --neutral: #c3c2b7; --neutral-2: #898781; --critical: #d03b3b; --good: #006300;
+  --s1: #2a78d6; --s2: #eb6834; --s3: #1baf7a; --s4: #eda100;
+  --s5: #e87ba4; --s6: #008300; --s7: #4a3aa7; --s8: #e34948;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+    --page: #0d0d0d; --surface: #1a1a19; --ink: #ffffff; --ink-2: #c3c2b7; --muted: #898781;
+    --grid: #2c2c2a; --axis: #383835; --border: rgba(255,255,255,0.10); --wash: rgba(255,255,255,0.06);
+    --neutral: #4a4a46; --neutral-2: #6b6a65; --critical: #e66767; --good: #0ca30c;
+    --s1: #3987e5; --s2: #d95926; --s3: #199e70; --s4: #c98500;
+    --s5: #d55181; --s6: #008300; --s7: #9085e9; --s8: #e66767;
+  }
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --page: #0d0d0d; --surface: #1a1a19; --ink: #ffffff; --ink-2: #c3c2b7; --muted: #898781;
+  --grid: #2c2c2a; --axis: #383835; --border: rgba(255,255,255,0.10); --wash: rgba(255,255,255,0.06);
+  --neutral: #4a4a46; --neutral-2: #6b6a65; --critical: #e66767; --good: #0ca30c;
+  --s1: #3987e5; --s2: #d95926; --s3: #199e70; --s4: #c98500;
+  --s5: #d55181; --s6: #008300; --s7: #9085e9; --s8: #e66767;
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0; background: var(--page); color: var(--ink);
+  font: 14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+main { min-width: 0; max-width: 1180px; margin: 0 auto; padding: 24px 16px 64px; }
+h1 { font-size: 22px; margin: 0 0 4px; font-weight: 600; }
+h2 { font-size: 16px; margin: 0 0 2px; font-weight: 600; }
+p { margin: 0; }
+.sub { color: var(--ink-2); }
+.nota { color: var(--muted); font-size: 12px; }
+header { margin-bottom: 16px; }
+header .meta { color: var(--ink-2); margin-top: 4px; }
+
+.filtros {
+  position: sticky; top: 0; z-index: 5; display: flex; flex-wrap: wrap; gap: 8px 16px; align-items: center;
+  padding: 10px 0; margin-bottom: 8px; background: var(--page); border-bottom: 1px solid var(--grid);
+}
+.filtros label { display: inline-flex; align-items: center; gap: 6px; color: var(--ink-2); }
+.filtros select, .filtros button {
+  font: inherit; color: var(--ink); background: var(--surface); border: 1px solid var(--border);
+  border-radius: 6px; padding: 4px 8px;
+}
+.filtros button { cursor: pointer; }
+.chip {
+  display: inline-flex; align-items: center; gap: 6px; padding: 3px 10px; border-radius: 999px;
+  border: 1px solid var(--border); background: var(--surface); cursor: pointer; user-select: none;
+}
+.chip input { margin: 0; }
+.chip.apagado { opacity: 0.5; }
+.muestra { display: inline-block; width: 10px; height: 10px; border-radius: 50%; flex: none; }
+.empuje { flex: 1; }
+
+.tarjeta {
+  background: var(--surface); border: 1px solid var(--border); border-radius: 10px;
+  padding: 16px; margin-top: 16px;
+}
+.tarjeta > .cabecera { display: flex; flex-wrap: wrap; gap: 4px 16px; align-items: baseline; margin-bottom: 12px; }
+.tarjeta > .cabecera .sub { flex: 1 1 320px; }
+.lotes { display: grid; gap: 16px; grid-template-columns: repeat(auto-fit, minmax(min(320px, 100%), 1fr)); }
+.lote h3 { display: flex; align-items: center; gap: 8px; font-size: 15px; margin: 0; }
+.lote .modelo { color: var(--muted); font-size: 12px; margin: 2px 0 12px 18px; word-break: break-all; }
+.cifras { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(130px, 100%), 1fr)); gap: 12px 16px; }
+.cifra .etq { color: var(--ink-2); font-size: 12px; }
+.cifra .val { font-size: 22px; font-weight: 600; }
+.cifra .val small { font-size: 13px; font-weight: 400; color: var(--ink-2); }
+
+.leyenda { display: flex; flex-wrap: wrap; gap: 4px 16px; color: var(--ink-2); font-size: 12px; margin-bottom: 6px; }
+.leyenda span { display: inline-flex; align-items: center; gap: 6px; }
+.clave { display: inline-block; width: 14px; height: 10px; border-radius: 2px; }
+.grafica { width: 100%; overflow: hidden; }
+svg { display: block; font: 11px system-ui, -apple-system, "Segoe UI", sans-serif; }
+svg text { fill: var(--muted); }
+svg .etq-fila { fill: var(--ink-2); font-size: 12px; }
+svg .valor { fill: var(--ink-2); font-variant-numeric: tabular-nums; }
+svg .rejilla { stroke: var(--grid); stroke-width: 1; }
+svg .base { stroke: var(--axis); stroke-width: 1; }
+svg .marca { cursor: pointer; }
+svg .marca:hover .punto, svg .marca:focus .punto, svg .marca:hover .barra, svg .marca:focus .barra { filter: brightness(1.15); }
+svg .marca:focus { outline: none; }
+svg .marca:focus .anillo { stroke: var(--ink); }
+svg .sel { stroke: var(--ink); stroke-width: 2; }
+
+details { margin-top: 10px; }
+summary { cursor: pointer; color: var(--ink-2); font-size: 12px; }
+.tabla-scroll { overflow-x: auto; }
+table { border-collapse: collapse; width: 100%; font-size: 13px; }
+th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--grid); vertical-align: top; }
+th { color: var(--ink-2); font-weight: 600; white-space: nowrap; }
+td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+#turnos th { cursor: pointer; }
+#turnos th[aria-sort="ascending"]::after { content: " ▲"; }
+#turnos th[aria-sort="descending"]::after { content: " ▼"; }
+#turnos tbody tr { cursor: pointer; }
+#turnos tbody tr:hover { background: var(--wash); }
+#turnos tbody tr.elegido { background: var(--wash); box-shadow: inset 3px 0 0 var(--ink); }
+.pregunta { max-width: 380px; }
+.estado-error { color: var(--critical); font-weight: 600; white-space: nowrap; }
+.estado-ok { color: var(--ink-2); white-space: nowrap; }
+
+.cascada-meta { display: flex; flex-wrap: wrap; gap: 4px 16px; color: var(--ink-2); margin: 4px 0 12px; }
+.respuesta { white-space: pre-wrap; color: var(--ink-2); font-size: 13px; max-height: 280px; overflow: auto;
+  padding: 8px; border: 1px solid var(--grid); border-radius: 6px; margin-top: 6px; }
+
+#tip {
+  position: fixed; z-index: 10; pointer-events: none; display: none; max-width: 340px;
+  background: var(--surface); color: var(--ink); border: 1px solid var(--border); border-radius: 8px;
+  box-shadow: 0 4px 16px rgba(0,0,0,0.15); padding: 8px 10px; font-size: 12px;
+}
+#tip .t { font-weight: 600; margin-bottom: 4px; }
+#tip .f { display: flex; gap: 8px; align-items: center; }
+#tip .f b { font-variant-numeric: tabular-nums; }
+#tip .f span { color: var(--ink-2); }
+#tip .k { display: inline-block; width: 10px; height: 2px; }
+.vacio { color: var(--muted); padding: 24px 0; text-align: center; }
+@media (max-width: 640px) { .cifra .val { font-size: 19px; } }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <h1>Trazas del agente: latencia y coste</h1>
+    <p class="meta" id="meta"></p>
+    <p class="nota">Medianas con su n; el p95 es solo descriptivo (muestras pequeñas). Un turno sin
+      tokens en alguna llamada al LLM, o con un modelo sin precio, no entra en las cifras de coste.</p>
+  </header>
+
+  <div class="filtros" role="group" aria-label="Filtros">
+    <span id="filtro-lotes" style="display:contents"></span>
+    <label>Ruta <select id="filtro-ruta"></select></label>
+    <label>Intención <select id="filtro-intencion"></select></label>
+    <span class="empuje"></span>
+    <label><input type="checkbox" id="escala-log"> Escala logarítmica</label>
+    <button type="button" id="tema" title="Cambiar entre tema claro y oscuro">Tema</button>
+  </div>
+
+  <section id="resumen"></section>
+
+  <section class="tarjeta">
+    <div class="cabecera"><h2>Latencia y coste por turno</h2>
+      <p class="sub">Cada punto es un turno. Arriba a la derecha, lento y caro. Pulsa un punto para ver su cascada.</p></div>
+    <div class="leyenda" id="leyenda-dispersion"></div>
+    <div class="grafica" id="dispersion"></div>
+  </section>
+
+  <section class="tarjeta">
+    <div class="cabecera"><h2>Latencia por fase</h2>
+      <p class="sub">Puntos tenues: cada span. Marca grande: mediana; raya: hasta el p95. Las llamadas al LLM van por la fase que las contiene; <code>llm (bucle)</code> es una por vuelta.</p></div>
+    <div class="leyenda" id="leyenda-fases"></div>
+    <div class="grafica" id="fases"></div>
+    <details><summary>Ver tabla</summary><div class="tabla-scroll" id="tabla-fases"></div></details>
+  </section>
+
+  <section class="tarjeta">
+    <div class="cabecera"><h2>Latencia del turno por ruta</h2>
+      <p class="sub">Puntos tenues: cada turno; marca grande: mediana. Pulsa un punto para ver su cascada.</p></div>
+    <div class="leyenda" id="leyenda-rutas"></div>
+    <div class="grafica" id="rutas"></div>
+  </section>
+
+  <section class="tarjeta">
+    <div class="cabecera"><h2>Dónde se va el coste</h2>
+      <p class="sub">Coste medio por turno de las llamadas al LLM de cada fase (media, no mediana: así las fases suman el coste medio del turno). Solo turnos con coste completo.</p></div>
+    <div class="leyenda" id="leyenda-coste"></div>
+    <div class="grafica" id="coste"></div>
+    <details><summary>Ver tabla</summary><div class="tabla-scroll" id="tabla-coste"></div></details>
+  </section>
+
+  <section class="tarjeta">
+    <div class="cabecera"><h2>Turnos</h2>
+      <p class="sub">Pulsa una cabecera para ordenar y una fila para ver su cascada.</p></div>
+    <div class="tabla-scroll" id="turnos"></div>
+  </section>
+
+  <section class="tarjeta" id="seccion-cascada">
+    <div class="cabecera"><h2>Cascada del turno</h2>
+      <p class="sub">Spans en orden de inicio; la sangría es la jerarquía. Los mismos datos que Phoenix, con el coste.</p></div>
+    <div id="cascada"></div>
+  </section>
+
+  <section class="tarjeta">
+    <div class="cabecera"><h2>Calidad del turno y decisiones del código</h2></div>
+    <div class="tabla-scroll" id="calidad"></div>
+  </section>
+</main>
+<div id="tip" role="tooltip"></div>
+
+<script id="datos" type="application/json">__DATOS__</script>
+<script>
+"use strict";
+const DATOS = JSON.parse(document.getElementById("datos").textContent);
+const SVGNS = "http://www.w3.org/2000/svg";
+const ORDEN_TIPO = { AGENT: 0, CHAIN: 1, LLM: 2, TOOL: 3 };
+
+// ------------------------------------------------------------------ estado y colores
+
+// El color sigue al lote (orden de aparición en todo el fichero): filtrar nunca lo cambia.
+const LOTES = [...new Set(DATOS.turnos.map(t => t.lote))];
+const color = lote => `var(--s${(LOTES.indexOf(lote) % 8) + 1})`;
+const estado = { lotes: new Set(LOTES), ruta: "", intencion: "", log: false, elegido: null,
+                 orden: { col: "inicio", asc: true } };
+
+const filtrados = () => DATOS.turnos.filter(t =>
+  estado.lotes.has(t.lote) && (!estado.ruta || t.ruta === estado.ruta) &&
+  (!estado.intencion || t.intencion === estado.intencion));
+const porLote = ts => LOTES.filter(l => estado.lotes.has(l))
+  .map(l => [l, ts.filter(t => t.lote === l)]).filter(([, g]) => g.length);
+
+// ------------------------------------------------------------------ estadística y formato
+
+function mediana(v) {
+  if (!v.length) return null;
+  const o = [...v].sort((a, b) => a - b), m = o.length >> 1;
+  return o.length % 2 ? o[m] : (o[m - 1] + o[m]) / 2;
+}
+function p95(v) {  // rango más cercano, como el informe markdown
+  if (!v.length) return null;
+  const o = [...v].sort((a, b) => a - b);
+  return o[Math.ceil(0.95 * o.length) - 1];
+}
+const suma = v => v.reduce((a, b) => a + b, 0);
+const nf = (d) => new Intl.NumberFormat("es-ES", { maximumFractionDigits: d, minimumFractionDigits: d });
+const entero = v => v == null ? "—" : nf(0).format(v);
+function ms(v) {
+  if (v == null) return "—";
+  return v < 1000 ? `${nf(0).format(v)} ms` : `${nf(v < 10000 ? 2 : v < 100000 ? 1 : 0).format(v / 1000)} s`;
+}
+function usd(v) {
+  if (v == null) return "—";
+  if (v === 0) return "0 $";
+  return `${new Intl.NumberFormat("es-ES", { maximumSignificantDigits: 2 }).format(v)} $`;
+}
+const pct = v => `${nf(0).format(v * 100)} %`;
+
+// ------------------------------------------------------------------ utilidades DOM y SVG
+
+function el(etiqueta, attrs = {}, ...hijos) {
+  const n = document.createElement(etiqueta);
+  for (const [k, v] of Object.entries(attrs)) {
+    if (k === "texto") n.textContent = v; else if (k === "clase") n.className = v; else n.setAttribute(k, v);
+  }
+  for (const h of hijos) if (h != null) n.append(h);
+  return n;
+}
+function s(etiqueta, attrs = {}, padre) {
+  const n = document.createElementNS(SVGNS, etiqueta);
+  for (const [k, v] of Object.entries(attrs)) {
+    if (k === "texto") n.textContent = v; else n.setAttribute(k, v);
+  }
+  if (padre) padre.append(n);
+  return n;
+}
+function vaciar(id) { const n = document.getElementById(id); n.replaceChildren(); return n; }
+function ancho(id) { return Math.max(260, document.getElementById(id).clientWidth); }
+
+function leyenda(id, lotes) {
+  const n = vaciar(id);
+  if (lotes.length < 2) return;  // una sola serie: el título basta
+  for (const l of lotes) n.append(el("span", {}, el("span", { clase: "muestra", style: `background:${color(l)}` }), l));
+}
+
+// Tooltip: valor primero, etiqueta después; siempre con textContent (los datos no son de fiar).
+const tip = document.getElementById("tip");
+function mostrarTip(evento, titulo, filas) {
+  tip.replaceChildren();
+  if (titulo) tip.append(el("div", { clase: "t", texto: titulo }));
+  for (const [valor, etiqueta, clave] of filas) {
+    const f = el("div", { clase: "f" });
+    if (clave) f.append(el("span", { clase: "k", style: `background:${clave}` }));
+    f.append(el("b", { texto: valor }), el("span", { texto: etiqueta }));
+    tip.append(f);
+  }
+  tip.style.display = "block";
+  let x, y;
+  if (evento.clientX != null && evento.type !== "focus") { x = evento.clientX; y = evento.clientY; }
+  else { const r = evento.target.getBoundingClientRect(); x = r.left + r.width / 2; y = r.top; }
+  const w = tip.offsetWidth, h = tip.offsetHeight;
+  tip.style.left = `${Math.min(window.innerWidth - w - 8, Math.max(8, x + 14))}px`;
+  tip.style.top = `${y + 14 + h > window.innerHeight ? y - h - 10 : y + 14}px`;
+}
+const ocultarTip = () => { tip.style.display = "none"; };
+function conTip(nodo, titulo, filas, alPulsar) {
+  nodo.setAttribute("tabindex", "0");
+  nodo.classList.add("marca");
+  const ver = e => mostrarTip(e, titulo, typeof filas === "function" ? filas() : filas);
+  nodo.addEventListener("pointermove", ver);
+  nodo.addEventListener("focus", ver);
+  nodo.addEventListener("pointerleave", ocultarTip);
+  nodo.addEventListener("blur", ocultarTip);
+  if (alPulsar) {
+    nodo.addEventListener("click", alPulsar);
+    nodo.addEventListener("keydown", e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); alPulsar(); } });
+  }
+}
+
+// Escalas: lineal con ticks redondos, o logarítmica en potencias de 10.
+function ticksLineales(max, n = 5) {
+  if (!(max > 0)) return [0, 1];
+  const paso0 = max / n, mag = 10 ** Math.floor(Math.log10(paso0)), r = paso0 / mag;
+  const paso = (r >= 7.5 ? 10 : r >= 3.5 ? 5 : r >= 1.5 ? 2 : 1) * mag;
+  const out = [];
+  for (let v = 0; v < max + paso * 0.999; v += paso) out.push(+v.toPrecision(12));
+  return out;
+}
+function escala(min, max, x0, x1, log) {
+  const n = Math.max(2, Math.min(6, Math.floor(Math.abs(x1 - x0) / 80)));
+  if (log) {
+    const a = 10 ** Math.floor(Math.log10(Math.max(min, 1e-9))), b = 10 ** Math.ceil(Math.log10(Math.max(max, a * 10)));
+    const f = v => x0 + (Math.log10(Math.max(v, a)) - Math.log10(a)) / (Math.log10(b) - Math.log10(a)) * (x1 - x0);
+    const ticks = [];
+    for (let v = a; v <= b * 1.0001; v *= 10) ticks.push(v);
+    return { f, ticks };
+  }
+  const ticks = ticksLineales(max, n);
+  const top = ticks[ticks.length - 1];
+  return { f: v => x0 + v / top * (x1 - x0), ticks };
+}
+
+// ------------------------------------------------------------------ filtros
+
+function construirFiltros() {
+  const caja = document.getElementById("filtro-lotes");
+  for (const l of LOTES) {
+    const chk = el("input", { type: "checkbox" });
+    chk.checked = true;
+    const chip = el("label", { clase: "chip" }, chk, el("span", { clase: "muestra", style: `background:${color(l)}` }), l);
+    chk.addEventListener("change", () => {
+      if (chk.checked) estado.lotes.add(l); else estado.lotes.delete(l);
+      chip.classList.toggle("apagado", !chk.checked);
+      pintar();
+    });
+    caja.append(chip);
+  }
+  for (const [id, campo] of [["filtro-ruta", "ruta"], ["filtro-intencion", "intencion"]]) {
+    const sel = document.getElementById(id);
+    sel.append(el("option", { value: "", texto: "Todas" }));
+    for (const v of [...new Set(DATOS.turnos.map(t => t[campo]))].sort()) sel.append(el("option", { value: v, texto: v }));
+    sel.addEventListener("change", () => { estado[campo] = sel.value; pintar(); });
+  }
+  document.getElementById("escala-log").addEventListener("change", e => { estado.log = e.target.checked; pintar(); });
+  document.getElementById("tema").addEventListener("click", () => {
+    const raiz = document.documentElement;
+    const oscuro = raiz.dataset.theme ? raiz.dataset.theme === "dark" : matchMedia("(prefers-color-scheme: dark)").matches;
+    raiz.dataset.theme = oscuro ? "light" : "dark";
+  });
+}
+
+// ------------------------------------------------------------------ resumen por lote
+
+function pintarResumen(ts) {
+  const n = vaciar("resumen");
+  const grupos = porLote(ts);
+  if (!grupos.length) { n.append(el("div", { clase: "tarjeta vacio", texto: "Ningún turno con estos filtros." })); return; }
+  const rejilla = el("div", { clase: "lotes" });
+  for (const [lote, g] of grupos) {
+    const dur = g.map(t => t.duracion_ms);
+    const conCoste = g.filter(t => t.coste_usd != null);
+    const completos = g.filter(t => t.tokens_entrada != null);
+    const docs = g.filter(t => t.valida != null);
+    const primera = docs.filter(t => t.valida === true && t.reparaciones === 0).length;
+    const costeTotal = suma(conCoste.map(t => t.coste_usd));
+    const modelos = [...new Set(g.flatMap(t => t.modelos))].join(", ") || "—";
+    const cifra = (etq, val, extra) => el("div", { clase: "cifra" }, el("div", { clase: "etq", texto: etq }),
+      el("div", { clase: "val", texto: val }, extra ? el("small", { texto: ` ${extra}` }) : null));
+    rejilla.append(el("div", { clase: "tarjeta lote" },
+      el("h3", {}, el("span", { clase: "muestra", style: `background:${color(lote)}` }), lote),
+      el("div", { clase: "modelo", texto: modelos }),
+      el("div", { clase: "cifras" },
+        cifra("Turnos", entero(g.length)),
+        cifra("Latencia mediana", ms(mediana(dur)), `p95 ${ms(p95(dur))}`),
+        cifra("Coste total", conCoste.length ? usd(costeTotal) : "—",
+              g.length - conCoste.length ? `${g.length - conCoste.length} sin coste` : null),
+        cifra("Coste por 1.000 turnos", conCoste.length ? usd(costeTotal / conCoste.length * 1000) : "—", "media"),
+        cifra("Coste mediano por turno", usd(mediana(conCoste.map(t => t.coste_usd)))),
+        cifra("Tokens mediana", `${entero(mediana(completos.map(t => t.tokens_entrada)))} / ${entero(mediana(completos.map(t => t.tokens_salida)))}`, "ent. / sal."),
+        cifra("Síntesis válida a la primera", docs.length ? `${primera}/${docs.length}` : "—"),
+        cifra("Turnos con error", entero(g.filter(t => t.error).length)))));
+  }
+  n.append(rejilla);
+}
+
+// ------------------------------------------------------------------ dispersión latencia-coste
+
+function pintarDispersion(ts) {
+  const n = vaciar("dispersion");
+  const puntos = ts.filter(t => t.coste_usd != null);
+  leyenda("leyenda-dispersion", porLote(ts).map(([l]) => l));
+  if (!puntos.length) { n.append(el("div", { clase: "vacio", texto: "Sin turnos con coste completo." })); return; }
+  const W = ancho("dispersion"), H = 300, m = { l: 64, r: 16, t: 12, b: 36 };
+  const svg = s("svg", { width: W, height: H, role: "img", "aria-label": "Latencia frente a coste por turno" }, n);
+  const ex = escala(Math.min(...puntos.map(t => t.duracion_ms)), Math.max(...puntos.map(t => t.duracion_ms)), m.l, W - m.r, estado.log);
+  const ey = escala(0, Math.max(...puntos.map(t => t.coste_usd)), H - m.b, m.t, false);
+  for (const v of ey.ticks) {
+    s("line", { class: "rejilla", x1: m.l, x2: W - m.r, y1: ey.f(v), y2: ey.f(v) }, svg);
+    s("text", { x: m.l - 6, y: ey.f(v) + 4, "text-anchor": "end", texto: usd(v) }, svg);
+  }
+  for (const v of ex.ticks) s("text", { x: ex.f(v), y: H - m.b + 16, "text-anchor": "middle", texto: ms(v) }, svg);
+  s("text", { x: (m.l + W - m.r) / 2, y: H - 4, "text-anchor": "middle", texto: "latencia del turno" }, svg);
+  s("line", { class: "base", x1: m.l, x2: W - m.r, y1: H - m.b, y2: H - m.b }, svg);
+  for (const t of puntos) {
+    const g = s("g", {}, svg);
+    const cx = ex.f(t.duracion_ms), cy = ey.f(t.coste_usd);
+    s("circle", { cx, cy, r: 12, fill: "transparent" }, g);  // área de acierto mayor que la marca
+    s("circle", { class: "punto anillo", cx, cy, r: 5, fill: color(t.lote), stroke: "var(--surface)", "stroke-width": 2 }, g);
+    if (t.id === estado.elegido) s("circle", { class: "sel", cx, cy, r: 9, fill: "none" }, g);
+    conTip(g, recorte(t.pregunta, 90), [[ms(t.duracion_ms), "latencia"], [usd(t.coste_usd), "coste"],
+      [`${entero(t.tokens_entrada)} / ${entero(t.tokens_salida)}`, "tokens ent. / sal."],
+      [`${t.ruta} · ${t.intencion}`, "ruta · intención"], [t.lote, "lote", color(t.lote)]], () => elegir(t.id));
+  }
+  const fuera = ts.length - puntos.length;
+  if (fuera) n.append(el("p", { clase: "nota", texto: `${fuera} turno(s) sin coste completo no aparecen.` }));
+}
+
+// ------------------------------------------------------------------ distribución por filas (fases y rutas)
+
+// filas: [{etiqueta, porLote: {lote: [{v, turno}]}}]. Una subfila por lote con puntos, mediana y p95.
+function distribucion(idGrafica, filas, lotes, alPulsarPunto) {
+  const n = vaciar(idGrafica);
+  if (!filas.length) { n.append(el("div", { clase: "vacio", texto: "Sin datos con estos filtros." })); return; }
+  const W = ancho(idGrafica), etqW = Math.min(190, W * 0.3), valW = 96;
+  const sub = 18, hueco = 10, m = { t: 8, b: 30 };
+  const alturaFila = lotes.length * sub + hueco;
+  const H = m.t + filas.length * alturaFila + m.b;
+  const svg = s("svg", { width: W, height: H, role: "img", "aria-label": "Distribución de latencias" }, n);
+  const todos = filas.flatMap(f => Object.values(f.porLote).flat().map(p => p.v));
+  const ex = escala(Math.max(1, Math.min(...todos)), Math.max(...todos), etqW + 8, W - valW - 8, estado.log);
+  for (const v of ex.ticks) {
+    s("line", { class: "rejilla", x1: ex.f(v), x2: ex.f(v), y1: m.t, y2: H - m.b }, svg);
+    s("text", { x: ex.f(v), y: H - m.b + 16, "text-anchor": "middle", texto: ms(v) }, svg);
+  }
+  s("text", { x: W - 4, y: H - m.b + 16, "text-anchor": "end", texto: "mediana · n" }, svg);
+  filas.forEach((f, i) => {
+    const y0 = m.t + i * alturaFila;
+    s("text", { class: "etq-fila", x: 0, y: y0 + (lotes.length * sub) / 2 + 4, texto: recorte(f.etiqueta, 28) }, svg);
+    if (i) s("line", { class: "rejilla", x1: 0, x2: W, y1: y0 - hueco / 2, y2: y0 - hueco / 2 }, svg);
+    lotes.forEach((l, j) => {
+      const pts = f.porLote[l] || [];
+      const y = y0 + j * sub + sub / 2;
+      if (!pts.length) return;
+      const vals = pts.map(p => p.v), med = mediana(vals), p = p95(vals);
+      for (const pt of pts) {
+        const g = s("g", {}, svg);
+        s("circle", { cx: ex.f(pt.v), cy: y, r: 9, fill: "transparent" }, g);
+        s("circle", { class: "punto", cx: ex.f(pt.v), cy: y, r: 3, fill: color(l), "fill-opacity": 0.35 }, g);
+        conTip(g, pt.turno ? recorte(pt.turno.pregunta, 90) : f.etiqueta,
+               [[ms(pt.v), f.etiqueta], [l, "lote", color(l)]], pt.turno ? () => alPulsarPunto(pt.turno) : null);
+      }
+      s("line", { x1: ex.f(med), x2: ex.f(p), y1: y, y2: y, stroke: color(l), "stroke-width": 2, "stroke-linecap": "round" }, svg);
+      const g = s("g", {}, svg);
+      s("rect", { x: ex.f(med) - 10, y: y - 8, width: 20, height: 16, fill: "transparent" }, g);
+      s("rect", { class: "punto anillo", x: ex.f(med) - 2, y: y - 7, width: 4, height: 14, rx: 2, fill: color(l), stroke: "var(--surface)", "stroke-width": 1 }, g);
+      conTip(g, `${f.etiqueta} · ${l}`, [[ms(med), "mediana"], [ms(p), "p95"], [entero(vals.length), "n"],
+        [ms(Math.min(...vals)), "mínimo"], [ms(Math.max(...vals)), "máximo"]]);
+      s("text", { class: "valor", x: W - 4, y: y + 4, "text-anchor": "end", texto: `${ms(med)} · ${vals.length}` }, svg);
+    });
+  });
+}
+
+function filasFases(ts) {
+  const filas = new Map();
+  for (const t of ts) for (const sp of t.spans) {
+    if (sp.duracion_ms == null) continue;
+    if (!filas.has(sp.grupo)) filas.set(sp.grupo, { etiqueta: sp.grupo, fase: sp.fase, tipo: sp.tipo, porLote: {} });
+    (filas.get(sp.grupo).porLote[t.lote] ||= []).push({ v: sp.duracion_ms, turno: t });
+  }
+  const idx = f => { const i = DATOS.fases.indexOf(f); return f === "turno" ? -1 : i < 0 ? 99 : i; };
+  return [...filas.values()].sort((a, b) => idx(a.fase) - idx(b.fase) || a.fase.localeCompare(b.fase) ||
+    (ORDEN_TIPO[a.tipo] ?? 9) - (ORDEN_TIPO[b.tipo] ?? 9) || a.etiqueta.localeCompare(b.etiqueta));
+}
+
+function pintarFases(ts) {
+  const lotes = porLote(ts).map(([l]) => l);
+  leyenda("leyenda-fases", lotes);
+  const filas = filasFases(ts);
+  distribucion("fases", filas, lotes, t => elegir(t.id));
+  const cab = ["Span", "Lote", "n", "Mediana", "p95"];
+  const cuerpo = filas.flatMap(f => lotes.filter(l => f.porLote[l]).map(l => {
+    const v = f.porLote[l].map(p => p.v);
+    return [f.etiqueta, l, entero(v.length), ms(mediana(v)), ms(p95(v))];
+  }));
+  tabla("tabla-fases", cab, cuerpo, [2, 3, 4]);
+}
+
+function pintarRutas(ts) {
+  const lotes = porLote(ts).map(([l]) => l);
+  leyenda("leyenda-rutas", lotes);
+  const filas = new Map();
+  for (const t of ts) {
+    const k = `${t.ruta} · ${t.intencion}`;
+    if (!filas.has(k)) filas.set(k, { etiqueta: k, porLote: {} });
+    (filas.get(k).porLote[t.lote] ||= []).push({ v: t.duracion_ms, turno: t });
+  }
+  distribucion("rutas", [...filas.values()].sort((a, b) => a.etiqueta.localeCompare(b.etiqueta)), lotes, t => elegir(t.id));
+}
+
+// ------------------------------------------------------------------ coste por fase
+
+function pintarCoste(ts) {
+  const n = vaciar("coste");
+  const grupos = porLote(ts).map(([l, g]) => [l, g.filter(t => t.coste_usd != null)]).filter(([, g]) => g.length);
+  const lotes = grupos.map(([l]) => l);
+  leyenda("leyenda-coste", lotes);
+  if (!grupos.length) { n.append(el("div", { clase: "vacio", texto: "Sin turnos con coste completo." })); tabla("tabla-coste", [], []); return; }
+  // Por lote y fase (la fase de una llamada al LLM es su span padre): coste y tokens medios por turno.
+  const fases = new Map();
+  for (const [l, g] of grupos) for (const t of g) for (const sp of t.spans) {
+    if (sp.tipo !== "LLM") continue;
+    const f = sp.grupo;
+    if (!fases.has(f)) fases.set(f, {});
+    const r = (fases.get(f)[l] ||= { coste: 0, ent: 0, sal: 0, llamadas: 0 });
+    r.coste += sp.coste_usd || 0; r.ent += sp.tokens_entrada || 0; r.sal += sp.tokens_salida || 0; r.llamadas += 1;
+  }
+  const nTurnos = Object.fromEntries(grupos.map(([l, g]) => [l, g.length]));
+  const totales = Object.fromEntries(grupos.map(([l, g]) => [l, suma(g.map(t => t.coste_usd)) / g.length]));
+  const orden = [...fases.keys()].sort((a, b) => {
+    const total = f => suma(lotes.map(l => (fases.get(f)[l]?.coste || 0) / nTurnos[l]));
+    return total(b) - total(a);
+  });
+  const W = ancho("coste"), etqW = Math.min(190, W * 0.3), valW = 130, barra = 14, gap = 2, hueco = 12;
+  const alturaFila = lotes.length * (barra + gap) + hueco, m = { t: 6, b: 24 };
+  const H = m.t + orden.length * alturaFila + m.b;
+  const svg = s("svg", { width: W, height: H, role: "img", "aria-label": "Coste medio por turno y fase" }, n);
+  const max = Math.max(...orden.flatMap(f => lotes.map(l => (fases.get(f)[l]?.coste || 0) / nTurnos[l])));
+  const ex = escala(0, max, etqW + 8, W - valW, false);
+  for (const v of ex.ticks) {
+    s("line", { class: "rejilla", x1: ex.f(v), x2: ex.f(v), y1: m.t, y2: H - m.b }, svg);
+    s("text", { x: ex.f(v), y: H - m.b + 16, "text-anchor": "middle", texto: usd(v) }, svg);
+  }
+  orden.forEach((f, i) => {
+    const y0 = m.t + i * alturaFila;
+    s("text", { class: "etq-fila", x: 0, y: y0 + (lotes.length * (barra + gap)) / 2 + 3, texto: recorte(f, 28) }, svg);
+    lotes.forEach((l, j) => {
+      const r = fases.get(f)[l];
+      if (!r) return;
+      const v = r.coste / nTurnos[l], y = y0 + j * (barra + gap), x0 = ex.f(0), x1 = Math.max(ex.f(v), x0 + 2);
+      const g = s("g", {}, svg);
+      s("rect", { x: x0, y: y - 1, width: W - valW - x0, height: barra + 2, fill: "transparent" }, g);
+      s("path", { class: "barra", d: barraRedondeada(x0, y, x1 - x0, barra, 4), fill: color(l) }, g);
+      s("text", { class: "valor", x: x1 + 6, y: y + barra - 3, texto: `${usd(v)} · ${pct(v / totales[l])}` }, svg);
+      conTip(g, `${f} · ${l}`, [[usd(v), "coste medio por turno"], [pct(v / totales[l]), "del coste medio del turno"],
+        [`${entero(r.ent / nTurnos[l])} / ${entero(r.sal / nTurnos[l])}`, "tokens medios ent. / sal."],
+        [nf(1).format(r.llamadas / nTurnos[l]), "llamadas por turno"], [l, "lote", color(l)]]);
+    });
+  });
+  const cuerpo = orden.flatMap(f => lotes.filter(l => fases.get(f)[l]).map(l => {
+    const r = fases.get(f)[l];
+    return [f, l, usd(r.coste / nTurnos[l]), pct(r.coste / nTurnos[l] / totales[l]), entero(r.ent / nTurnos[l]),
+            entero(r.sal / nTurnos[l]), nf(1).format(r.llamadas / nTurnos[l])];
+  }));
+  tabla("tabla-coste", ["Fase", "Lote", "Coste medio por turno", "Parte del turno", "Tokens ent.", "Tokens sal.", "Llamadas por turno"],
+        cuerpo, [2, 3, 4, 5, 6]);
+}
+
+// Barra horizontal: esquinas redondeadas solo en el extremo del dato, recta en la base.
+function barraRedondeada(x, y, w, h, r) {
+  r = Math.min(r, w, h / 2);
+  return `M${x},${y}H${x + w - r}Q${x + w},${y} ${x + w},${y + r}V${y + h - r}Q${x + w},${y + h} ${x + w - r},${y + h}H${x}Z`;
+}
+
+// ------------------------------------------------------------------ tabla de turnos
+
+const COLUMNAS = [
+  { col: "inicio", titulo: "Inicio", valor: t => t.inicio, texto: t => fecha(t.inicio) },
+  { col: "lote", titulo: "Lote", valor: t => t.lote },
+  { col: "ruta", titulo: "Ruta", valor: t => t.ruta },
+  { col: "intencion", titulo: "Intención", valor: t => t.intencion },
+  { col: "pregunta", titulo: "Pregunta", valor: t => t.pregunta || "" },
+  { col: "duracion_ms", titulo: "Latencia", num: true, valor: t => t.duracion_ms, texto: t => ms(t.duracion_ms) },
+  { col: "tokens", titulo: "Tokens ent. / sal.", num: true, valor: t => t.tokens_entrada ?? -1,
+    texto: t => t.tokens_entrada == null ? "incompletos" : `${entero(t.tokens_entrada)} / ${entero(t.tokens_salida)}` },
+  { col: "coste_usd", titulo: "Coste", num: true, valor: t => t.coste_usd ?? -1, texto: t => usd(t.coste_usd) },
+  { col: "llm", titulo: "Llamadas LLM", num: true, valor: t => t.spans.filter(x => x.tipo === "LLM").length },
+  { col: "estado", titulo: "Estado", valor: t => t.error ? 0 : 1 },
+];
+
+function pintarTurnos(ts) {
+  const n = vaciar("turnos");
+  if (!ts.length) { n.append(el("div", { clase: "vacio", texto: "Ningún turno con estos filtros." })); return; }
+  const { col, asc } = estado.orden;
+  const c = COLUMNAS.find(x => x.col === col);
+  const orden = [...ts].sort((a, b) => {
+    const va = c.valor(a), vb = c.valor(b);
+    return (va < vb ? -1 : va > vb ? 1 : 0) * (asc ? 1 : -1);
+  });
+  const cab = el("tr");
+  for (const x of COLUMNAS) {
+    const th = el("th", { clase: x.num ? "num" : "", scope: "col", tabindex: "0", texto: x.titulo });
+    if (x.col === col) th.setAttribute("aria-sort", asc ? "ascending" : "descending");
+    const ordenar = () => { estado.orden = { col: x.col, asc: x.col === col ? !asc : !x.num }; pintarTurnos(filtrados()); };
+    th.addEventListener("click", ordenar);
+    th.addEventListener("keydown", e => { if (e.key === "Enter") ordenar(); });
+    cab.append(th);
+  }
+  const cuerpo = el("tbody");
+  for (const t of orden) {
+    const tr = el("tr", { tabindex: "0" });
+    if (t.id === estado.elegido) tr.className = "elegido";
+    for (const x of COLUMNAS) {
+      const td = el("td", { clase: x.num ? "num" : "" });
+      if (x.col === "lote") td.append(el("span", { clase: "muestra", style: `background:${color(t.lote)};margin-right:6px` }), t.lote);
+      else if (x.col === "pregunta") { td.className = "pregunta"; td.textContent = recorte(t.pregunta || "—", 120); }
+      else if (x.col === "estado") td.append(estadoTurno(t));
+      else td.textContent = x.texto ? x.texto(t) : String(x.valor(t));
+      tr.append(td);
+    }
+    tr.addEventListener("click", () => elegir(t.id, true));
+    tr.addEventListener("keydown", e => { if (e.key === "Enter") elegir(t.id, true); });
+    cuerpo.append(tr);
+  }
+  n.append(el("table", {}, el("thead", {}, cab), cuerpo));
+}
+
+function estadoTurno(t) {
+  if (t.error) return el("span", { clase: "estado-error", texto: "⚠ error" });
+  if (t.cancelado) return el("span", { clase: "estado-ok", texto: "cancelado" });
+  const partes = [];
+  if (t.valida === true) partes.push(t.reparaciones ? "válida tras reparar" : "válida");
+  if (t.valida === false) partes.push("inválida");
+  if (t.busqueda_forzada) partes.push("búsqueda forzada");
+  if (t.sintesis_forzada) partes.push("síntesis forzada");
+  return el("span", { clase: "estado-ok", texto: partes.join(" · ") || "ok" });
+}
+
+// ------------------------------------------------------------------ cascada de un turno
+
+function elegir(id, desplazar) {
+  estado.elegido = id;
+  pintar();
+  if (desplazar !== false) document.getElementById("seccion-cascada").scrollIntoView({ behavior: "smooth", block: "start" });
+}
+
+function pintarCascada(ts) {
+  const n = vaciar("cascada");
+  const t = ts.find(x => x.id === estado.elegido);
+  if (!t) { n.append(el("div", { clase: "vacio", texto: "Elige un turno en la tabla o en las gráficas." })); return; }
+  n.append(el("p", { texto: t.pregunta || "—" }));
+  n.append(el("div", { clase: "cascada-meta" },
+    el("span", {}, el("span", { clase: "muestra", style: `background:${color(t.lote)};margin-right:6px` }), t.lote),
+    el("span", { texto: `ruta ${t.ruta} · ${t.intencion}${t.tema ? ` · ${t.tema}` : ""}` }),
+    el("span", { texto: ms(t.duracion_ms) }),
+    el("span", { texto: t.tokens_entrada == null ? "tokens incompletos" : `${entero(t.tokens_entrada)} / ${entero(t.tokens_salida)} tokens` }),
+    el("span", { texto: usd(t.coste_usd) }),
+    el("span", { clase: "nota", texto: t.id })));
+
+  // Orden en profundidad: cada hijo detrás de su padre, los hermanos por inicio.
+  const hijos = new Map();
+  for (const sp of t.spans) { if (!hijos.has(sp.padre)) hijos.set(sp.padre, []); hijos.get(sp.padre).push(sp); }
+  const ids = new Set(t.spans.map(x => x.id));
+  const filas = [];
+  const recorrer = (sp, nivel) => {
+    filas.push([sp, nivel]);
+    for (const h of (hijos.get(sp.id) || []).sort((a, b) => a.inicio_ms - b.inicio_ms)) recorrer(h, nivel + 1);
+  };
+  for (const raiz of t.spans.filter(x => !ids.has(x.padre)).sort((a, b) => a.inicio_ms - b.inicio_ms)) recorrer(raiz, 0);
+
+  const leyendaTipos = el("div", { clase: "leyenda" });
+  for (const [etq, fondo] of [["llamada al LLM", color(t.lote)], ["herramienta", `color-mix(in srgb, ${color(t.lote)} 45%, var(--surface))`],
+                              ["fase / turno", "var(--neutral)"], ["error", "var(--critical)"]])
+    leyendaTipos.append(el("span", {}, el("span", { clase: "clave", style: `background:${fondo}` }), etq));
+  n.append(leyendaTipos);
+
+  const caja = el("div", { clase: "grafica" });
+  n.append(caja);
+  const W = Math.max(260, n.clientWidth), etqW = Math.min(230, W * 0.32), fila = 22, m = { t: 22, b: 8 };
+  const H = m.t + filas.length * fila + m.b;
+  const svg = s("svg", { width: W, height: H, role: "img", "aria-label": "Cascada de spans del turno" }, caja);
+  const fin = Math.max(...t.spans.map(x => x.inicio_ms + (x.duracion_ms || 0)));
+  const ex = escala(0, fin, etqW + 8, W - 70, false);
+  for (const v of ex.ticks) {
+    s("line", { class: "rejilla", x1: ex.f(v), x2: ex.f(v), y1: m.t - 4, y2: H - m.b }, svg);
+    s("text", { x: ex.f(v), y: 12, "text-anchor": "middle", texto: ms(v) }, svg);
+  }
+  filas.forEach(([sp, nivel], i) => {
+    const y = m.t + i * fila;
+    const etq = `${sp.error ? "⚠ " : ""}${sp.nombre}`;
+    s("text", { class: "etq-fila", x: nivel * 12, y: y + 15, texto: recorte(etq, Math.max(8, 30 - nivel * 2)) }, svg);
+    const relleno = sp.error ? "var(--critical)" : sp.tipo === "LLM" ? color(t.lote)
+      : sp.tipo === "TOOL" ? `color-mix(in srgb, ${color(t.lote)} 45%, var(--surface))` : "var(--neutral)";
+    const x0 = ex.f(sp.inicio_ms), w = Math.max(2, ex.f(sp.inicio_ms + (sp.duracion_ms || 0)) - x0);
+    const g = s("g", {}, svg);
+    s("rect", { x: etqW, y: y + 1, width: W - etqW, height: fila - 2, fill: "transparent" }, g);
+    s("rect", { class: "barra", x: x0, y: y + 5, width: w, height: 12, rx: Math.min(3, w / 2), fill: relleno }, g);
+    const texto = ms(sp.duracion_ms);
+    const derecha = x0 + w + 6 + texto.length * 6 < W;
+    s("text", { class: "valor", x: derecha ? x0 + w + 6 : x0 - 6, y: y + 15, "text-anchor": derecha ? "start" : "end", texto }, svg);
+    conTip(g, sp.nombre, () => filasSpan(sp));
+  });
+
+  if (t.respuesta) n.append(el("details", {}, el("summary", { texto: "Respuesta del turno" }), el("div", { clase: "respuesta", texto: t.respuesta })));
+}
+
+function filasSpan(sp) {
+  const f = [[ms(sp.duracion_ms), "duración"], [ms(sp.inicio_ms), "inicio desde el turno"], [sp.tipo, "tipo"]];
+  if (sp.tipo === "LLM") {
+    f.push([sp.tokens_entrada == null ? "ausentes" : `${entero(sp.tokens_entrada)} / ${entero(sp.tokens_salida)}`, "tokens ent. / sal."]);
+    f.push([usd(sp.coste_usd), "coste"], [sp.modelo || "—", "modelo"]);
+  }
+  for (const [k, v] of Object.entries(sp.atributos)) if (v !== "" && v != null) f.push([recorte(String(v), 60), k]);
+  for (const d of sp.decisiones) f.push([d, "decisión del código"]);
+  if (sp.error) f.push([recorte(sp.error_descripcion || "error", 80), "error"]);
+  return f;
+}
+
+// ------------------------------------------------------------------ calidad y decisiones
+
+function pintarCalidad(ts) {
+  const n = vaciar("calidad");
+  const grupos = porLote(ts);
+  if (!grupos.length) return;
+  const docs = g => g.filter(t => t.valida != null);
+  const herr = g => g.flatMap(t => t.spans.filter(x => x.tipo === "TOOL" && x.nombre !== "validar"));
+  const indicadores = [
+    ["Síntesis documentales", g => docs(g).length],
+    ["Válida a la primera (/rag/validar)", g => docs(g).filter(t => t.valida === true && t.reparaciones === 0).length],
+    ["Válido tras reparación", g => docs(g).filter(t => t.valida === true && t.reparaciones > 0).length],
+    ["Inválido tras reparar (insuficiencia)", g => docs(g).filter(t => t.valida === false).length],
+    ["Búsquedas forzadas por el código", g => g.filter(t => t.busqueda_forzada).length],
+    ["Síntesis forzadas (límite de vueltas)", g => g.filter(t => t.sintesis_forzada).length],
+    ["Llamadas a herramientas", g => herr(g).length],
+    ["Herramientas vetadas pedidas por el modelo", g => herr(g).filter(x => x.atributos.permitida === false).length],
+    ["Herramientas con error", g => herr(g).filter(x => x.error).length],
+    ["Turnos con error (excepción)", g => g.filter(t => t.error).length],
+    ["Turnos cancelados (el cliente se fue)", g => g.filter(t => t.cancelado).length],
+    ["Turnos con tokens incompletos", g => g.filter(t => t.tokens_entrada == null).length],
+  ];
+  const lotes = grupos.map(([l]) => l);
+  const cuerpo = indicadores.map(([etq, f]) => [etq, ...grupos.map(([, g]) => entero(f(g)))]);
+  const decisiones = new Map();
+  for (const [l, g] of grupos) for (const t of g) for (const sp of t.spans) for (const d of sp.decisiones) {
+    if (!decisiones.has(d)) decisiones.set(d, {});
+    decisiones.get(d)[l] = (decisiones.get(d)[l] || 0) + 1;
+  }
+  for (const [d, cuenta] of decisiones) cuerpo.push([`Decisión: ${d}`, ...lotes.map(l => entero(cuenta[l] || 0))]);
+  n.append(tablaNodo(["Indicador", ...lotes], cuerpo, lotes.map((_, i) => i + 1)));
+}
+
+// ------------------------------------------------------------------ utilidades finales
+
+function tablaNodo(cab, filas, numericas = []) {
+  const num = new Set(numericas);
+  return el("table", {},
+    el("thead", {}, el("tr", {}, ...cab.map((c, i) => el("th", { clase: num.has(i) ? "num" : "", scope: "col", texto: c })))),
+    el("tbody", {}, ...filas.map(f => el("tr", {}, ...f.map((v, i) => el("td", { clase: num.has(i) ? "num" : "", texto: v }))))));
+}
+function tabla(id, cab, filas, numericas) { const n = vaciar(id); if (cab.length) n.append(tablaNodo(cab, filas, numericas)); }
+function recorte(texto, max) { texto = texto == null ? "—" : String(texto); return texto.length > max ? `${texto.slice(0, max - 1)}…` : texto; }
+function fecha(iso) {
+  const d = new Date(iso);
+  return isNaN(d) ? "—" : d.toLocaleString("es-ES", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit", second: "2-digit" });
+}
+
+function pintar() {
+  const ts = filtrados();
+  if (!ts.some(t => t.id === estado.elegido)) {  // por defecto, el turno más lento del filtro
+    estado.elegido = ts.length ? ts.reduce((a, b) => (b.duracion_ms > a.duracion_ms ? b : a)).id : null;
+  }
+  pintarResumen(ts);
+  pintarDispersion(ts);
+  pintarFases(ts);
+  pintarRutas(ts);
+  pintarCoste(ts);
+  pintarTurnos(ts);
+  pintarCascada(ts);
+  pintarCalidad(ts);
+}
+
+const lotesTexto = LOTES.length === 1 ? "1 lote" : `${LOTES.length} lotes`;
+document.getElementById("meta").textContent =
+  `${DATOS.turnos.length} turnos en ${lotesTexto} · generado ${fecha(DATOS.generado)} · precios ${DATOS.precios.fecha}` +
+  (DATOS.huerfanas ? ` · ${DATOS.huerfanas} traza(s) sin span turno descartadas` : "");
+construirFiltros();
+pintar();
+let espera;
+window.addEventListener("resize", () => { clearTimeout(espera); espera = setTimeout(pintar, 150); });
+</script>
+</body>
+</html>

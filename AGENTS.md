@@ -49,6 +49,7 @@ La cuenta es compartida y la proporciona el máster (región `eu-west-1`).
 - Tests unitarios: `pytest tests/ --ignore=tests/test_integracion_db.py -v`
 - Tests de la API: `pytest ApiUsuario/tests/ -v` (SQLite en memoria, sin BBDD externa)
 - Tests del orquestador: `pytest LLMOrchestrator/tests/ -v` (LLM falso, sin red ni torch)
+- Tests del agente: `pytest Agente/tests/ -v` (LLM falso con guion y RAG fingido, sin red)
 - No subas `.env`, credenciales ni ficheros de datos grandes (revisa `.gitignore`).
 - Los planes de trabajo de cada feature son personales y no se versionan: nómbralos
   `docs/**/plan_*.md` para que `.gitignore` los excluya.

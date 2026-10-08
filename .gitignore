@@ -38,6 +38,13 @@ __pycache__/
 #APiusuario
 /ApiUsuario/.venv/
 
+#Agente
+/Agente/.venv/
+# Trazas del agente (JSONL): llevan preguntas y respuestas
+/Agente/trazas/
+# Resultados de la evaluación de turnos: solo entran los revisados a mano (git add -f)
+/Agente/evaluacion/resultados/
+
 #documentación
 # Informes, revisiones y estados generados a partir del código: no son fuente, se
 # regeneran y quedan obsoletos en cuanto cambia el codigo. No se versionan.
@@ -53,3 +60,12 @@ docs/**/plan_*.md
 
 # Configuración local de asistentes de IA (permisos de cada persona, no del proyecto)
 .claude/
+docs/agente/plan_observabilidad_agente.md
+docs/agente/plan_fase4_streaming_sesion.md
+docs/agente/plan_agente_llm.md
+docs/agente/plan_fase5_memoria.md
+docs/agente/plan_fase6_comprobaciones.md
+docs/agente/estado_agente.md
+docs/agente/decisiones_agente.md
+docs/agente/estado_agente.md
+docker-compose.yml
