@@ -59,6 +59,7 @@ class Turno:
     intencion: str
     duracion_ms: float
     error: bool
+    cancelado: bool                   # el cliente del stream se fue: el turno no tiene ruta
     modelos: set[str] = field(default_factory=set)
     tokens_entrada: int | None = None  # None = incompleto
     tokens_salida: int | None = None
@@ -91,10 +92,12 @@ def turnos(spans: list[dict]) -> tuple[list[Turno], int]:
             huerfanas += 1
             continue
         a = raiz["attributes"]
+        cancelado = bool(a.get("agente.cancelado"))
         turno = Turno(trace_id=trace_id, spans=propios, raiz=raiz,
                       etiqueta=a.get("agente.etiqueta") or "sin_etiqueta",
-                      ruta=a.get("agente.ruta", "error"), intencion=a.get("agente.intencion", "?"),
-                      duracion_ms=raiz["duracion_ms"], error=raiz["status"] == "ERROR")
+                      ruta=a.get("agente.ruta", "cancelado" if cancelado else "error"),
+                      intencion=a.get("agente.intencion", "?"),
+                      duracion_ms=raiz["duracion_ms"], error=raiz["status"] == "ERROR", cancelado=cancelado)
         _tokens_y_coste(turno)
         resultado.append(turno)
     resultado.sort(key=lambda t: t.raiz["start"] or "")
@@ -223,6 +226,7 @@ def _detalle_lote(etiqueta: str, lista: list[Turno]) -> str:
               str(sum(s["attributes"].get("agente.permitida") is False for s in herramientas))],
              ["Herramientas con error", str(sum(s["status"] == "ERROR" for s in herramientas))],
              ["Turnos con error (excepción)", str(sum(t.error for t in lista))],
+             ["Turnos cancelados (el cliente se fue)", str(sum(t.cancelado for t in lista))],
              ["Turnos con tokens incompletos", str(sum(t.tokens_entrada is None for t in lista))]]
     partes.append("### Calidad del turno\n\n" + tabla(filas))
 
@@ -344,6 +348,7 @@ def _datos_turno(turno: Turno) -> dict:
         "ruta": turno.ruta, "intencion": turno.intencion, "tema": turno.atributo("agente.tema"),
         "pregunta": turno.atributo("input.value"), "respuesta": turno.atributo("output.value"),
         "inicio": turno.raiz["start"], "duracion_ms": turno.duracion_ms, "error": turno.error,
+        "cancelado": turno.cancelado,
         "tokens_entrada": turno.tokens_entrada, "tokens_salida": turno.tokens_salida, "coste_usd": turno.coste_usd,
         "vueltas": turno.atributo("agente.vueltas"), "valida": turno.atributo("agente.valida"),
         "reparaciones": turno.atributo("agente.reparaciones"),

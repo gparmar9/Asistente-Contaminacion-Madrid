@@ -104,3 +104,16 @@ def test_cuenta_los_hallazgos_por_regla(tmp_path):
     assert "| cifras | libre | 1 | 1 | 0 |" in texto
     assert "| internos | libre | 1 | 1 | 1 |" in texto
     assert " | documental | " not in texto.split("### Comprobaciones posteriores")[1]  # sin hallazgos, sin fila
+
+
+def test_turno_cancelado_no_cuenta_como_error(tmp_path):
+    """El cliente del stream se fue: el span `turno` no tiene ruta ni estado de error."""
+    cancelado = _span("x", "t", None, "turno", "AGENT", 6000, status="UNSET",
+                      **{"agente.etiqueta": "lote", "agente.cancelado": True})
+    ruta = _escribir(tmp_path / "t.jsonl", [cancelado] + _documental("d", 1000, 0, 10_000))
+
+    lista, _ = turnos(cargar([ruta]))
+    assert [(t.ruta, t.cancelado, t.error) for t in lista] == [("cancelado", True, False), ("documental", False, False)]
+    texto = informe(lista)
+    assert "| cancelado | ? | 1 |" in texto
+    assert "| Turnos cancelados (el cliente se fue) | 1 |" in texto and "| Turnos con error (excepción) | 0 |" in texto

@@ -631,6 +631,7 @@ function pintarTurnos(ts) {
 
 function estadoTurno(t) {
   if (t.error) return el("span", { clase: "estado-error", texto: "⚠ error" });
+  if (t.cancelado) return el("span", { clase: "estado-ok", texto: "cancelado" });
   const partes = [];
   if (t.valida === true) partes.push(t.reparaciones ? "válida tras reparar" : "válida");
   if (t.valida === false) partes.push("inválida");
@@ -738,6 +739,7 @@ function pintarCalidad(ts) {
     ["Herramientas vetadas pedidas por el modelo", g => herr(g).filter(x => x.atributos.permitida === false).length],
     ["Herramientas con error", g => herr(g).filter(x => x.error).length],
     ["Turnos con error (excepción)", g => g.filter(t => t.error).length],
+    ["Turnos cancelados (el cliente se fue)", g => g.filter(t => t.cancelado).length],
     ["Turnos con tokens incompletos", g => g.filter(t => t.tokens_entrada == null).length],
   ];
   const lotes = grupos.map(([l]) => l);

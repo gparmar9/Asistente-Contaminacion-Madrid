@@ -62,7 +62,8 @@ contaminante. Sirvieron para decidir qué documentos necesita el RAG.
 **Equipo** (según autores de git) `[por confirmar si hay más miembros]`: Guillermo Parés
 (ingesta, ETL, notebooks 01–03, base de datos, pipeline, CI/CD, primera versión del RAG, cloud)
 y Carlos Fernández (banco de preguntas, EDA de PM10, esqueleto de `ApiUsuario`, reescritura del
-RAG como servicio de evidencias).
+RAG como servicio de evidencias, agente LLM `Agente`). El despliegue en AWS y la dockerización del
+agente los hace otro miembro del equipo.
 
 ---
 
@@ -98,20 +99,20 @@ Hilo conductor de la memoria: cómo y por qué cambió el diseño.
 | 2026-09-28 | Despliegue | Build + push + `update-function-code` a mano desde un PC con credenciales SSO → **workflow de GitHub Actions (`workflow_dispatch`) con OIDC** | Cualquiera del equipo puede desplegar sin credenciales de AWS; no se despliega si fallan los tests; el tag por SHA dice qué commit corre en producción y permite volver atrás; la verificación del digest elimina el fallo silencioso de subir la imagen sin actualizar la función. Descartado: claves de acceso en GitHub Secrets (permanentes y compartidas) y despliegue en cada push a `main` (se optó por lanzarlo a mano para decidir cuándo se toca producción) |
 | 2026-09-28 | Vuelta atrás | `update-function-code` a mano con la imagen buena → **workflow de rollback** con modo consulta, vuelta por digest a una versión publicada y verificación | Deshacer un despliegue fallido en segundos, sin credenciales ni reconstruir la imagen, y dejando rastro (cada rollback publica una versión con su motivo). Descartado: "volver a la versión anterior" automático, porque tras un rollback la anterior es justo la versión que se deshizo; primero se consulta la tabla y luego se elige |
 | 2026-10-01 | Disponibilidad de la base de datos | RDS encendida 24 h → **encendida solo de 22:00 a 01:30 (hora de Madrid) y a demanda** con un workflow de GitHub (§8.8) | La carga es una vez al día y la API aún no está desplegada: pagar la instancia 24 h no aporta nada. Ahorro estimado de ~15,5 a ~4–5 $/mes. Descartado: DynamoDB (el acceso es analítico: rangos, agregaciones y `JOIN`, justo lo que no hace bien una base clave-valor), Aurora Serverless v2 con pausa automática (ahorro parecido pero exige migrar; queda como alternativa), programarlo con `schedule` de GitHub Actions (puede retrasarse y se desactiva tras 60 días sin actividad) y que el programador llame directamente a `StartDBInstance` (da error si la base ya está encendida) |
-| 2026-10-04 | Umbral de evidencia del RAG | 0,22 fijado a ojo con preguntas lejanas al dominio → **0,1754**, punto medio entre la peor documental (0,1750) y la mejor ajena (0,1759) en 30 casos de evaluación (§7.2) | Con 0,22 las 7 ajenas cercanas al dominio (tiempo, tráfico, transporte) recibían evidencias y llegaban al LLM (3/10 rechazadas). Con 0,1754 se rechazan 10/10 a costa de una documental (13/15 en vez de 14/15): se prefiere que el asistente se abstenga de más a que responda fuera del dominio. Descartado: mantener 0,22, que era lo que dictaba la regla fijada antes de medir (no cambiar con un hueco menor de 0,01; aquí es de 0,001) y cambiar a `multilingual-e5-small` (mejor MRR, pero solapa documentales y ajenas y no hay punto medio) |
 | 2026-10-01 | Workflows de despliegue | «Desplegar Lambda» y «Rollback Lambda» → **«Desplegar» y «Rollback» con un desplegable de componente** (hoy solo `lambda`) | Preparar el despliegue de la API, el orquestador, el RAG y la web sin multiplicar workflows: cada pieza será una opción del desplegable y un job propio. Bloqueo por componente: piezas distintas pueden desplegarse a la vez, la misma no. Descartado: un workflow por pieza (duplica pasos y botones) y pedir la imagen a desplegar (el despliegue siempre construye el código de la rama elegida; volver a una versión concreta es tarea del rollback) |
 | 2026-10-02 | Empaquetado de la API | Servicios arrancados a mano con `uvicorn` y `python -m rag.api` → **una imagen Docker por servicio** (`api-usuario`, `orquestador`, `rag`), levantadas juntas con el perfil `api` de `docker-compose` | Es como irán en la EC2 y permite desplegar cada pieza por separado. La imagen del RAG lleva **dentro el modelo y el índice** construido en el propio build, con el commit del corpus en sus metadatos: arranca sin descargar nada y cada imagen corresponde a un corpus concreto. Descartado: una sola imagen con todo (obliga a redesplegar el RAG, de ~3 GB, por cualquier cambio en la API) y construir el índice al arrancar el contenedor (arranque lento y sin garantía de que todas las réplicas usen el mismo índice) |
-
+| 2026-10-04 | Umbral de evidencia del RAG | 0,22 fijado a ojo con preguntas lejanas al dominio → **0,1754**, punto medio entre la peor documental (0,1750) y la mejor ajena (0,1759) en 30 casos de evaluación (§7.2) | Con 0,22 las 7 ajenas cercanas al dominio (tiempo, tráfico, transporte) recibían evidencias y llegaban al LLM (3/10 rechazadas). Con 0,1754 se rechazan 10/10 a costa de una documental (13/15 en vez de 14/15): se prefiere que el asistente se abstenga de más a que responda fuera del dominio. Descartado: mantener 0,22, que era lo que dictaba la regla fijada antes de medir (no cambiar con un hueco menor de 0,01; aquí es de 0,001) y cambiar a `multilingual-e5-small` (mejor MRR, pero solapa documentales y ajenas y no hay punto medio) |
 | 2026-10-04 | Agente LLM | `LLMOrchestrator` como único agente → **nuevo servicio `Agente`** (puerto 8200), diseñado desde cero con un **bucle de herramientas escrito a mano**; **LlamaIndex solo como cliente del LLM** (`OpenAILike` para APIs OpenAI-compatibles y `BedrockConverse` para Amazon Bedrock, elegibles por variable de entorno) y, más adelante, como almacén del chat. Ambos servicios conviven sin código ni dependencias compartidas; `ApiUsuario` elegirá uno por configuración | Principios tomados de las clases del máster y de un diseño de agente empresarial: pocas piezas, el modelo clasifica y el código decide, fases pequeñas con salida tipada y valor seguro, síntesis final sin herramientas, lo determinista lo entrega el código. **Descartado un framework de agentes completo** (ReAct/`AgentWorkflow` de LlamaIndex, LangGraph): esconde el bucle que precisamente se quiere controlar (vetar u obligar herramientas, cerrar el turno sin modelo, validar la salida con el RAG) y arrastra abstracciones que no se usan. Descartado también ampliar `LLMOrchestrator`: su bucle no tiene puntos de intervención en código y rehacerlo dentro equivalía a reescribirlo. Bedrock entra como proveedor de producción porque la cuenta del máster da acceso; el modelo concreto en `eu-west-1` con *tool use* y *streaming* queda `[por confirmar]` |
 | 2026-10-06 | Sesión en el agente | Servicios sin estado (2026-09-27) → **`session_id` opaco** en `/responder` (se genera si no llega) y **un turno a la vez por sesión** | El streaming y la memoria de la conversación (fases 4 y 5) necesitan agrupar los turnos. Sin usuarios ni datos personales: el id no identifica a nadie y el agente aún no guarda nada con él |
 | 2026-10-06 | Chat de `ApiUsuario` | `/chat` solo hacia `ORCHESTRATOR_URL` (o stub), sin sesión → **`AGENTE_URL` elige el agente**; `session_id` y `traza_id` opcionales en el contrato y **`POST /chat/stream`** (proxy del SSE del agente, o `passthrough` + `done` sin agente) | Los dos agentes conviven y se elige por configuración, sin tocar código. El fallback mantiene el contrato del stream para el frontend aunque el orquestador no conserve contexto |
 | 2026-10-06 | Memoria de la conversación del agente | Diseño previsto (2026-10-04): `PostgresChatStore` de LlamaIndex sobre la base del proyecto, estado tipado entre turnos (`turn_state`) e intención `REPETIR` → **almacén propio en memoria del proceso** (1 semana sin actividad, 20 turnos por sesión) y ventana por presupuesto de tokens; **LlamaIndex queda solo como cliente del LLM**. Sin `REPETIR` y con `turn_state` aplazado | Un TFM no necesita que las conversaciones sobrevivan a un reinicio, y el bloqueo por sesión ya exige un solo proceso: Postgres añadiría tablas, migraciones y una dependencia más en cada turno. El almacén vive detrás de una interfaz: pasar a una base de datos cambiaría una clase. `SimpleChatStore` solo guarda listas de mensajes, sin caducidad ni metadatos del turno. `REPETIR` desde cifras sueltas pierde a qué contaminante, unidad o fuente pertenece cada una; un «¿cuál era ese límite?» se trata como pregunta normal con contexto. El estado semántico se definirá cuando lo pida una necesidad concreta (comprobaciones de cifras, herramienta SQL) |
 | 2026-10-06 | Alcance del clasificador del agente | Alcance por tema («calidad del aire») → **alcance por lo que el sistema puede responder**: contaminación del aire, con los contaminantes que mide la red citados en el prompt; polen, ruido y tiempo fuera; alergia y asma dentro; los límites legales son documentación, no mediciones | En el lote del 2026-10-06 los dos modelos fallaron la pregunta del polen de forma distinta (uno `DATOS`, otro `FUERA_DE_ALCANCE`). Medido antes y después: 27/28 → 29/29 con los dos modelos (§7.3.1) |
 | 2026-10-06 | Comprobaciones posteriores del agente | Un modo global `COMPROBACIONES_MODO` (observar o bloquear todas) → **activación por regla** (`COMPROBACIONES_BLOQUEAN`, vacía por defecto) | Cada regla pasa a bloquear solo con evidencia propia (0 falsos positivos en las trazas reales y en un lote adversario, y al menos un acierto). Con un modo global, una regla ruidosa impediría bloquear con las fiables. Descartado también pedir una reparación al modelo («la cifra X no está en D2») en vez de la frase fija: sería mejor respuesta, pero añade una llamada y mezcla la validación del RAG con la del agente; queda como trabajo futuro |
+| 2026-10-08 | Agente del asistente | `LLMOrchestrator` y `Agente` conviviendo, elegidos por `AGENTE_URL` → **`Agente` como único agente**; `LLMOrchestrator` descartado: su código se conserva en el repositorio, sin previsión de uso | Decisión del equipo. El orquestador nunca llegó a conectarse a un proveedor; el `Agente` ya tiene clasificador, ruta documental validada, sesión, *streaming*, memoria, observabilidad y comprobaciones, y está probado con Bedrock. Consecuencia: la consulta de mediciones (`query_sql` del orquestador) no existe aún en el agente y pasa a ser su herramienta SQL pendiente |
 
-**Decisiones abiertas que alimentarán esta tabla:** proveedor concreto del LLM (se decidirá al
-conectar el bucle real: crear cuenta y verificar límites en consola) y dónde se despliega el
-servicio RAG en producción (§13). La opción de red en AWS ya está decidida y aplicada (opción A, §8.4).
+**Decisiones abiertas que alimentarán esta tabla:** modelo del agente en Bedrock (Ministral 14B o
+gpt-oss-120b; aplazado hasta poder evaluar las herramientas SQL y de ML, §13) y dónde se despliega
+el servicio RAG en producción (§13). La opción de red en AWS ya está decidida y aplicada (opción A, §8.4).
 
 ---
 
@@ -167,13 +168,13 @@ CSV histórico ─▶ notebooks 01/02/03 ─▶ modelo .joblib ─▶ PostgreSQL
 Corpus RAG (.md) ─▶ troceado + embeddings e5 ─▶ ChromaDB ─▶ servicio RAG (FastAPI)   (Fase 2)
 
 Usuario ─▶ ApiUsuario (FastAPI) ──▶ PostgreSQL (lecturas: estaciones, series)   (Fase 4, en curso)
-        /chat, /chat/stream ──┬─▶ LLMOrchestrator ─▶ LLM hospedado (OpenAI-compat)
-                               │       ├─ query_sql ─────────▶ PostgreSQL       (Fase 3, primer agente;
-                               │       └─ buscar_evidencias ─▶ rag.api (HTTP)    proveedor pendiente)
-                               └─▶ Agente ─▶ LLM vía LlamaIndex (OpenAI-compat | Bedrock)
-                                       └─ buscar_evidencias ─▶ rag.api (HTTP)   (Fase 3 bis, en construcción;
-                                                                                  ApiUsuario elige con AGENTE_URL)
+        /chat, /chat/stream ──▶ Agente ─▶ LLM vía LlamaIndex (Bedrock | OpenAI-compat)
+                                   └─ buscar_evidencias ─▶ rag.api (HTTP)   (Fase 3, en construcción;
+                                                                              herramienta SQL pendiente)
 ```
+
+`LLMOrchestrator` (primer agente, con `query_sql`) sigue en el repositorio pero está descartado
+desde el 2026-10-08 (§2, §7.3.2).
 
 **Principio de diseño central:** los **datos de contaminación viven estructurados en SQL** y la
 Vector DB solo guarda **conocimiento externo** (salud, normativa). El LLM decide qué fuente consultar
@@ -185,8 +186,8 @@ mediante *tool use*.
 |---|---|---|
 | 1 | Datos, detector de anomalías, pipeline en tiempo real | Hecha en local; migración a AWS en curso |
 | 2 | Vector DB y servicio de evidencias | **Reescrita** (2026-09-23) como servicio de evidencias y mergeada en `development`; pendiente de pasar a `main` |
-| 3 | LLM con *tool use* | **Dos servicios** (§7.3): `LLMOrchestrator`, implementado (2026-09-28; ruta documental por contrato HTTP el 2026-09-30) con `query_sql` y `buscar_evidencias`, 51 tests, sin proveedor conectado; y `Agente` (2026-10-04), rediseño por fases con bucle propio y LlamaIndex como cliente: fases 1 a 5 de 7 hechas (esqueleto, herramienta documental, ruta documental validada, clasificador de intención, sesión y streaming SSE, memoria de la conversación; 51 tests), probado con Amazon Bedrock |
-| 4 | Informes y dashboard | En curso: `ApiUsuario` con `/estaciones`, `/estaciones/{codigo}/series`, `/chat` y `/chat/stream` (proxy al agente o al orquestador, con stub), tests propios y job de CI. Informes y dashboard pendientes |
+| 3 | LLM con *tool use* | `Agente` (2026-10-04, §7.3.1), rediseño por fases con bucle propio y LlamaIndex como cliente: fases 1 a 5 hechas (esqueleto, herramienta documental, ruta documental validada, clasificador de intención, sesión y streaming SSE, memoria de la conversación), observabilidad y comprobaciones posteriores en observación (fase 6, falta decidir cuáles bloquean); 64 tests; probado con Amazon Bedrock. Pendiente: herramienta SQL. Despliegue y dockerización, a cargo de otro miembro del equipo. `LLMOrchestrator` (2026-09-28) descartado el 2026-10-08 (§7.3.2) |
+| 4 | Informes y dashboard | En curso: `ApiUsuario` con `/estaciones`, `/estaciones/{codigo}/series`, `/chat` y `/chat/stream` (proxy al agente, con stub), tests propios y job de CI. Informes y dashboard pendientes |
 
 **Stack actual:** Python 3.12 · pandas · NumPy · scikit-learn · PostgreSQL 18 (RDS) · SQLAlchemy ·
 pyarrow · ChromaDB · sentence-transformers (`multilingual-e5-base`) · FastAPI · pytest ·
@@ -500,16 +501,19 @@ interna entre la API de chat y él.
 **Fuera de alcance declarado:** ingesta incremental, filtro por contaminante, *reranking*, historial
 de conversación, *streaming* y consulta de mediciones.
 
-### 7.3 LLM con tool use (Fase 3) — dos servicios, proveedor pendiente
+### 7.3 LLM con tool use (Fase 3) — `Agente`, probado con Bedrock
 
-Hay dos implementaciones del agente, independientes entre sí (sin código, dependencias ni imágenes
-compartidas). `ApiUsuario` reenvía `/chat` a uno u otro por configuración: `AGENTE_URL` si está definida, si no
-`ORCHESTRATOR_URL`. El agente nuevo ya se ha probado contra Amazon Bedrock (clasificador, uso de
-herramientas, ruta documental y streaming); el orquestador sigue sin proveedor conectado.
+Hubo dos implementaciones del agente, independientes entre sí (sin código, dependencias ni imágenes
+compartidas). Desde el 2026-10-08 solo sigue `Agente` (§7.3.1); `LLMOrchestrator` (§7.3.2) queda
+descartado con su código en el repositorio. `ApiUsuario` reenvía `/chat` al agente con `AGENTE_URL`;
+el camino a `ORCHESTRATOR_URL` sigue en el código, sin uso previsto. El agente se ha probado contra
+Amazon Bedrock (clasificador, uso de herramientas, ruta documental, streaming y memoria).
 
 #### 7.3.1 `Agente` — rediseño por fases (en construcción)
 
-**Estado (2026-10-06): fases 1 a 5 de 7 hechas, más la observabilidad (partes A, B y C)** (rama `feature/Agente`). Servicio FastAPI en `Agente/`
+**Estado (2026-10-08): fases 1 a 5 de 7 hechas, más la observabilidad (partes A, B y C) y las
+comprobaciones posteriores en observación (fase 6, falta decidir cuáles bloquean)** (rama
+`feature/Agente`). La fase 7 (Bedrock en la EC2 y dockerización) la hace otro miembro del equipo. Servicio FastAPI en `Agente/`
 (paquete `agente`, puerto 8200, `GET /salud`, `POST /responder` con el mismo contrato que reenvía
 `ApiUsuario` y `POST /responder/stream`), misma convención por capas que `ApiUsuario`.
 
@@ -772,7 +776,7 @@ cada decisión y de la elección de LlamaIndex está en `docs/agente/decisiones_
     fragmentos. Otras candidatas cercanas al dominio sí pasan el umbral: radón (3 fragmentos),
     monóxido de carbono (4) y la guía de la OMS para el benceno (3). Es otra muestra de que el
     umbral deja pasar preguntas próximas al corpus (§7.2); la síntesis tiene que reconocerlo.
-- **Tests**: 51, sin red, sin claves y sin torch: LLM falso con guion que hereda de
+- **Tests**: 64, sin red, sin claves y sin torch: LLM falso con guion que hereda de
   `FunctionCallingLLM` (mismo camino que un proveedor real) y RAG fingido con
   `httpx.MockTransport`. **Política de tests mínima** (decisión del 2026-10-04): solo los casos
   que fija el plan de cada fase (bucle con 0, 1 y 2 llamadas, límite de vueltas, RAG caído,
@@ -783,7 +787,9 @@ cada decisión y de la elección de LlamaIndex está en `docs/agente/decisiones_
   informe, tokens incompletos y el evaluador que marca un caso fallido; en la fase 4, la sesión,
   la concurrencia y el stream; en la fase 5, los 9 casos de la memoria: turnos de la misma sesión,
   nada guardado si el turno falla o se cancela, ventana, caducidad, contexto sin `[Dn]` ni
-  metadatos, contexto en cada llamada y el evaluador de conversaciones), sin tests de detalle interno; se partió de 25 y se recortaron. Verificado además, sin red, que `OpenAILike` serializa la herramienta cruda
+  metadatos, contexto en cada llamada y el evaluador de conversaciones; en la fase 6, las tres
+  reglas, el bloqueo con memoria y stream, el conteo de hallazgos en el informe y el turno
+  cancelado, que el informe no cuenta como error), sin tests de detalle interno; se partió de 25 y se recortaron. Verificado además, sin red, que `OpenAILike` serializa la herramienta cruda
   y los mensajes `assistant(tool_calls)`/`tool` como espera la API. Quinto job del workflow de CI.
 - **Probado contra Bedrock (2026-10-04)**, desde local con credenciales SSO temporales: los dos
   candidatos están bajo demanda en `eu-west-1` con streaming, y los dos **piden la herramienta por
@@ -907,13 +913,16 @@ mismos hallazgos que anotó el agente en vivo):
   siquiera al pedírselo.
 Decisión de qué reglas bloquean `[pendiente]` (paso 4).
 
-**Fases pendientes**: decidir las comprobaciones (fase 6, paso 4); Bedrock y
-despliegue junto al orquestador (fase 7).
+**Pendiente**: decidir las comprobaciones (fase 6, paso 4) y las herramientas SQL y de ML. La
+fase 7 (Bedrock en la EC2, contenedor del agente en `docker-compose` y despliegue) queda fuera de
+este trabajo: la hace otro miembro del equipo.
 
-#### 7.3.2 `LLMOrchestrator` — primer agente (implementado el 2026-09-28; convive)
+#### 7.3.2 `LLMOrchestrator` — primer agente (implementado el 2026-09-28; descartado el 2026-10-08)
 
 Servicio FastAPI, puerto 8100, `POST /responder`. Ligero: el RAG se consume por HTTP (sin
-torch/chromadb). Se mantiene tal cual mientras el agente nuevo no lo sustituya.
+torch/chromadb). **Descartado el 2026-10-08** en favor de `Agente` (§2): nunca se conectó a un
+proveedor. El código y su job de CI siguen en el repositorio, sin previsión de uso. Lo que sigue
+describe cómo quedó.
 
 - **Bucle**: máx. `MAX_ITERACIONES=4` vueltas; al agotarse, cierre forzado sin tools. Las tools
   nunca lanzan: sus errores vuelven como `{"error": ...}`.
@@ -922,10 +931,6 @@ torch/chromadb). Se mantiene tal cual mientras el agente nuevo no lo sustituya.
   `cobertura >= 0,7` en el SQL. Sin SQL libre (D3 en §2).
 - **`buscar_evidencias`** (2026-09-30): cliente HTTP de `rag.api`; definición pedida al RAG y
   cacheada; si falla, degrada a solo `query_sql`. Renumera `Dn` si hay varias llamadas.
-- **Ruta documental con citas verificadas** (2026-09-30): JSON `{estado, afirmaciones, limitaciones}`
-  validado con `POST /rag/validar`, una reparación, texto renderizado con `[Dn]`; `fuentes` solo con
-  documentos citados y advertencia médica solo con afirmaciones documentales. La ruta de solo datos
-  responde en texto libre. Peor caso: `MAX_ITERACIONES` + 3 llamadas.
 - **Revisión adversarial** (2026-09-28, 4 revisores + refutación): aviso al LLM cuando un resultado
   se trunca a 60 filas; filtro de distrito por coincidencia parcial; presupuesto de timeouts
   coherente entre servicios (`LLM_TIMEOUT_S=30` × 2 reintentos ≤ `ORCHESTRATOR_TIMEOUT_S=120`); el
@@ -945,14 +950,15 @@ torch/chromadb). Se mantiene tal cual mientras el agente nuevo no lo sustituya.
   fingidas y transporte HTTP del puente con `httpx.MockTransport` (ni torch ni el servicio RAG
   se instalan en CI). Cuarto job del workflow.
 
-**Proveedor del LLM (común a ambos, sin decidir).** Finalistas evaluados el 2026-09-27 con la
+**Proveedor del LLM: Amazon Bedrock; modelo sin elegir (§13).** Finalistas evaluados el 2026-09-27 con la
 documentación oficial: **Mistral** plan Experiment (toda la gama gratis, límites reportados
 ~1 req/s y 500K tokens/min `[por confirmar en consola]`, mejor español), **Groq** (30 RPM,
 1.000 req/día; riesgo: 8K tokens/min con contexto RAG) y **Gemini** (límites del free tier no
 publicados). Descartados: Cerebras (free tier eliminado en 2026), Cohere (1.000 llamadas/mes),
 Hugging Face (créditos insuficientes); OpenRouter solo como reserva. Desde el 2026-10-04 se suma
-**Amazon Bedrock** para producción (acceso con la cuenta del máster). Para el agente nuevo se
-compararán Ministral 14B 3.0 y gpt-oss-120b en `eu-west-1` (§7.3.1). Implicación operativa: los free tiers limitan
+**Amazon Bedrock** para producción (acceso con la cuenta del máster), y es el proveedor con el que
+se ha probado el agente: Ministral 14B 3.0 y gpt-oss-120b en `eu-west-1` (§7.3.1). Los free tiers
+quedan como alternativa para desarrollo, sin usar. Implicación operativa: los free tiers limitan
 peticiones/minuto y cada pregunta cuesta 2–4 llamadas → pocas vueltas y reintentos con *backoff*.
 
 ---
@@ -1297,7 +1303,8 @@ la enciende a mano para trabajar o hacer una demo.
   cerrarlo haría falta una segunda fuente (el fichero diario del Ayuntamiento), no otro horario.
 - **El asistente documental no consulta mediciones.** El RAG responde sobre documentación revisada,
   no sobre la situación de hoy; por eso añade automáticamente una limitación de actualidad cuando
-  la pregunta habla del presente. Unir ambas fuentes es la Fase 3 (§7.3).
+  la pregunta habla del presente. Unir ambas fuentes es la herramienta SQL del agente, pendiente
+  (§7.3).
 - **La memoria de la conversación vive en el proceso del agente**: se pierde al reiniciar o
   desplegar y obliga a un solo proceso (§7.3.1). Escalar a varios exigiría un almacén compartido
   y otra coordinación del bloqueo por sesión.
@@ -1318,16 +1325,17 @@ la enciende a mano para trabajar o hacer una demo.
   razonamiento (Ministral 14B) acertó 18 de 18 turnos y es más rápido (§7.3.1). Queda por analizar
   con las preguntas de datos, cuando exista la herramienta SQL: elegir consulta y parámetros, o
   combinar varias mediciones, puede beneficiarse del razonamiento. Depende de si la herramienta usa
-  consultas predefinidas (como `LLMOrchestrator`, §2 2026-09-28) o SQL generado. Si se usa un modelo
+  consultas predefinidas (como el `query_sql` del `LLMOrchestrator` descartado, §7.3.2) o SQL generado. Si se usa un modelo
   razonador, hay que darle margen de tokens de salida (§10).
-- **Agente**: consulta de búsqueda reformulada por el clasificador en lugar de concatenar las
+- **Agente**: herramientas SQL (mediciones y anomalías) y de ML; consulta de búsqueda reformulada por el clasificador en lugar de concatenar las
   preguntas previas; estado semántico entre turnos (cifras, contaminantes, evidencias citadas)
   cuando lo pidan las comprobaciones de cifras o la herramienta SQL.
 - LSTM Autoencoder o PCA para anomalías de forma del perfil horario.
 - Baseline ponderado por recencia y ajustado solo con el periodo de entrenamiento.
 - Módulo de *forecasting* para las preguntas de planificación.
 - Opción de red C en AWS (RDS sin exposición pública a coste cero).
-- **Medir el comportamiento del LLM** con los mismos 30 casos cuando haya proveedor: respuestas
+- **Medir el comportamiento del LLM** con los mismos 30 casos del RAG (el agente se ha medido con
+  sus propios 12 casos y 5 conversaciones, §7.3.1): respuestas
   con fuentes, válidas tras reparación y de insuficiencia por tipo de caso. La evaluación de la
   recuperación ya está hecha (§7.2).
 - **Abstención más allá del umbral absoluto:** un criterio relativo al mejor fragmento, un
@@ -1484,6 +1492,7 @@ la enciende a mano para trabajar o hacer una demo.
 | 2026-10-06 | **Agente LLM: clasificador revisado y evaluación con conversaciones** (Carlos): prompt con el alcance definido por lo que el sistema puede responder (polen, ruido y tiempo fuera; alergias dentro; límites legales como documentación). Guion de 29 preguntas y 5 conversaciones (11 turnos). En Bedrock, antes → después: clasificador 27/28 → 29/29 con los dos modelos; conversaciones 9/11 → 11/11 (Ministral) y 11/11 (gpt-oss). La búsqueda concatenada no llegó a ejecutarse: los modelos reformulan solos. Unas 600 llamadas, ~0,12 $ `[estimación]`. 51 tests |
 | 2026-10-06 | **Agente LLM, fase 6: comprobaciones posteriores, pasos 1 y 2** (Carlos, rama `feature/Agente`): reglas de cifras sin respaldo, fuga del prompt e internos sobre lo que escribió el modelo, en modo observación (evento en la traza y campo en el log); `COMPROBACIONES_BLOQUEAN` para que una regla sustituya la respuesta por una frase fija (sin tokens en el stream si alguna bloquea). Excluidas de la fuga las frases de presentación que el modelo repite. 62 tests (11 nuevos); sin llamadas a Bedrock. Pendiente: medir sobre las 128 trazas y un lote adversario y decidir qué reglas bloquean |
 | 2026-10-06 | **Agente LLM, fase 6: medición de las comprobaciones** (Carlos, rama `feature/Agente`): script que aplica las reglas a las trazas guardadas (128 turnos) y lote adversario + sonda de síntesis forzada en Bedrock (26 turnos, 63 llamadas, 0,011 $). Cifras: 10 hallazgos, 3 falsos positivos (el «2.5 micras» de PM2.5) y una cita mal puesta. Fuga: Ministral repite el prompt de charla cada vez que la pregunta llega a la charla (4 de 4) y la regla solo detecta la copia literal (1 de 4). Internos: 0. Conteo por regla en el informe de trazas y en la evaluación de turnos. 63 tests |
+| 2026-10-08 | **`LLMOrchestrator` descartado y reparto de la fase 7** (Carlos): `Agente` queda como único agente; el código del orquestador se conserva sin previsión de uso (§2). El despliegue del agente con Bedrock y su dockerización pasan a otro miembro del equipo. El informe de trazas cuenta aparte los turnos cancelados por el cliente (antes salían como ruta `error`). 64 tests |
 
 
 ---
@@ -1511,7 +1520,8 @@ la enciende a mano para trabajar o hacer una demo.
   punto de CI/CD más abajo).
 - [x] LLM de la Fase 3: ¿local con GPU o servicio gestionado? ¿SQL generado o consultas
   predefinidas? **Resueltas** (ver §2): LLM hospedado OpenAI-compatible (2026-09-27) y 5 consultas
-  predefinidas parametrizadas (2026-09-28). Queda solo elegir el proveedor concreto.
+  predefinidas parametrizadas (2026-09-28). Proveedor: Amazon Bedrock (2026-10-04); queda elegir
+  el modelo (punto del agente, arriba).
 - [x] **¿Cómo se citan los datos de SQL?** → resuelto el 2026-09-30 separando rutas: los datos
   responden en texto libre (deterministas por construcción) y lo documental pasa por el flujo
   evidencias/validar; en respuestas mixtas la cifra va dentro de la afirmación (§7.3, §2).
