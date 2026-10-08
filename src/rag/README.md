@@ -6,8 +6,8 @@ otro servicio** (la API de chat). El RAG **no llama a ningún modelo de lenguaje
 fragmentos numerados `D1..Dn`, deja que el modelo redacte citándolos y después **valida las citas y
 construye la bibliografía desde el corpus**, nunca desde lo que diga el modelo.
 
-Estado: fases A (índice fiable) y B (evidencias, validación y servicio HTTP) implementadas y
-probadas. Pendiente la fase C (evaluación reproducible y calibración del umbral).
+Estado: fases A (índice fiable), B (evidencias, validación y servicio HTTP) y C (evaluación
+reproducible de la recuperación) implementadas.
 
 ## Principios
 
@@ -46,6 +46,7 @@ data/rag/*.md ──▶ rag.corpus ──▶ rag.embeddings ──▶ ChromaDB (
 | [`indexar.py`](indexar.py) | `python -m rag.indexar`: reconstruye el índice completo. Calcula los embeddings **antes** de borrar la colección anterior y guarda modelo, commit y fecha como metadatos. |
 | [`buscar.py`](buscar.py) | `buscar(consulta, k, tema)`: los `k` fragmentos más cercanos con `chunk_id`, texto, metadatos y distancia. Rechaza índice ausente o construido con otro modelo. |
 | [`evidencias.py`](evidencias.py) | Paso 1: `recuperar` (umbral, numeración `D1..Dn`, bibliografía, avisos). Paso 3: `resolver_evidencias`, `validar_salida`, `validar_y_renderizar`. Sin LLM. |
+| [`evaluar.py`](evaluar.py) | `python -m rag.evaluar`: mide la recuperación sobre `tests/evals/rag_casos.jsonl` (hit@4, MRR@10, abstención) y propone un umbral. Funciones puras probadas en CI; la búsqueda real y la figura solo en local. |
 | [`api.py`](api.py) | Servicio FastAPI con los cuatro endpoints y la traducción de errores tipados a códigos HTTP. |
 | [`errores.py`](errores.py) | `CorpusInvalido`, `IndiceNoPreparado`, `ModeloNoCoincide`, `ConsultaInvalida`, `EvidenciaDesconocida`. |
 
@@ -65,7 +66,7 @@ La primera ejecución descarga el modelo `intfloat/multilingual-e5-base` (~1,1 G
 |-|-|-|
 | `RAG_MODELO_EMBEDDINGS` | `intfloat/multilingual-e5-base` | Modelo de embeddings. Cambiarlo obliga a reindexar. |
 | `RAG_RUTA_CHROMA` | `data/chroma` | Directorio del índice. |
-| `RAG_UMBRAL_DISTANCIA` | `0.22` | Distancia coseno máxima para que un fragmento cuente como evidencia. Provisional. |
+| `RAG_UMBRAL_DISTANCIA` | `0.1754` | Distancia coseno máxima para que un fragmento cuente como evidencia. Ver «Umbral de evidencia». |
 | `RAG_API_PUERTO` | `8010` | Puerto del servicio HTTP. |
 
 ## Indexar el corpus
@@ -87,6 +88,19 @@ python -m rag.buscar --k 3 --tema salud --texto "¿puedo correr si soy asmático
 python -m rag.evidencias "¿qué son los bloques del día?"                   # paso 1: D1..Dn bajo el umbral
 python -m rag.evidencias --json "¿puedo correr si soy asmático?"           # misma respuesta que POST /rag/evidencias
 ```
+
+## Evaluar la recuperación
+
+```bash
+python -m rag.evaluar                          # 30 casos con el umbral vigente: resumen, calibración y tabla por caso
+python -m rag.evaluar --umbral 0.22 0.1754     # compara varios umbrales en una sola salida
+python -m rag.evaluar --figura                 # además, docs/rag/figuras/distancias_por_tipo.png (requiere matplotlib)
+```
+
+No usa LLM. Una búsqueda con `k=10` por caso; hit@4 mide lo que recibe el LLM. Los casos son
+`documental` (con `esperados` como `documento:seccion`), `ajena` y `adversaria`;
+`tests/test_rag_casos.py` comprueba en CI que cada sección etiquetada existe en el corpus. Tras
+cambiar el corpus o el modelo, reindexar y volver a ejecutar.
 
 ## Arrancar el servicio
 
@@ -244,13 +258,27 @@ se indexa; un fallo de embeddings no destruye el índice; un ID inventado, una a
 evidencias o una salida que no es un objeto se rechazan con reparación; ninguna URL escrita por el
 modelo llega a la bibliografía; los avisos sanitario y de actualidad se añaden cuando toca.
 
-## Umbral de evidencia (provisional)
+## Umbral de evidencia
 
-Con e5-base, `k=4` y el corpus actual (11 documentos, 50 fragmentos), las preguntas documentales
-dan una distancia de 0,11 a 0,20 en su mejor fragmento y las ajenas al corpus («¿cuál es la capital
-de Francia?») 0,24 a 0,25. El umbral 0,22 separa ambos grupos con un margen estrecho. Bajo el umbral
-entran también fragmentos poco pertinentes; no es un problema porque el modelo elige qué citar. Se
-recalibrará en la fase C con 20 a 30 casos de evaluación.
+Calibrado con `python -m rag.evaluar` (e5-base, 50 fragmentos, 30 casos, 2026-10-04):
+
+| Medida | 0,1754 (vigente) | 0,22 (anterior) |
+|-|-|-|
+| hit@4 (documentales) | 14/15 | 14/15 |
+| MRR@10 (documentales) | 0,740 | 0,740 |
+| hit@4 bajo el umbral (documentales) | 13/15 | 14/15 |
+| Ajenas rechazadas | 10/10 | 3/10 |
+| Adversarias con evidencias | 5/5 | 5/5 |
+
+0,1754 es el punto medio entre la peor documental (0,1750) y la mejor ajena (0,1759). Rechaza las
+ajenas cercanas al dominio (tiempo, tráfico, transporte), que con 0,22 llegaban al LLM, a cambio de
+perder una documental (doc-12, cuya sección esperada queda a 0,188). El hueco es de una milésima:
+es un ajuste a estos 30 casos, no un margen robusto. Las adversarias siguen pasando; es el LLM quien
+debe responder `sin_evidencia`.
+
+**El umbral depende del modelo.** Con `multilingual-e5-small` las distancias cambian y documentales
+y ajenas se solapan (ver `docs/notas_memoria.md` §7.2). Cambiar `RAG_MODELO_EMBEDDINGS` obliga a
+reindexar **y** a recalibrar `RAG_UMBRAL_DISTANCIA` con `python -m rag.evaluar`.
 
 ## Decisiones y límites conocidos
 
@@ -268,11 +296,10 @@ recalibrará en la fase C con 20 a 30 casos de evaluación.
 - Fuera de alcance por ahora: ingesta incremental, filtro por contaminante, reranking, historial de
   conversación, streaming y consulta de mediciones.
 
-## Pendiente (fase C)
+## Pendiente
 
-- `tests/evals/rag_casos.jsonl` con 20 a 30 casos (documentales, sin evidencia, adversarios) y un
-  script de evaluación con recall@k, validez de citas y acierto de abstención.
-- Recalibrar `RAG_UMBRAL_DISTANCIA` con esos casos; probar un criterio relativo al mejor fragmento
-  además del absoluto.
+- Medir con los mismos casos el comportamiento del LLM (respuestas con fuentes, reparaciones,
+  insuficiencia) cuando haya proveedor.
+- Probar un criterio de abstención relativo al mejor fragmento además del absoluto.
 - Conectar la API de chat con `GET /rag/herramienta`, `POST /rag/evidencias` y `POST /rag/validar`
   y revisar a mano las respuestas de aceptación.
