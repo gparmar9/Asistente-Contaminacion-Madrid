@@ -27,6 +27,7 @@ lección aprendida. No anotes tareas triviales (renombrados, formato, arreglos m
   lo no verificado, con `[por confirmar]`.
 - **Nunca** anotes secretos ni identificadores sensibles (contraseñas, claves de acceso, ID de cuenta
   de AWS): el repositorio está en GitHub.
+- No cites los planes de trabajo de cada feature: describe el alcance o el resultado, no el plan.
 - Sin relleno: frases cortas y datos concretos.
 - Actualiza las notas **en la misma rama y PR** que el cambio que describen.
 - Al terminar, di a la persona en una o dos líneas qué has anotado.
@@ -49,4 +50,6 @@ La cuenta es compartida y la proporciona el máster (región `eu-west-1`).
 - Tests de la API: `pytest ApiUsuario/tests/ -v` (SQLite en memoria, sin BBDD externa)
 - Tests del orquestador: `pytest LLMOrchestrator/tests/ -v` (LLM falso, sin red ni torch)
 - No subas `.env`, credenciales ni ficheros de datos grandes (revisa `.gitignore`).
+- Los planes de trabajo de cada feature son personales y no se versionan: nómbralos
+  `docs/**/plan_*.md` para que `.gitignore` los excluya.
 - Mensajes de commit en español con prefijo: `feat:`, `fix:`, `docs:`…
