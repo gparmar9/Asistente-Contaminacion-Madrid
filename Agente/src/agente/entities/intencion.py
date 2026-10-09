@@ -23,8 +23,14 @@ class Tema(str, Enum):
 
 @dataclass(frozen=True)
 class Clasificacion:
-    intencion: Intencion
+    """Una o dos intenciones: una pregunta mixta (datos y salud) lleva las dos."""
+    intenciones: frozenset[Intencion]
     tema: Tema = Tema.NINGUNO
 
+    @property
+    def etiqueta(self) -> str:
+        """Las intenciones en orden alfabético, separadas por comas: «DATOS, DOCUMENTAL»."""
+        return ", ".join(sorted(i.value for i in self.intenciones))
 
-DESCONOCIDA = Clasificacion(Intencion.DESCONOCIDA)
+
+DESCONOCIDA = Clasificacion(frozenset({Intencion.DESCONOCIDA}))

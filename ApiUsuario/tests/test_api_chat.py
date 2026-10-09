@@ -211,4 +211,5 @@ def test_chat_stream_sin_agente_emite_passthrough_y_done(cliente, con_settings):
     passthrough = json.loads(eventos[0][1].removeprefix("data: "))
     done = json.loads(eventos[1][1].removeprefix("data: "))
     assert passthrough["texto"] == modulo_chat.RESPUESTA_STUB
-    assert done == {"session_id": "s1", "traza_id": None}
+    assert done == {"session_id": "s1", "traza_id": None, "fuentes": passthrough["fuentes"],
+                    "advertencia": passthrough["advertencia"]}

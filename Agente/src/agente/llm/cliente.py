@@ -21,7 +21,8 @@ class ConfiguracionLLMInvalida(ValueError):
 
 def crear_llm(settings: Settings, temperatura: float | None = None, modelo: str = "") -> FunctionCallingLLM:
     """`temperatura` None = la de la configuración (síntesis); el clasificador y el redactor SQL
-    piden 0. `modelo` vacío = `LLM_MODELO`; el redactor SQL pasa `LLM_MODELO_SQL`."""
+    piden 0. `modelo` vacío = `LLM_MODELO`; el redactor SQL pasa `LLM_MODELO_SQL` y el clasificador,
+    `LLM_MODELO_CLASIFICADOR`."""
     t = settings.llm_temperatura if temperatura is None else temperatura
     if modelo:
         settings = replace(settings, llm_modelo=modelo)
@@ -63,6 +64,15 @@ def _bedrock(settings: Settings, temperatura: float) -> FunctionCallingLLM:
         raise ConfiguracionLLMInvalida("Con LLM_PROVEEDOR=bedrock hace falta LLM_MODELO (ID del modelo o perfil de inferencia)")
     from llama_index.core.base.llms.types import LLMMetadata
     from llama_index.llms.bedrock_converse import BedrockConverse
+    from llama_index.llms.bedrock_converse import utils as bedrock_utils
+
+    # Con un perfil de inferencia (`eu.`, `global.`...) LlamaIndex exige que el modelo base esté
+    # en su lista fija y el constructor falla con los nuevos (p. ej. eu.anthropic.claude-haiku-5-5,
+    # 0.15.3). Se añade el modelo base a esa lista; Bedrock valida el perfil en la llamada.
+    prefijo, _, base = settings.llm_modelo.partition(".")
+    if prefijo in ("us", "us-gov", "eu", "apac", "jp", "global", "ca", "au") \
+            and base not in bedrock_utils.BEDROCK_INFERENCE_PROFILE_SUPPORTED_MODELS:
+        bedrock_utils.BEDROCK_INFERENCE_PROFILE_SUPPORTED_MODELS += (base,)
 
     class _BedrockConverse(BedrockConverse):
         # LlamaIndex lleva una lista fija de modelos y `metadata` lanza `ValueError: Unknown model`

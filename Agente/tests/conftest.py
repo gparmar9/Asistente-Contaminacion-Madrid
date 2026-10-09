@@ -186,7 +186,7 @@ def _fila(fecha: str, estacion: int, contaminante: str, media: float) -> dict:
             "es_fin_semana": dia.weekday() >= 5, "ano": dia.year, "mes": dia.month}
 
 
-def herramienta_datos(engine, guion_sql: list):
+def herramienta_datos(engine, guion_sql: list, max_filas: int = 60):
     """`consultar_datos` sobre SQLite con un redactor falso que escribe el SQL del guion."""
     from agente.business.redactor_sql import RedactorSQL
     from agente.datos.mediciones import Mediciones
@@ -194,4 +194,5 @@ def herramienta_datos(engine, guion_sql: list):
     from agente.tools.sql_libre import HerramientaDatos
 
     llm_sql = LLMFalso(guion=list(guion_sql))
-    return llm_sql, HerramientaDatos(Mediciones(engine), RedactorSQL(llm_sql), FECHA_REFERENCIA)
+    return llm_sql, HerramientaDatos(Mediciones(engine), RedactorSQL(llm_sql, max_filas), FECHA_REFERENCIA,
+                                     max_filas)

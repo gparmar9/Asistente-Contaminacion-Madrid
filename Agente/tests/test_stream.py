@@ -20,7 +20,8 @@ from agente.business.sesiones import Sesiones
 from agente.llm.falso import LLMFalso, llamada, texto
 from agente.main import _turno_en_sesion, app, get_bucle
 from agente.tools.rag import HerramientaRag
-from tests.conftest import SALIDA_NO2, TEXTO_NO2, RagFingido
+from agente.tools import sql_libre
+from tests.conftest import SALIDA_NO2, TEXTO_NO2, RagFingido, herramienta_datos
 
 pytestmark = pytest.mark.anyio
 
@@ -74,6 +75,23 @@ def test_charla_llega_en_tokens_y_termina_sin_passthrough():
     assert [t for t, _ in eventos if t != "status"] == ["token"] * 3 + ["done"]
     assert "".join(d["texto"] for t, d in eventos if t == "token") == respuesta
     assert eventos[-1][1]["session_id"] == "s1" and len(eventos[-1][1]["traza_id"]) == 32
+    assert (eventos[-1][1]["fuentes"], eventos[-1][1]["advertencia"]) == ([], None)
+
+
+async def test_datos_en_tokens_lleva_las_fuentes_sql_en_done(bd_mediciones):
+    pregunta = "¿Qué estación tuvo más NO2 el 30 de abril de 2026?"
+    sintesis = "El 30 de abril de 2026 el NO2 más alto fue el de Plaza Elíptica (45,0 µg/m³)."
+    _, datos = herramienta_datos(bd_mediciones, [texto(
+        "SELECT nombre_estacion, media FROM mediciones_bloques "
+        "WHERE fecha = '2026-04-30' AND contaminante = 'NO2' ORDER BY media DESC")])
+    llm = LLMFalso(guion=[llamada(sql_libre.NOMBRE, {"pregunta": pregunta}, "c1"),
+                          texto("Texto libre que la síntesis sustituye."), texto(sintesis)])
+    clasificador = LLMFalso(guion=[texto("intencion: DATOS\ntema: ninguno")])
+    eventos = await _todos(_eventos(Bucle(llm, [datos], llm_clasificador=clasificador), pregunta=pregunta))
+
+    assert "passthrough" not in [t for t, _ in eventos] and eventos[-1][0] == "done"
+    assert "".join(d["texto"] for t, d in eventos if t == "token") == sintesis
+    assert [f["tipo"] for f in eventos[-1][1]["fuentes"]] == ["sql"]
 
 
 async def test_documental_sale_entero_como_passthrough():
@@ -90,6 +108,8 @@ async def test_documental_sale_entero_como_passthrough():
     passthrough = eventos[-2][1]
     assert passthrough["texto"] == TEXTO_NO2 and passthrough["advertencia"] == frases.AVISO_SANITARIO
     assert passthrough["fuentes"] == [{"tipo": "documento", "referencia": "Efectos del NO2 en la salud"}]
+    done = eventos[-1][1]
+    assert (done["fuentes"], done["advertencia"]) == (passthrough["fuentes"], passthrough["advertencia"])
 
 
 async def test_llm_caido_con_el_stream_abierto_da_error_sin_done():

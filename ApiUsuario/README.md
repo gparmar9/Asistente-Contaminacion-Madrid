@@ -64,16 +64,16 @@ Misma entrada; respuesta `text/event-stream`. Cada evento es `event: <tipo>\ndat
 | Evento | `data` | Cuándo |
 |-|-|-|
 | `status` | `{fase, herramienta?}`: `en_espera`, `clasificando`, `buscando`, `redactando`, `validando` | Al cambiar de fase y cada 0,7 s si no sale nada |
-| `token` | `{texto}` | Fragmentos de las respuestas libres (charla) |
+| `token` | `{texto}` | Fragmentos de las respuestas definitivas (charla, síntesis de datos, síntesis forzada) |
 | `passthrough` | `{texto, fuentes, advertencia, traza_id}` | Respuesta completa entregada al final (ruta documental, frases fijas) |
 | `error` | `{detalle}` | Fallo con el stream abierto; cierra sin `done` |
-| `done` | `{session_id, traza_id}` | Turno completado |
+| `done` | `{session_id, traza_id, fuentes, advertencia}` | Turno completado, con los metadatos definitivos aunque el texto llegara como `token` |
 
 - Con `AGENTE_URL`: reenvía byte a byte el SSE de `{AGENTE_URL}/responder/stream`. Si el
   agente no contesta 200, responde 503 sin abrir el stream. Si el cliente se va, cierra la
   conexión con el agente (que cancela el turno).
 - Sin `AGENTE_URL`: llama al mismo camino que `/chat` y emite `passthrough` + `done`
-  (`traza_id: null`).
+  (`traza_id: null`; `done` repite las fuentes y la advertencia).
 
 ```bash
 curl -N -X POST localhost:8000/chat/stream -H 'Content-Type: application/json' \

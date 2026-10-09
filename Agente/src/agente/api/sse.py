@@ -3,8 +3,8 @@
     turno(emitir) en una tarea -> eventos a una cola acotada (si el cliente lee despacio, el turno espera)
       -> el generador los formatea: status | token
       -> si en `intervalo_s` no sale nada: repite el último status (heartbeat, fuera de la cola)
-      -> al terminar: passthrough (si la respuesta no salió ya como tokens) y done;
-         si el turno falla: error, sin done
+      -> al terminar: passthrough (si la respuesta no salió ya como tokens) y done, que lleva
+         siempre las fuentes y la advertencia; si el turno falla: error, sin done
       -> si el generador se cierra antes (el cliente se fue): cancela el turno y espera a que limpie
 
 La cancelación corta el turno local y sus conexiones, pero no garantiza que el proveedor deje de
@@ -71,14 +71,13 @@ async def eventos(turno: Turno, session_id: str, intervalo_s: float = 0.7,
             yield formatear("error", {"detalle": detalle})
             return
         resultado = tarea.result()
+        metadatos = {"fuentes": [f.model_dump() for f in resultado.fuentes],
+                     "advertencia": resultado.advertencia}
         if not resultado.emitida:
-            yield formatear("passthrough", {
-                "texto": resultado.respuesta,
-                "fuentes": [f.model_dump() for f in resultado.fuentes],
-                "advertencia": resultado.advertencia,
-                "traza_id": resultado.traza_id,
-            })
-        yield formatear("done", {"session_id": session_id, "traza_id": resultado.traza_id})
+            yield formatear("passthrough", {"texto": resultado.respuesta, **metadatos,
+                                            "traza_id": resultado.traza_id})
+        # Los tokens no llevan metadatos: done los repite para cualquier forma de entrega
+        yield formatear("done", {"session_id": session_id, "traza_id": resultado.traza_id, **metadatos})
     finally:
         if obtener is not None:
             obtener.cancel()

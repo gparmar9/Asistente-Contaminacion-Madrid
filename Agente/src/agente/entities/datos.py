@@ -1,4 +1,4 @@
-"""Datos de la herramienta SQL: resultado de una consulta y contexto del redactor. Solo datos.
+"""Datos de la herramienta SQL: resultado de una consulta, contexto del redactor y periodos. Solo datos.
 
 Los valores de `ResultadoConsulta` ya son serializables en JSON (None, bool, int, float, str): las
 fechas van como texto ISO y los `numeric` de PostgreSQL como float.
@@ -24,3 +24,12 @@ class ContextoDatos:
     primera_fecha: date                       # la vista cubre 2 años hasta `ultima_fecha`
     ultima_fecha: date
     estaciones: tuple[tuple[Any, ...], ...]   # (código, nombre, distrito)
+
+
+@dataclass(frozen=True)
+class Periodo:
+    """Periodo calculado en Python a partir de una expresión de la pregunta (`business/periodos.py`).
+    `rangos`: días (inicio, fin) incluidos; varios en «en julio» o «los últimos dos veranos»."""
+    expresion: str                            # tal como aparece en la pregunta, en minúsculas y sin tildes
+    rangos: tuple[tuple[date, date], ...]
+    bloque: str | None = None                 # «esta tarde» → 'tarde'

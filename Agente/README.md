@@ -50,10 +50,10 @@ Cada evento es `event: <tipo>\ndata: <json>\n\n`, con `Cache-Control: no-cache` 
 | Evento | `data` | Cuándo |
 |-|-|-|
 | `status` | `{fase, herramienta?}`: `en_espera`, `clasificando`, `buscando`, `redactando`, `validando` | Al cambiar de fase, y repetido cada `STREAM_HEARTBEAT_S` si no sale nada |
-| `token` | `{texto}` | Solo respuestas definitivas: la llamada sin herramientas ofrecidas (charla) y la síntesis forzada |
-| `passthrough` | `{texto, fuentes, advertencia, traza_id}` | El resto, íntegro al final: ruta documental (el JSON se valida antes de mostrarse), frases fijas, `sin_evidencia` |
+| `token` | `{texto}` | Solo respuestas definitivas: la llamada sin herramientas ofrecidas (charla), la síntesis de datos y la síntesis forzada |
+| `passthrough` | `{texto, fuentes, advertencia, traza_id}` | El resto, íntegro al final: rutas documental (el JSON se valida antes de mostrarse) y mixta, frases fijas, `sin_evidencia` |
 | `error` | `{detalle}` | Fallo con el stream ya abierto; cierra sin `done`. Antes de abrirlo, código HTTP (503) |
-| `done` | `{session_id, traza_id}` | Turno completado |
+| `done` | `{session_id, traza_id, fuentes, advertencia}` | Turno completado. Lleva siempre los metadatos definitivos, también cuando el texto salió como `token` (si hubo `passthrough`, coinciden con los suyos) |
 
 Si el cliente corta la conexión, el turno se cancela (sin más llamadas al LLM ni al RAG, y el
 span del turno lleva `agente.cancelado=true`). Eso no garantiza que Bedrock deje de procesar y
@@ -66,9 +66,11 @@ curl -N -X POST localhost:8200/responder/stream -H 'Content-Type: application/js
 
 ## Cómo responde un turno
 
-0. **Clasificar y decidir.** Una llamada corta al LLM (temperatura 0) da la intención y el tema.
-   Si falla o tarda más de `CLASIFICADOR_TIMEOUT_S`, el turno sigue como `DESCONOCIDA`
-   (todas las herramientas, ninguna obligada). Después decide el código:
+0. **Clasificar y decidir.** Una llamada corta al LLM de `LLM_MODELO_CLASIFICADOR` (vacío = el del
+   agente; temperatura 0) da una o dos intenciones
+   (`intencion: DATOS, DOCUMENTAL`) y el tema. Si falla, tarda más de `CLASIFICADOR_TIMEOUT_S` o
+   da tres o más, el turno sigue como `DESCONOCIDA` (todas las herramientas, ninguna obligada).
+   Después decide el código:
 
    | Intención | Qué hace el agente |
    |-|-|
@@ -77,6 +79,7 @@ curl -N -X POST localhost:8200/responder/stream -H 'Content-Type: application/js
    | `PREDICCION`, `FUERA_DE_ALCANCE` | Frase fija, sin más llamadas al modelo |
    | `CHARLA` | Sin herramientas, prompt corto |
    | `DESCONOCIDA` | Todas las herramientas, ninguna obligada |
+   | Dos intenciones | Se suman herramientas y obligaciones (`DATOS, DOCUMENTAL`: las dos obligatorias). Frase fija solo si las dos la tienen; si solo una (`DATOS, PREDICCION`), se responde la otra y se añade al final una nota («No hago predicciones de la calidad del aire.») |
 
 1. Se piden las definiciones de las herramientas: al RAG (`GET /rag/herramienta`, cacheado) y,
    la de datos, comprobando que la base responde (último día, cacheado una hora). La que no
@@ -95,7 +98,11 @@ curl -N -X POST localhost:8200/responder/stream -H 'Content-Type: application/js
    - **con evidencias** (ruta documental): una llamada sin herramientas devuelve el JSON
      `{estado, afirmaciones, limitaciones}`, `POST /rag/validar` lo comprueba (una reparación como
      máximo) y se entrega tal cual el texto con citas que renderiza el RAG. `fuentes` lista solo
-     los documentos citados y `advertencia` lleva el aviso sanitario si el RAG lo activa.
+     los documentos citados y `advertencia` lleva el aviso sanitario si el RAG lo activa;
+   - **con las dos** (ruta mixta): respuesta compuesta, primero el bloque de datos (su síntesis
+     solo describe mediciones) y después el bloque documental tal como lo renderiza el RAG. La
+     síntesis documental no recibe las filas. Si una parte falla (base o RAG caídos, sin
+     evidencias, consulta sin resolver), va su frase fija y la otra responde igual.
 
 Las herramientas nunca lanzan: sus errores vuelven al modelo como `{"error": ...}`.
 
@@ -115,17 +122,23 @@ puerta es `src/agente/datos/mediciones.py`: sesión de solo lectura, tiempo lím
 (`DB_TIMEOUT_S`) y tope de filas (`DB_MAX_FILAS`). Sin `DATABASE_URL`, las preguntas de datos
 reciben una frase fija.
 
-`consultar_datos(pregunta)` recibe la pregunta en lenguaje natural y dentro:
+`consultar_datos(pregunta)` recibe la pregunta en lenguaje natural (el bucle le añade la del usuario
+y sus 2 previas) y dentro:
 
+0. **Periodo** (`business/periodos.py`): Python calcula las fechas de la expresión de tiempo de la
+   pregunta del usuario («ahora mismo», «la semana pasada», «en julio», «los últimos dos veranos»...).
+   El modelo no calcula fechas: el redactor copia el periodo y lo que no se reconoce sale de un
+   calendario ya calculado en el prompt.
 1. **Redactor** (`business/redactor_sql.py`): una llamada a temperatura 0 al modelo de
    `LLM_MODELO_SQL` (vacío = el del agente) con el esquema de la vista, las estaciones, las fechas
-   y las reglas (media ponderada, NO2 y PM10 por defecto, `ILIKE`, definiciones de «esta semana»,
-   «hora punta»...). Devuelve solo el SQL.
+   y las reglas (media ponderada, NO2 y PM10 por defecto, `ILIKE`, «hora punta»...). El mensaje
+   lleva la pregunta del usuario, la del modelo (para lugares) y el periodo calculado. Devuelve solo el SQL.
 2. **Validador** (`business/validar_sql.py`, `sqlglot`): una sentencia `SELECT`, solo la vista, sin
-   DML ni funciones de sistema, `LIMIT` impuesto.
+   DML ni funciones de sistema, sin `CURRENT_DATE`/`NOW()`, fechas literales dentro del periodo
+   calculado (un día de margen), `LIMIT` impuesto (tope + 1, para detectar el truncado; un `LIMIT` menor del modelo se respeta).
 3. **Ejecución** en el DAL. Si el validador o PostgreSQL rechazan el SQL, **un reintento** con el
    error; si la base está caída, sin reintento.
-4. Al modelo vuelven `{descripcion, columnas, filas, truncado}` con las cifras a 1 decimal y un
+4. Al modelo vuelven `{descripcion, periodo, columnas, filas, truncado}` con las cifras a 1 decimal y un
    tope de tamaño. El SQL va a la traza (span `redactar_sql` por intento, evento `sql_invalido`,
    atributo `agente.sql`), nunca a la respuesta.
 
@@ -242,9 +255,10 @@ contra el Postgres local cargado (no escribe nada). Solo con
 
 ## Medir el clasificador (fuera de CI)
 
-Con un proveedor real en `.env`: 29 preguntas etiquetadas a mano en
-`evaluacion/preguntas_clasificador.json`; algunas llevan `historial` (seguimientos) y el acierto
-de los casos de la fase 5 sale aparte.
+Con un proveedor real en `.env`: 31 preguntas etiquetadas a mano en
+`evaluacion/preguntas_clasificador.json`; algunas llevan `historial` (seguimientos) y tres, dos
+intenciones (`"DATOS, DOCUMENTAL"`, sin orden). El acierto de los casos de la fase 5 y de las
+mixtas sale aparte. Mide el modelo de `LLM_MODELO_CLASIFICADOR` (vacío = `LLM_MODELO`).
 
 ```bash
 set -a && . ./.env && set +a
@@ -275,7 +289,7 @@ plazo?»). El markdown añade la columna «Historial» (turnos previos enviados)
 Datos: `evaluacion/casos_datos.json` tiene 16 casos (11 de datos, 2 mixtos y 3 de límites) con
 lo esperado (`datos`: si se consulta la base) y un `gold` estructurado (entidad, contaminante,
 periodo, valor u orden) para revisar a mano. Necesita `DATABASE_URL` y `FECHA_REFERENCIA=2026-05-01`
-(los periodos del gold cuentan desde esa fecha). Las mixtas se evalúan a partir de la fase de varias
-intenciones.
+(los periodos del gold cuentan desde esa fecha). Las mixtas esperan `intencion: DATOS, DOCUMENTAL`
+y la ruta `mixta`.
 
 La carpeta `resultados/` no se versiona; los resultados revisados se añaden con `git add -f`.

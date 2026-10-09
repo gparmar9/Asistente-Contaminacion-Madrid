@@ -58,6 +58,8 @@ class Settings:
     db_max_filas: int = 60      # filas que devuelve como mucho una consulta
     # Modelo del redactor SQL (mismo proveedor). Vacío = el mismo modelo del agente.
     llm_modelo_sql: str = ""
+    # Modelo del clasificador de intención (mismo proveedor). Vacío = el mismo modelo del agente.
+    llm_modelo_clasificador: str = ""
     # Fecha que hace de «hoy» al resolver periodos relativos. Solo en evaluación, para que el lote
     # sea reproducible; None (vacía) = la fecha del sistema.
     fecha_referencia: date | None = None
@@ -99,6 +101,7 @@ def get_settings() -> Settings:
         db_timeout_s=float(os.getenv("DB_TIMEOUT_S", "5")),
         db_max_filas=int(os.getenv("DB_MAX_FILAS", "60")),
         llm_modelo_sql=os.getenv("LLM_MODELO_SQL", ""),
+        llm_modelo_clasificador=os.getenv("LLM_MODELO_CLASIFICADOR", ""),
         fecha_referencia=_fecha(os.getenv("FECHA_REFERENCIA", "")),
     )
 

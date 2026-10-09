@@ -63,7 +63,11 @@ def texto_historial(turnos: Sequence[TurnoGuardado], max_turnos: int | None = No
     return "\n".join(lineas)
 
 
+def preguntas_previas(turnos: Sequence[TurnoGuardado]) -> list[str]:
+    """Las últimas preguntas del usuario, de la más antigua a la más reciente."""
+    return [t.pregunta for t in turnos[-PREGUNTAS_PREVIAS_BUSQUEDA:]] if turnos else []
+
+
 def pregunta_contextual(turnos: Sequence[TurnoGuardado], pregunta: str) -> str:
     """Con una sola pregunta previa, la cadena NO2 → niños → largo plazo perdería el NO2 en el tercer turno."""
-    previas = [t.pregunta for t in turnos[-PREGUNTAS_PREVIAS_BUSQUEDA:]] if turnos else []
-    return " ".join([*previas, pregunta])
+    return " ".join([*preguntas_previas(turnos), pregunta])

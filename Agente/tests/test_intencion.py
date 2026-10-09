@@ -6,10 +6,14 @@ import pytest
 
 from agente.business import frases
 from agente.business.bucle import Bucle
+from agente.business.intencion import decidir, interpretar
+from agente.entities.eventos import EventoTexto
+from agente.entities.intencion import Intencion
 from agente.llm.falso import LLMFalso, llamada, texto
+from agente.tools import rag as herramienta_rag, sql_libre
 from agente.tools.base import Herramienta, ResultadoHerramienta
 from agente.tools.rag import HerramientaRag
-from tests.conftest import SALIDA_NO2, TEXTO_NO2, RagFingido
+from tests.conftest import SALIDA_NO2, TEXTO_NO2, RagFingido, herramienta_datos
 
 pytestmark = pytest.mark.anyio
 
@@ -115,3 +119,46 @@ async def test_documental_con_busqueda_caida_no_repite_la_busqueda():
     r = await bucle.responder(PREGUNTA)
     assert r.respuesta == frases.DOCUMENTACION_NO_DISPONIBLE and r.ruta == "fija"
     assert len(rag.busquedas) == 1 and not r.busqueda_forzada
+
+
+# ---------------------------------------------------------------------- varias intenciones
+
+@pytest.mark.parametrize("salida, intenciones", [
+    ("intencion: DATOS, DOCUMENTAL\ntema: salud", {"DATOS", "DOCUMENTAL"}),
+    ("intencion: **DATOS**\ntema: ninguno", {"DATOS"}),
+    ("intencion: DATOS, DOCUMENTAL, CHARLA\ntema: salud", None),  # tres o más
+    ("intencion: DATOS, DATOS\ntema: ninguno", None),
+    ("intencion: DATOS, OTRA\ntema: ninguno", None),
+])
+async def test_clasificador_acepta_una_o_dos_intenciones(salida, intenciones):
+    c = interpretar(salida)
+    assert (c and {i.value for i in c.intenciones}) == intenciones
+
+
+@pytest.mark.parametrize("intenciones, frase, herramientas, obligadas", [
+    ({Intencion.DATOS, Intencion.DOCUMENTAL}, None, {herramienta_rag.NOMBRE, sql_libre.NOMBRE}, (True, True)),
+    ({Intencion.PREDICCION, Intencion.FUERA_DE_ALCANCE}, frases.FRASE_PREDICCION, None, (False, False)),
+])
+async def test_decision_por_conjunto(intenciones, frase, herramientas, obligadas):
+    d = decidir(frozenset(intenciones))
+    assert d.frase == frase and (d.herramientas and set(d.herramientas)) == herramientas
+    assert (d.busqueda_obligada, d.datos_obligados) == obligadas
+
+
+async def test_datos_y_prediccion_responde_los_datos_y_anade_la_nota(bd_mediciones):
+    sql = ("SELECT nombre_estacion, media FROM mediciones_bloques "
+           "WHERE fecha = '2026-04-30' AND contaminante = 'NO2' ORDER BY media DESC")
+    sintesis = "El 30 de abril de 2026, último día disponible, el NO2 más alto fue el de Plaza Elíptica (45,0 µg/m³)."
+    _, datos = herramienta_datos(bd_mediciones, [texto(sql)])
+    llm = LLMFalso(guion=[texto("Texto libre que la síntesis sustituye."), texto(sintesis)])
+    bucle = Bucle(llm, [datos], llm_clasificador=LLMFalso(guion=[_clase("DATOS, PREDICCION")]))
+    tokens = []
+
+    async def emitir(evento):
+        if isinstance(evento, EventoTexto):
+            tokens.append(evento.texto)
+    r = await bucle.responder("¿Cómo está hoy el aire en Vallecas y cómo estará mañana?", emitir)
+
+    assert (r.intencion, r.ruta) == ("DATOS, PREDICCION", "datos")
+    assert r.respuesta == f"{sintesis}\n\n{frases.NOTA_PREDICCION}"
+    assert r.emitida and "".join(tokens) == r.respuesta  # la nota sale también como token

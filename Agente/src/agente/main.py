@@ -48,7 +48,7 @@ def construir_bucle(settings: Settings = settings) -> Bucle | None:
     `settings`: la del proceso; el evaluador de turnos pasa la suya."""
     try:
         llm = crear_llm(settings)
-        llm_clasificador = crear_llm(settings, temperatura=0.0)
+        llm_clasificador = crear_llm(settings, temperatura=0.0, modelo=settings.llm_modelo_clasificador)
         llm_sql = crear_llm(settings, temperatura=0.0, modelo=settings.llm_modelo_sql)
     except ConfiguracionLLMInvalida as exc:
         logger.warning("LLM sin configurar: %s. /responder devolverá 503 hasta corregirlo", exc)
