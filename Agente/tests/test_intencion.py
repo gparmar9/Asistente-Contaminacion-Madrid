@@ -48,7 +48,7 @@ def _clase(intencion: str, tema: str = "ninguno"):
 
 
 @pytest.mark.parametrize("intencion, frase", [
-    ("DATOS", frases.FRASE_DATOS),
+    ("DATOS", frases.FRASE_DATOS_NO_DISPONIBLE),  # sin herramienta de datos (sin base de datos)
     ("PREDICCION", frases.FRASE_PREDICCION),
     ("FUERA_DE_ALCANCE", frases.FRASE_FUERA_DE_ALCANCE),
 ])

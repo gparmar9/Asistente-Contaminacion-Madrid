@@ -44,7 +44,8 @@ PRECIOS = {
 }
 
 # Orden de las fases en la tabla de latencias; el resto de spans van detrás, por nombre.
-FASES = ("clasificar", "bucle", "busqueda_forzada", "sintesis_documental", "sintesis_forzada", "validar")
+FASES = ("clasificar", "bucle", "busqueda_forzada", "consulta_forzada", "sintesis_documental", "sintesis_datos",
+         "sintesis_forzada", "validar")
 
 PLANTILLA_HTML = Path(__file__).with_name("plantilla_informe.html")
 

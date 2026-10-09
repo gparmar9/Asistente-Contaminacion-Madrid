@@ -5,7 +5,7 @@ from enum import Enum
 
 class Intencion(str, Enum):
     DOCUMENTAL = "DOCUMENTAL"              # salud, normativa, protocolo, el proyecto: busca en el RAG
-    DATOS = "DATOS"                        # mediciones actuales o históricas: aún no hay herramienta
+    DATOS = "DATOS"                        # mediciones actuales o históricas: consulta SQL
     PREDICCION = "PREDICCION"              # qué pasará: no hay predicción
     CHARLA = "CHARLA"                      # saludos, qué sabe hacer el asistente
     FUERA_DE_ALCANCE = "FUERA_DE_ALCANCE"  # nada que ver con la calidad del aire

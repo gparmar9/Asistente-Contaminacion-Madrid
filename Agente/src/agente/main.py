@@ -27,12 +27,15 @@ from agente.business.bucle import Bucle, LLMNoDisponible, ResultadoTurno
 from agente.business.memoria import ventana
 from agente.business.sesiones import Sesiones
 from agente.config.settings import Settings, get_settings
+from agente.business.redactor_sql import RedactorSQL
+from agente.datos.mediciones import Mediciones, crear_motor
 from agente.datos.memoria import AlmacenConversaciones, AlmacenEnMemoria
 from agente.entities.chat import Pregunta, Respuesta
 from agente.entities.eventos import Emisor, EventoEstado, Fase
 from agente.entities.memoria import TurnoGuardado
 from agente.llm.cliente import ConfiguracionLLMInvalida, crear_llm
 from agente.tools.rag import HerramientaRag
+from agente.tools.sql_libre import HerramientaDatos
 
 logger = logging.getLogger("agente")
 log_turnos = observabilidad.configurar_resumen()
@@ -46,6 +49,7 @@ def construir_bucle(settings: Settings = settings) -> Bucle | None:
     try:
         llm = crear_llm(settings)
         llm_clasificador = crear_llm(settings, temperatura=0.0)
+        llm_sql = crear_llm(settings, temperatura=0.0, modelo=settings.llm_modelo_sql)
     except ConfiguracionLLMInvalida as exc:
         logger.warning("LLM sin configurar: %s. /responder devolverá 503 hasta corregirlo", exc)
         return None
@@ -54,6 +58,12 @@ def construir_bucle(settings: Settings = settings) -> Bucle | None:
         herramientas.append(HerramientaRag(settings.rag_url, timeout_s=settings.rag_timeout_s))
     else:
         logger.warning("RAG_URL vacía: el agente no tendrá la herramienta documental")
+    if settings.database_url:
+        mediciones = Mediciones(crear_motor(settings.database_url, settings.db_timeout_s), settings.db_max_filas)
+        herramientas.append(HerramientaDatos(mediciones, RedactorSQL(llm_sql, settings.db_max_filas),
+                                             settings.fecha_referencia, settings.db_max_filas))
+    else:
+        logger.warning("DATABASE_URL vacía: las preguntas de datos recibirán la frase de datos no disponibles")
     return Bucle(llm, herramientas, max_vueltas=settings.max_vueltas, llm_clasificador=llm_clasificador,
                  clasificador_timeout_s=settings.clasificador_timeout_s,
                  comprobaciones_bloquean=settings.comprobaciones_bloquean)
@@ -98,6 +108,7 @@ def salud() -> dict:
         "entorno": settings.app_env,
         "llm": {"proveedor": settings.llm_proveedor, "modelo": settings.llm_modelo or None},
         "rag_url": settings.rag_url or None,
+        "datos": bool(settings.database_url),  # la URL lleva la contraseña: no se publica
     }
 
 

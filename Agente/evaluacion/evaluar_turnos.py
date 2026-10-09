@@ -1,7 +1,8 @@
 """Evaluación pequeña: turnos completos contra el `Bucle` en proceso (fuera de CI: usa red y claves).
 
 Cada caso de `casos_turno.json` declara lo esperado: intención, ruta, si se busca en el RAG y,
-en las preguntas documentales, si la respuesta cita documentos. El script lo comprueba, guarda
+en las preguntas documentales, si la respuesta cita documentos. Los de `casos_datos.json`
+declaran además si se consultan las mediciones (`datos`). El script lo comprueba, guarda
 las trazas del lote en un JSONL (la etiqueta del lote es también el proyecto de Phoenix) y
 escribe en `resultados/` un markdown fechado con tres criterios separados:
 
@@ -49,7 +50,7 @@ from agente.business.bucle import Bucle, LLMNoDisponible, ResultadoTurno  # noqa
 from agente.business.sesiones import Sesiones  # noqa: E402
 from agente.config.settings import get_settings  # noqa: E402
 from agente.datos.memoria import AlmacenEnMemoria  # noqa: E402
-from agente.tools import rag  # noqa: E402
+from agente.tools import rag, sql_libre  # noqa: E402
 from evaluacion import informe_trazas  # noqa: E402
 
 CASOS = Path(__file__).with_name("casos_turno.json")
@@ -74,6 +75,7 @@ def comprobar(esperado: dict, r: ResultadoTurno) -> list[str]:
     """Una línea por cada clave de `esperado` que no coincide con lo obtenido."""
     obtenido = {"intencion": r.intencion, "ruta": r.ruta,
                 "busqueda": rag.NOMBRE in r.herramientas_usadas,
+                "datos": sql_libre.NOMBRE in r.herramientas_usadas,
                 "cita": any(f.tipo == "documento" for f in r.fuentes)}
     return [f"{clave}: esperado {_si_no(valor)}, obtenido {_si_no(obtenido[clave])}"
             for clave, valor in esperado.items() if obtenido[clave] != valor]

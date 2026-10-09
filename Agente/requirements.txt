@@ -11,3 +11,9 @@ llama-index-llms-bedrock-converse==0.15.3
 # Observabilidad: spans OpenInference (Phoenix) y exportador JSONL propio. Trae
 # openinference-instrumentation y opentelemetry-sdk; sin pandas.
 arize-phoenix-otel==0.17.2
+# Herramienta SQL: acceso de solo lectura a PostgreSQL. SQLAlchemy 2.1 usa psycopg 3 para
+# postgresql:// (ApiUsuario y el orquestador fijan 2.0 con psycopg2; aquí no hace falta).
+sqlalchemy==2.1.3
+psycopg[binary]==3.3.6
+# Validador del SQL que escribe el redactor (una sentencia, solo la vista, LIMIT impuesto).
+sqlglot==30.21.0

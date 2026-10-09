@@ -109,6 +109,7 @@ Hilo conductor de la memoria: cómo y por qué cambió el diseño.
 | 2026-10-06 | Alcance del clasificador del agente | Alcance por tema («calidad del aire») → **alcance por lo que el sistema puede responder**: contaminación del aire, con los contaminantes que mide la red citados en el prompt; polen, ruido y tiempo fuera; alergia y asma dentro; los límites legales son documentación, no mediciones | En el lote del 2026-10-06 los dos modelos fallaron la pregunta del polen de forma distinta (uno `DATOS`, otro `FUERA_DE_ALCANCE`). Medido antes y después: 27/28 → 29/29 con los dos modelos (§7.3.1) |
 | 2026-10-06 | Comprobaciones posteriores del agente | Un modo global `COMPROBACIONES_MODO` (observar o bloquear todas) → **activación por regla** (`COMPROBACIONES_BLOQUEAN`, vacía por defecto) | Cada regla pasa a bloquear solo con evidencia propia (0 falsos positivos en las trazas reales y en un lote adversario, y al menos un acierto). Con un modo global, una regla ruidosa impediría bloquear con las fiables. Descartado también pedir una reparación al modelo («la cifra X no está en D2») en vez de la frase fija: sería mejor respuesta, pero añade una llamada y mezcla la validación del RAG con la del agente; queda como trabajo futuro |
 | 2026-10-08 | Agente del asistente | `LLMOrchestrator` y `Agente` conviviendo, elegidos por `AGENTE_URL` → **`Agente` como único agente**; `LLMOrchestrator` descartado: su código se conserva en el repositorio, sin previsión de uso | Decisión del equipo. El orquestador nunca llegó a conectarse a un proveedor; el `Agente` ya tiene clasificador, ruta documental validada, sesión, *streaming*, memoria, observabilidad y comprobaciones, y está probado con Bedrock. Consecuencia: la consulta de mediciones (`query_sql` del orquestador) no existe aún en el agente y pasa a ser su herramienta SQL pendiente |
+| 2026-10-08 | Preguntas de datos del agente | Frase fija («todavía no consulto mediciones») → **herramienta `consultar_datos` con SQL libre**: un LLM redacta el SQL sobre la vista `mediciones_bloques`, un validador (`sqlglot`) lo limita, PostgreSQL lo ejecuta con un rol de solo lectura y una síntesis sin herramientas redacta la respuesta | Las preguntas de datos eran la mitad de las preguntas objetivo del asistente. Se empieza por SQL libre porque 5 de las 11 preguntas de datos del lote no caben en un catálogo cerrado razonable; el catálogo solo se construye si el libre no alcanza el criterio de la evaluación |
 
 **Decisiones abiertas que alimentarán esta tabla:** modelo del agente en Bedrock (Ministral 14B o
 gpt-oss-120b; aplazado hasta poder evaluar las herramientas SQL y de ML, §13) y dónde se despliega
@@ -169,8 +170,9 @@ Corpus RAG (.md) ─▶ troceado + embeddings e5 ─▶ ChromaDB ─▶ servicio
 
 Usuario ─▶ ApiUsuario (FastAPI) ──▶ PostgreSQL (lecturas: estaciones, series)   (Fase 4, en curso)
         /chat, /chat/stream ──▶ Agente ─▶ LLM vía LlamaIndex (Bedrock | OpenAI-compat)
-                                   └─ buscar_evidencias ─▶ rag.api (HTTP)   (Fase 3, en construcción;
-                                                                              herramienta SQL pendiente)
+                                   ├─ buscar_evidencias ─▶ rag.api (HTTP)   (Fase 3, en construcción)
+                                   └─ consultar_datos ─▶ redactor SQL (LLM) ─▶ validador
+                                                       ─▶ PostgreSQL: vista mediciones_bloques (solo lectura)
 ```
 
 `LLMOrchestrator` (primer agente, con `query_sql`) sigue en el repositorio pero está descartado
@@ -186,7 +188,7 @@ mediante *tool use*.
 |---|---|---|
 | 1 | Datos, detector de anomalías, pipeline en tiempo real | Hecha en local; migración a AWS en curso |
 | 2 | Vector DB y servicio de evidencias | **Reescrita** (2026-09-23) como servicio de evidencias y mergeada en `development`; pendiente de pasar a `main` |
-| 3 | LLM con *tool use* | `Agente` (2026-10-04, §7.3.1), rediseño por fases con bucle propio y LlamaIndex como cliente: fases 1 a 5 hechas (esqueleto, herramienta documental, ruta documental validada, clasificador de intención, sesión y streaming SSE, memoria de la conversación), observabilidad y comprobaciones posteriores en observación (fase 6, falta decidir cuáles bloquean); 64 tests; probado con Amazon Bedrock. Pendiente: herramienta SQL. Despliegue y dockerización, a cargo de otro miembro del equipo. `LLMOrchestrator` (2026-09-28) descartado el 2026-10-08 (§7.3.2) |
+| 3 | LLM con *tool use* | `Agente` (2026-10-04, §7.3.1), rediseño por fases con bucle propio y LlamaIndex como cliente: fases 1 a 5 hechas (esqueleto, herramienta documental, ruta documental validada, clasificador de intención, sesión y streaming SSE, memoria de la conversación), observabilidad y comprobaciones posteriores en observación (fase 6, falta decidir cuáles bloquean); herramienta SQL `consultar_datos` (SQL libre) conectada y probada con LLM falso, sin evaluar aún con Bedrock; 82 tests; probado con Amazon Bedrock. Despliegue y dockerización, a cargo de otro miembro del equipo. `LLMOrchestrator` (2026-09-28) descartado el 2026-10-08 (§7.3.2) |
 | 4 | Informes y dashboard | En curso: `ApiUsuario` con `/estaciones`, `/estaciones/{codigo}/series`, `/chat` y `/chat/stream` (proxy al agente, con stub), tests propios y job de CI. Informes y dashboard pendientes |
 
 **Stack actual:** Python 3.12 · pandas · NumPy · scikit-learn · PostgreSQL 18 (RDS) · SQLAlchemy ·
@@ -225,9 +227,12 @@ los picos**, como haría una media diaria. Resultado: **1.274.644 filas de bloqu
 | `resumen_datos_ml` | **Tabla principal para el chatbot**: una fila por (estación, magnitud, día, bloque) con 27 columnas de identificación, calendario, estadísticos, baseline y salida del modelo |
 | `baseline_historico` | Valor y dispersión esperados por (estación, magnitud, bloque, mes): **5.376** combinaciones |
 | `estaciones` | 24 estaciones con nombre, tipo, coordenadas, contaminantes medidos y **distrito** |
+| `mediciones_bloques` (vista) | Lo único que ve el agente: `resumen_datos_ml` con la estación y el distrito ya unidos, solo los 2 últimos años (contados desde el último día cargado). La lee el rol `agente_lectura`, que no tiene permisos sobre las tablas |
 
 - El **distrito** no viene en el catálogo oficial: se asignó a mano a partir de la dirección, con 4
   estaciones en frontera entre distritos marcadas para revisar.
+- Los bloques duran 7, 6, 7 y 4 horas: la media de un día, una estación o un distrito es
+  `SUM(media * n_horas) / SUM(n_horas)`. `AVG(media)` sobre bloques sesga hacia los bloques cortos.
 
 ### 5.4 Pipeline en tiempo real
 
@@ -913,7 +918,51 @@ mismos hallazgos que anotó el agente en vivo):
   siquiera al pedírselo.
 Decisión de qué reglas bloquean `[pendiente]` (paso 4).
 
-**Pendiente**: decidir las comprobaciones (fase 6, paso 4) y las herramientas SQL y de ML. La
+**Herramienta SQL (en construcción; fases 1 y 2 de 6 hechas el 2026-10-08).** Se empieza por **SQL
+libre** (un LLM redacta la consulta, un validador la limita y PostgreSQL la ejecuta); el catálogo
+cerrado de consultas solo se construye si el libre no alcanza el criterio de la evaluación. La
+fase 1 deja la base de datos y el acceso:
+- **Vista `mediciones_bloques`** como única relación consultable (§5.3) e índice nuevo por `fecha`.
+- **Tres capas de solo lectura**: rol `agente_lectura` con `SELECT` solo sobre la vista (la barrera
+  real, usado también en local), sesión con `default_transaction_read_only` y `statement_timeout`
+  de 5 s, y tope de 60 filas con aviso de truncado. Un único módulo abre conexiones.
+- **Entorno local sin RDS**: PostgreSQL en Docker con 2 años del parquet (`--desde` en el
+  cargador). El cargador ahora vacía la tabla en vez de borrarla, porque la vista depende de ella.
+- `FECHA_REFERENCIA` hace de «hoy» en la evaluación, para que el lote sea reproducible.
+- Tests: 4 en SQLite (68 en total) y 3 de integración con PostgreSQL fuera de la suite: media
+  ponderada contra un cálculo a mano, consulta con `INTERVAL`/`date_trunc` y permisos del rol
+  (lectura de la tabla, `UPDATE` y tiempo límite rechazados): **3/3** en el Postgres local.
+- Local verificado: 2 años del parquet (326.700 filas; la vista, 314.411, del 2024-04-30 al
+  2026-04-30). Índice por fecha: 2,2 MB. Consultas típicas de agregación: ~20 ms. El filtro por
+  periodo no usa ese índice (la vista expone `fecha::date`); solo el corte de 2 años.
+
+La fase 2 conecta el SQL libre y la ruta de datos (`consultar_datos`):
+- **Redactor**: una llamada a temperatura 0 a `LLM_MODELO_SQL` (vacío = el modelo del agente;
+  comparar modelos es un cambio de configuración). El prompt lleva el esquema de la vista, las 24
+  estaciones con su distrito, la fecha de hoy y el rango con datos, y reglas fijas: media ponderada
+  por horas (nunca `AVG(media)`), NO2 y PM10 si no se nombra contaminante, un resultado por
+  contaminante, días con dato en los rankings, «esta semana» = 7 últimos días disponibles, «hora
+  punta» = bloque de mañana, un periodo sin datos no se sustituye por otro.
+- **Validador** (`sqlglot`, dialecto PostgreSQL): una sentencia de consulta, solo la vista (las CTE
+  propias cuentan), sin DML dentro de un `WITH`, sin `INTO` ni `FOR UPDATE`, sin funciones de
+  sistema, `LIMIT` impuesto. Es la primera barrera; el rol sigue siendo la real.
+- **Un reintento** con el error del validador o de PostgreSQL. Si no se puede abrir la conexión
+  (base caída) no se reintenta: la pregunta recibe una frase fija.
+- **Resultado** al modelo: descripción, columnas, filas y truncado, con las cifras **redondeadas a
+  1 decimal en código** y un tope de tamaño (8.000 caracteres): el modelo las copia sin redondear
+  por su cuenta, y la comprobación de cifras las encuentra tal cual. El SQL va solo a la traza.
+- **Ruta de datos**: la consulta es obligatoria en las preguntas DATOS (si el modelo no la pide, la
+  lanza el código, como la búsqueda documental) y la respuesta la escribe una síntesis sin
+  herramientas con las filas y las fechas, que sale como tokens. `fuentes` lleva una entrada `sql`
+  por consulta con su descripción legible.
+- Tests: 14 nuevos (82 en total). Cinco casos del lote de 16 de punta a punta con LLM falso y
+  SQLite; validador, una regla por caso; reintento. En el Postgres local con el rol de lectura, una
+  consulta de ranking por distrito con `date_trunc`, `INTERVAL` y `::numeric` tardó **85 ms** y el
+  reintento corrigió una tabla prohibida.
+- Pendiente de medir con Bedrock (fase 4 de su plan): acierto con el gold, SQL válido a la primera,
+  latencia y coste. La ruta de datos añade dos llamadas al LLM por pregunta (redactor y síntesis).
+
+**Pendiente**: decidir las comprobaciones (fase 6, paso 4) y las herramientas SQL (fases 3 a 6 de su plan: varias intenciones por turno, evaluación con Bedrock, catálogo si hace falta) y de ML. La
 fase 7 (Bedrock en la EC2, contenedor del agente en `docker-compose` y despliegue) queda fuera de
 este trabajo: la hace otro miembro del equipo.
 
@@ -1493,6 +1542,8 @@ la enciende a mano para trabajar o hacer una demo.
 | 2026-10-06 | **Agente LLM, fase 6: comprobaciones posteriores, pasos 1 y 2** (Carlos, rama `feature/Agente`): reglas de cifras sin respaldo, fuga del prompt e internos sobre lo que escribió el modelo, en modo observación (evento en la traza y campo en el log); `COMPROBACIONES_BLOQUEAN` para que una regla sustituya la respuesta por una frase fija (sin tokens en el stream si alguna bloquea). Excluidas de la fuga las frases de presentación que el modelo repite. 62 tests (11 nuevos); sin llamadas a Bedrock. Pendiente: medir sobre las 128 trazas y un lote adversario y decidir qué reglas bloquean |
 | 2026-10-06 | **Agente LLM, fase 6: medición de las comprobaciones** (Carlos, rama `feature/Agente`): script que aplica las reglas a las trazas guardadas (128 turnos) y lote adversario + sonda de síntesis forzada en Bedrock (26 turnos, 63 llamadas, 0,011 $). Cifras: 10 hallazgos, 3 falsos positivos (el «2.5 micras» de PM2.5) y una cita mal puesta. Fuga: Ministral repite el prompt de charla cada vez que la pregunta llega a la charla (4 de 4) y la regla solo detecta la copia literal (1 de 4). Internos: 0. Conteo por regla en el informe de trazas y en la evaluación de turnos. 63 tests |
 | 2026-10-08 | **`LLMOrchestrator` descartado y reparto de la fase 7** (Carlos): `Agente` queda como único agente; el código del orquestador se conserva sin previsión de uso (§2). El despliegue del agente con Bedrock y su dockerización pasan a otro miembro del equipo. El informe de trazas cuenta aparte los turnos cancelados por el cliente (antes salían como ruta `error`). 64 tests |
+| 2026-10-08 | **Agente LLM, herramienta SQL, fase 1: datos y entorno local** (Carlos con Claude Code, rama `feature/Agente`): vista `mediciones_bloques` e índice por fecha, rol `agente_lectura` (scripts en `deploy/sql/`), DAL de solo lectura con tiempo límite y tope de filas, `--desde` y recarga con `TRUNCATE` en el cargador. 68 tests (4 nuevos) y 3 de integración con PostgreSQL, 3/3 en local; consultas típicas ~20 ms |
+| 2026-10-08 | **Agente LLM, herramienta SQL, fase 2: SQL libre y ruta de datos** (Carlos con Claude Code, rama `feature/Agente`): `consultar_datos` con redactor (`LLM_MODELO_SQL`), validador `sqlglot`, un reintento y cifras a 1 decimal; DATOS deja la frase fija y obliga la consulta; síntesis de datos con fechas y fuentes `sql`; lote `casos_datos.json` (16 casos). 82 tests (14 nuevos); probado en el Postgres local con el rol de lectura (85 ms), sin evaluar aún con Bedrock |
 
 
 ---

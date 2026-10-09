@@ -187,6 +187,7 @@ aws s3 cp s3://jupiter-calidad-aire-madrid/data/processed/ data/processed/ --rec
 
 ```bash
 python src/etl/cargar_resumen_ml.py     # ~1,27 M filas vía COPY
+# python src/etl/cargar_resumen_ml.py --desde 2024-01-01   # solo desde esa fecha
 python src/etl/cargar_estaciones.py     # catálogo de las 24 estaciones
 ```
 

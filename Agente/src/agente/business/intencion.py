@@ -12,6 +12,7 @@ como bloque de texto antes de la pregunta actual. Sin ella, el mensaje es solo l
 
 `DESCONOCIDA` ofrece todas las herramientas, no obliga ninguna y no usa frases fijas:
 un clasificador caído no debe quitar herramientas ni dar respuestas enlatadas.
+`DATOS` ofrece y obliga la consulta de mediciones; sin base de datos, frase fija (en el bucle).
 """
 from __future__ import annotations
 
@@ -28,7 +29,7 @@ from agente.business import frases
 from agente.business.memoria import texto_historial
 from agente.entities.intencion import DESCONOCIDA, Clasificacion, Intencion, Tema
 from agente.entities.memoria import TurnoGuardado
-from agente.tools import rag
+from agente.tools import rag, sql_libre
 
 logger = logging.getLogger("agente.intencion")
 
@@ -103,12 +104,14 @@ class Decision:
     frase: str | None = None                     # respuesta fija: el turno se cierra sin modelo
     herramientas: frozenset[str] | None = None   # las que se pueden ofrecer; None = todas
     busqueda_obligada: bool = False              # si el modelo no busca en el RAG, busca el código
+    datos_obligados: bool = False                # si el modelo no consulta los datos, consulta el código
     prompt: str = frases.PROMPT_SISTEMA
 
 
 _DECISIONES = {
     Intencion.DOCUMENTAL: Decision(herramientas=frozenset({rag.NOMBRE}), busqueda_obligada=True),
-    Intencion.DATOS: Decision(frase=frases.FRASE_DATOS),
+    Intencion.DATOS: Decision(herramientas=frozenset({sql_libre.NOMBRE}), datos_obligados=True,
+                              prompt=frases.PROMPT_DATOS),
     Intencion.PREDICCION: Decision(frase=frases.FRASE_PREDICCION),
     Intencion.CHARLA: Decision(herramientas=frozenset(), prompt=frases.PROMPT_CHARLA),
     Intencion.FUERA_DE_ALCANCE: Decision(frase=frases.FRASE_FUERA_DE_ALCANCE),

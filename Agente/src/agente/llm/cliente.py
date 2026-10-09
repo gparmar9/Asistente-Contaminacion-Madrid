@@ -8,6 +8,8 @@ Los paquetes de cada proveedor se importan de forma perezosa: los tests no carga
 """
 from __future__ import annotations
 
+from dataclasses import replace
+
 from llama_index.core.llms.function_calling import FunctionCallingLLM
 
 from agente.config.settings import PROVEEDORES, Settings
@@ -17,9 +19,12 @@ class ConfiguracionLLMInvalida(ValueError):
     pass
 
 
-def crear_llm(settings: Settings, temperatura: float | None = None) -> FunctionCallingLLM:
-    """`temperatura` None = la de la configuración (síntesis); el clasificador pide 0."""
+def crear_llm(settings: Settings, temperatura: float | None = None, modelo: str = "") -> FunctionCallingLLM:
+    """`temperatura` None = la de la configuración (síntesis); el clasificador y el redactor SQL
+    piden 0. `modelo` vacío = `LLM_MODELO`; el redactor SQL pasa `LLM_MODELO_SQL`."""
     t = settings.llm_temperatura if temperatura is None else temperatura
+    if modelo:
+        settings = replace(settings, llm_modelo=modelo)
     if settings.llm_proveedor == "openai_compatible":
         return _openai_compatible(settings, t)
     if settings.llm_proveedor == "bedrock":
