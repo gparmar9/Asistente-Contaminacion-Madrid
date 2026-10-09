@@ -48,20 +48,27 @@ async def post_chat_stream(
     entrada: PreguntaChat, settings: Settings = Depends(get_settings)
 ) -> StreamingResponse:
     """Eventos: status, token, passthrough, error y done (ver README). Con el agente se
-    reenvían byte a byte; sin él, la respuesta de `/chat` sale como passthrough + done."""
+    reenvían byte a byte; sin él, la respuesta de `/chat` sale como passthrough + done.
+
+    Cómo leerlo desde un frontend:
+    - El texto llega de una de dos formas, nunca de las dos: como `token` (fragmentos que se
+      concatenan) o como un único `passthrough` con el texto entero.
+    - Las fuentes y la advertencia definitivas están en `done`: los `token` no las llevan.
+      `passthrough` también las trae, pero son las mismas; muéstralas una sola vez, las de `done`.
+    - `status` solo sirve para el indicador de progreso y puede repetirse (heartbeat).
+    - `error` cierra el stream sin `done`: la respuesta no se completó; muestra su `detalle`.
+    - Si el stream se corta sin `done` ni `error`, la respuesta está incompleta.
+    """
     if settings.agente_url:
         return await _proxy_stream(entrada, settings)
 
     respuesta = await _preguntar(entrada, settings)  # errores: código HTTP, antes de abrir
 
     async def fallback():
-        yield _sse("passthrough", {
-            "texto": respuesta.respuesta,
-            "fuentes": [f.model_dump() for f in respuesta.fuentes],
-            "advertencia": respuesta.advertencia,
-            "traza_id": None,
-        })
-        yield _sse("done", {"session_id": respuesta.session_id, "traza_id": None})
+        metadatos = {"fuentes": [f.model_dump() for f in respuesta.fuentes],
+                     "advertencia": respuesta.advertencia}
+        yield _sse("passthrough", {"texto": respuesta.respuesta, **metadatos, "traza_id": None})
+        yield _sse("done", {"session_id": respuesta.session_id, "traza_id": None, **metadatos})
 
     return StreamingResponse(fallback(), media_type="text/event-stream", headers=CABECERAS_SSE)
 

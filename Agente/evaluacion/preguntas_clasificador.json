@@ -9,7 +9,7 @@
   {"pregunta": "¿Está Madrid en aviso / preaviso / alerta por contaminación en este momento?", "intencion": "DATOS"},
   {"pregunta": "¿Qué distrito tuvo la mejor calidad del aire el mes pasado?", "intencion": "DATOS"},
   {"pregunta": "¿Ha empeorado el ozono en Madrid durante los últimos cinco veranos?", "intencion": "DATOS"},
-  {"pregunta": "¿Qué zona de Madrid me recomendarías para vivir si tengo alergias?", "intencion": "DATOS"},
+  {"pregunta": "¿Qué zona de Madrid me recomendarías para vivir si tengo alergias?", "intencion": "DATOS, DOCUMENTAL", "tema": "salud"},
   {"pregunta": "¿Habrá pico de ozono este fin de semana?", "intencion": "PREDICCION"},
   {"pregunta": "Probabilidad de que se declare un episodio de contaminación en las próximas 48 h.", "intencion": "PREDICCION"},
   {"pregunta": "¿Mañana será un mal día para las personas con rinitis alérgica?", "intencion": "PREDICCION"},
@@ -27,5 +27,7 @@
   {"pregunta": "¿Cuánto ruido hay por la noche en la Castellana?", "intencion": "FUERA_DE_ALCANCE", "fase5": true},
   {"pregunta": "¿Va a llover este fin de semana en Madrid?", "intencion": "FUERA_DE_ALCANCE", "fase5": true},
   {"pregunta": "¿El NO2 empeora la alergia al polen?", "intencion": "DOCUMENTAL", "tema": "salud", "fase5": true},
-  {"pregunta": "¿Cuál es el límite legal anual del NO2?", "intencion": "DOCUMENTAL", "tema": "normativa", "fase5": true}
+  {"pregunta": "¿Cuál es el límite legal anual del NO2?", "intencion": "DOCUMENTAL", "tema": "normativa", "fase5": true},
+  {"pregunta": "¿Es seguro que un niño con asma pase dos horas al aire libre esta tarde?", "intencion": "DATOS, DOCUMENTAL", "tema": "salud", "mixta": true},
+  {"pregunta": "¿Cómo está hoy el aire en Vallecas y cómo estará mañana?", "intencion": "DATOS, PREDICCION", "mixta": true}
 ]

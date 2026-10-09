@@ -74,7 +74,7 @@ async def test_no_cuentan_anos_contaminantes_ni_cifras_de_la_pregunta_y_el_histo
 
 
 def test_fuga_salta_con_diez_palabras_de_un_prompt_y_no_con_la_presentacion():
-    fuga = "Tengo orden de que no inventes cifras ni mediciones: este asistente aún no consulta datos."
+    fuga = "Tengo orden de que, si no la tienes, di que ahora no puedes consultarlas."
     presentacion = f"¡Hola! {frases.IDENTIDAD}. {frases.CAPACIDADES_CHARLA.replace('Sabes', 'Sé')}."
 
     assert [h.regla for h in comprobar(_libre(fuga), [])] == ["fuga"]

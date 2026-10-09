@@ -36,15 +36,22 @@ from datetime import datetime
 from pathlib import Path
 
 # USD por millón de tokens (entrada, salida). Bedrock bajo demanda, región Irlanda (eu-west-1),
-# página de precios consultada el 2026-10-04. Un modelo que no esté aquí deja el coste incompleto.
-PRECIOS_FECHA = "2026-10-04, Bedrock eu-west-1"
+# tarifa estándar regional según la API de precios de AWS, consultada el 2026-10-08 (Ministral
+# bajó de 0,24 a 0,23). Clave = ID que recibe Bedrock (con el prefijo del perfil si lo lleva).
+# Un modelo que no esté aquí deja el coste incompleto.
+PRECIOS_FECHA = "2026-10-08, Bedrock eu-west-1"
 PRECIOS = {
-    "mistral.ministral-3-14b-instruct": (0.24, 0.24),
+    "mistral.ministral-3-14b-instruct": (0.23, 0.23),
     "openai.gpt-oss-120b-1:0": (0.18, 0.70),
+    "openai.gpt-oss-20b-1:0": (0.08, 0.35),
+    "qwen.qwen3-coder-30b-a3b-v1:0": (0.18, 0.70),
+    "eu.anthropic.claude-haiku-5-5": (0.11, 0.55),
+    "minimax.minimax-m2.5": (0.36, 1.44),  # consultado el 2026-10-09
 }
 
 # Orden de las fases en la tabla de latencias; el resto de spans van detrás, por nombre.
-FASES = ("clasificar", "bucle", "busqueda_forzada", "sintesis_documental", "sintesis_forzada", "validar")
+FASES = ("clasificar", "bucle", "busqueda_forzada", "consulta_forzada", "sintesis_documental", "sintesis_datos",
+         "sintesis_forzada", "validar")
 
 PLANTILLA_HTML = Path(__file__).with_name("plantilla_informe.html")
 

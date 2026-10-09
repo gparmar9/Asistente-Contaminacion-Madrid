@@ -14,7 +14,8 @@ Sin `configurar()` (tests) los spans se crean pero no se exportan.
 
 Las decisiones del código (frase fija, sin evidencia, límite de vueltas...) son eventos
 `decision` en el span en curso, y cada hallazgo de las comprobaciones posteriores, un evento
-`comprobacion` en el span `turno`.
+`comprobacion` en el span `turno`. La herramienta SQL deja un span `redactar_sql` por intento,
+un evento `sql_invalido` por cada SQL rechazado y el SQL ejecutado en su span (`agente.sql`).
 """
 from __future__ import annotations
 
@@ -148,6 +149,20 @@ def comprobacion(regla: str, detalle: str, bloquea: bool) -> None:
     """Hallazgo de una comprobación posterior, como evento en el span en curso (el del turno)."""
     trace.get_current_span().add_event("comprobacion", {
         "agente.regla": regla, "agente.detalle": detalle, "agente.bloquea": bloquea})
+
+
+def sql_invalido(origen: str, error: str) -> None:
+    """SQL rechazado por el validador o por PostgreSQL, como evento en el span en curso."""
+    trace.get_current_span().add_event("sql_invalido", {"agente.origen": origen, "agente.error": error})
+
+
+def consulta_sql(sql: str, intentos: int) -> None:
+    """SQL ejecutado y número de intentos, en el span en curso (el de la herramienta). El SQL
+    lleva literales de la pregunta: sin texto en la traza, no se guarda."""
+    s = trace.get_current_span()
+    s.set_attribute("agente.intentos_sql", intentos)
+    if _guardar_texto:
+        s.set_attribute("agente.sql", sql)
 
 
 def trace_id_actual() -> str | None:

@@ -10,6 +10,8 @@ Reglas:
   este momento (p. ej. el servicio del que depende no responde): el bucle no la ofrece.
 - Las herramientas las ejecuta el bucle, no LlamaIndex: el adaptador solo transporta
   la definición hacia el cliente del LLM.
+- `contexto_prompt()`: texto que el bucle añade al prompt del sistema cuando ofrece la
+  herramienta (p. ej. las fechas con datos). Vacío por defecto.
 """
 from __future__ import annotations
 
@@ -57,6 +59,10 @@ class Herramienta(ABC):
     @abstractmethod
     async def ejecutar(self, argumentos: dict[str, Any]) -> ResultadoHerramienta:
         """Ejecuta la herramienta. Nunca lanza."""
+
+    def contexto_prompt(self) -> str:
+        """Contexto para el prompt del sistema; se pide después de una `definicion()` correcta."""
+        return ""
 
 
 # --------------------------------------------------------------------------- adaptador LlamaIndex

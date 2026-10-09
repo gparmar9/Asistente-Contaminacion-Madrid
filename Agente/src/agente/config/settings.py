@@ -1,5 +1,6 @@
 """Configuración del agente, leída de variables de entorno (ver .env.example)."""
 from dataclasses import dataclass
+from datetime import date
 import os
 
 PROVEEDORES = ("openai_compatible", "bedrock")
@@ -51,6 +52,17 @@ class Settings:
     # Comprobaciones posteriores (cifras, fuga, internos) que sustituyen la respuesta por una frase
     # fija. Las que no están aquí solo observan (evento en la traza y log).
     comprobaciones_bloquean: tuple[str, ...] = ()
+    # Base de datos de mediciones (herramienta SQL), con el rol de solo lectura. Vacía = sin datos.
+    database_url: str = ""
+    db_timeout_s: float = 5     # statement_timeout de cada sentencia
+    db_max_filas: int = 60      # filas que devuelve como mucho una consulta
+    # Modelo del redactor SQL (mismo proveedor). Vacío = el mismo modelo del agente.
+    llm_modelo_sql: str = ""
+    # Modelo del clasificador de intención (mismo proveedor). Vacío = el mismo modelo del agente.
+    llm_modelo_clasificador: str = ""
+    # Fecha que hace de «hoy» al resolver periodos relativos. Solo en evaluación, para que el lote
+    # sea reproducible; None (vacía) = la fecha del sistema.
+    fecha_referencia: date | None = None
 
 
 def get_settings() -> Settings:
@@ -85,11 +97,21 @@ def get_settings() -> Settings:
         memoria_max_turnos=int(os.getenv("MEMORIA_MAX_TURNOS", "20")),
         memoria_ttl_h=float(os.getenv("MEMORIA_TTL_H", "168")),
         comprobaciones_bloquean=_lista(os.getenv("COMPROBACIONES_BLOQUEAN", "")),
+        database_url=os.getenv("DATABASE_URL", ""),
+        db_timeout_s=float(os.getenv("DB_TIMEOUT_S", "5")),
+        db_max_filas=int(os.getenv("DB_MAX_FILAS", "60")),
+        llm_modelo_sql=os.getenv("LLM_MODELO_SQL", ""),
+        llm_modelo_clasificador=os.getenv("LLM_MODELO_CLASIFICADOR", ""),
+        fecha_referencia=_fecha(os.getenv("FECHA_REFERENCIA", "")),
     )
 
 
 def _lista(valor: str) -> tuple[str, ...]:
     return tuple(v.strip().lower() for v in valor.split(",") if v.strip())
+
+
+def _fecha(valor: str) -> date | None:
+    return date.fromisoformat(valor.strip()) if valor.strip() else None
 
 
 def _booleano(valor: str) -> bool:

@@ -109,6 +109,11 @@ Hilo conductor de la memoria: cómo y por qué cambió el diseño.
 | 2026-10-06 | Alcance del clasificador del agente | Alcance por tema («calidad del aire») → **alcance por lo que el sistema puede responder**: contaminación del aire, con los contaminantes que mide la red citados en el prompt; polen, ruido y tiempo fuera; alergia y asma dentro; los límites legales son documentación, no mediciones | En el lote del 2026-10-06 los dos modelos fallaron la pregunta del polen de forma distinta (uno `DATOS`, otro `FUERA_DE_ALCANCE`). Medido antes y después: 27/28 → 29/29 con los dos modelos (§7.3.1) |
 | 2026-10-06 | Comprobaciones posteriores del agente | Un modo global `COMPROBACIONES_MODO` (observar o bloquear todas) → **activación por regla** (`COMPROBACIONES_BLOQUEAN`, vacía por defecto) | Cada regla pasa a bloquear solo con evidencia propia (0 falsos positivos en las trazas reales y en un lote adversario, y al menos un acierto). Con un modo global, una regla ruidosa impediría bloquear con las fiables. Descartado también pedir una reparación al modelo («la cifra X no está en D2») en vez de la frase fija: sería mejor respuesta, pero añade una llamada y mezcla la validación del RAG con la del agente; queda como trabajo futuro |
 | 2026-10-08 | Agente del asistente | `LLMOrchestrator` y `Agente` conviviendo, elegidos por `AGENTE_URL` → **`Agente` como único agente**; `LLMOrchestrator` descartado: su código se conserva en el repositorio, sin previsión de uso | Decisión del equipo. El orquestador nunca llegó a conectarse a un proveedor; el `Agente` ya tiene clasificador, ruta documental validada, sesión, *streaming*, memoria, observabilidad y comprobaciones, y está probado con Bedrock. Consecuencia: la consulta de mediciones (`query_sql` del orquestador) no existe aún en el agente y pasa a ser su herramienta SQL pendiente |
+| 2026-10-08 | Preguntas de datos del agente | Frase fija («todavía no consulto mediciones») → **herramienta `consultar_datos` con SQL libre**: un LLM redacta el SQL sobre la vista `mediciones_bloques`, un validador (`sqlglot`) lo limita, PostgreSQL lo ejecuta con un rol de solo lectura y una síntesis sin herramientas redacta la respuesta | Las preguntas de datos eran la mitad de las preguntas objetivo del asistente. Se empieza por SQL libre porque 5 de las 11 preguntas de datos del lote no caben en un catálogo cerrado razonable; el catálogo solo se construye si el libre no alcanza el criterio de la evaluación |
+| 2026-10-09 | Preguntas mixtas del agente | Una intención y cifras dentro de afirmaciones documentales → **hasta dos intenciones y respuesta en dos bloques: datos y documentación** | Las cifras SQL no tienen citas documentales `[Dn]`. Separar los bloques conserva la validación del RAG; añadir una fuente SQL `S1` habría cambiado su contrato |
+| 2026-10-09 | Modelo de referencia para SQL | Claude Haiku 5.5 → **MiniMax M2.5** | Haiku no estaba disponible en la cuenta del máster. MiniMax fue elegido por su menor precio entre las alternativas disponibles; GLM 5.3 y Kimi K3 eran más caros |
+| 2026-10-09 | Fechas de las preguntas de datos | Fechas elegidas por el LLM → **periodos calculados en Python a partir de la pregunta original** | Los modelos alteraban los periodos. Un calendario en el prompt o parámetros elegidos por el LLM no eliminaban ese riesgo; `dateparser` y Duckling no daban los rangos definidos por el proyecto, y un único par de fechas no cubría periodos separados |
+| 2026-10-09 | Modelo de referencia para SQL | MiniMax M2.5 → **sin modelo de referencia en los siguientes lotes** | Logró 2/11 aciertos en datos frente a 4/11 del mejor modelo barato, con mayor coste por lote: 0,085 $ frente a 0,023–0,043 $. Se prioriza corregir el diseño |
 
 **Decisiones abiertas que alimentarán esta tabla:** modelo del agente en Bedrock (Ministral 14B o
 gpt-oss-120b; aplazado hasta poder evaluar las herramientas SQL y de ML, §13) y dónde se despliega
@@ -169,8 +174,9 @@ Corpus RAG (.md) ─▶ troceado + embeddings e5 ─▶ ChromaDB ─▶ servicio
 
 Usuario ─▶ ApiUsuario (FastAPI) ──▶ PostgreSQL (lecturas: estaciones, series)   (Fase 4, en curso)
         /chat, /chat/stream ──▶ Agente ─▶ LLM vía LlamaIndex (Bedrock | OpenAI-compat)
-                                   └─ buscar_evidencias ─▶ rag.api (HTTP)   (Fase 3, en construcción;
-                                                                              herramienta SQL pendiente)
+                                   ├─ buscar_evidencias ─▶ rag.api (HTTP)   (Fase 3, en construcción)
+                                   └─ consultar_datos ─▶ redactor SQL (LLM) ─▶ validador
+                                                       ─▶ PostgreSQL: vista mediciones_bloques (solo lectura)
 ```
 
 `LLMOrchestrator` (primer agente, con `query_sql`) sigue en el repositorio pero está descartado
@@ -186,7 +192,7 @@ mediante *tool use*.
 |---|---|---|
 | 1 | Datos, detector de anomalías, pipeline en tiempo real | Hecha en local; migración a AWS en curso |
 | 2 | Vector DB y servicio de evidencias | **Reescrita** (2026-09-23) como servicio de evidencias y mergeada en `development`; pendiente de pasar a `main` |
-| 3 | LLM con *tool use* | `Agente` (2026-10-04, §7.3.1), rediseño por fases con bucle propio y LlamaIndex como cliente: fases 1 a 5 hechas (esqueleto, herramienta documental, ruta documental validada, clasificador de intención, sesión y streaming SSE, memoria de la conversación), observabilidad y comprobaciones posteriores en observación (fase 6, falta decidir cuáles bloquean); 64 tests; probado con Amazon Bedrock. Pendiente: herramienta SQL. Despliegue y dockerización, a cargo de otro miembro del equipo. `LLMOrchestrator` (2026-09-28) descartado el 2026-10-08 (§7.3.2) |
+| 3 | LLM con *tool use* | `Agente` con documentación validada, memoria, streaming y preguntas mixtas. SQL evaluado en dos lotes con Bedrock: aún no cumple el criterio (§7.3.1). 126 tests. Pendiente decidir qué comprobaciones bloquean respuestas. Otro miembro se encarga del despliegue. `LLMOrchestrator` descartado (§7.3.2) |
 | 4 | Informes y dashboard | En curso: `ApiUsuario` con `/estaciones`, `/estaciones/{codigo}/series`, `/chat` y `/chat/stream` (proxy al agente, con stub), tests propios y job de CI. Informes y dashboard pendientes |
 
 **Stack actual:** Python 3.12 · pandas · NumPy · scikit-learn · PostgreSQL 18 (RDS) · SQLAlchemy ·
@@ -225,9 +231,12 @@ los picos**, como haría una media diaria. Resultado: **1.274.644 filas de bloqu
 | `resumen_datos_ml` | **Tabla principal para el chatbot**: una fila por (estación, magnitud, día, bloque) con 27 columnas de identificación, calendario, estadísticos, baseline y salida del modelo |
 | `baseline_historico` | Valor y dispersión esperados por (estación, magnitud, bloque, mes): **5.376** combinaciones |
 | `estaciones` | 24 estaciones con nombre, tipo, coordenadas, contaminantes medidos y **distrito** |
+| `mediciones_bloques` (vista) | Lo único que ve el agente: `resumen_datos_ml` con la estación y el distrito ya unidos, solo los 2 últimos años (contados desde el último día cargado). La lee el rol `agente_lectura`, que no tiene permisos sobre las tablas |
 
 - El **distrito** no viene en el catálogo oficial: se asignó a mano a partir de la dirección, con 4
   estaciones en frontera entre distritos marcadas para revisar.
+- Los bloques duran 7, 6, 7 y 4 horas: la media de un día, una estación o un distrito es
+  `SUM(media * n_horas) / SUM(n_horas)`. `AVG(media)` sobre bloques sesga hacia los bloques cortos.
 
 ### 5.4 Pipeline en tiempo real
 
@@ -530,11 +539,13 @@ arranca hoy con uno); con varios haría falta otra coordinación.
 **Streaming (2026-10-06).** `POST /responder/stream` entrega el turno como Server-Sent Events:
 `status` (fase: `en_espera`, `clasificando`, `buscando`, `redactando`, `validando`), `token`,
 `passthrough`, `error` y `done`. **Solo salen como tokens las respuestas definitivas**: la llamada
-sin herramientas ofrecidas (`CHARLA`, o `DESCONOCIDA` con el RAG caído) y la síntesis forzada.
+sin herramientas ofrecidas (`CHARLA`, o `DESCONOCIDA` con el RAG caído), la síntesis de datos y la
+síntesis forzada.
 Todo lo demás sale entero al final como `passthrough`: frases fijas, `sin_evidencia`, la ruta
 documental (su JSON se valida antes de entregarse) y el texto libre de un turno con herramientas
 ofrecidas, que puede acabar descartado. Así el cliente nunca ve un texto que luego se retira. El
-turno no sabe de HTTP: recibe un **emisor opcional por turno** y la capa HTTP lo conecta a una
+evento `done` lleva siempre `fuentes` y `advertencia`, salga el texto como tokens o como `passthrough`
+(los dos coinciden si hay `passthrough`). El turno no sabe de HTTP: recibe un **emisor opcional por turno** y la capa HTTP lo conecta a una
 **cola acotada** de 64 eventos (si el cliente lee despacio, el turno espera) y repite el último
 `status` cada 0,7 s sin eventos. `/responder` es el mismo turno sin emisor. Errores: antes de abrir
 el stream, código HTTP (503); después, evento `error` sin `done`. Si el cliente se desconecta, el
@@ -550,7 +561,7 @@ terminar o al irse el cliente cierra la respuesta y el cliente HTTP, y así el a
 desconexión y cancela el turno. Un primer test de ese cierre pasaba aunque se quitara el cierre
 (httpx cierra solo la respuesta cuando se lee entera): se rehízo cortando la lectura a mitad.
 Sin `AGENTE_URL`, `/chat/stream` hace lo mismo que `/chat` (orquestador o stub) y lo entrega como
-`passthrough` + `done`, con `session_id` y `traza_id: null`. **Límite:** el orquestador no conserva
+`passthrough` + `done`, con `session_id`, `traza_id: null` y las mismas fuentes y advertencia. **Límite:** el orquestador no conserva
 contexto; el `session_id` solo mantiene el contrato.
 
 **Verificación con Bedrock (2026-10-06, `rag.api` real, agente y `ApiUsuario` con uvicorn).** 10
@@ -797,7 +808,8 @@ cada decisión y de la elección de LlamaIndex está en `docs/agente/decisiones_
   Ruta documental de punta a punta con `rag.api`: medida el 2026-10-05 (abajo). Síntesis forzada:
   falló el 2026-10-06 y se corrigió ese día; verificada después contra Bedrock (abajo).
 - **Modelo en Bedrock: dos candidatos a comparar** (decisión del 2026-10-04): **Ministral 14B 3.0**
-  ($0,24 / $0,24 por 1M de tokens de entrada / salida en Irlanda) y **gpt-oss-120b** ($0,18 / $0,70).
+  ($0,24 / $0,24 por 1M de tokens de entrada / salida en Irlanda al elegirlo; $0,23 / $0,23 desde el
+  2026-10-08) y **gpt-oss-120b** ($0,18 / $0,70).
   Ministral 14B es el Mistral actual más parecido a Mistral Small 3.2 24B, que era la referencia del
   equipo. gpt-oss-120b tiene una arquitectura parecida a la de Mistral Small 4.
   - Descartados: Small 3.2 (no está en Bedrock ni se puede importar); Magistral Small 1.2 (razonamiento:
@@ -913,9 +925,166 @@ mismos hallazgos que anotó el agente en vivo):
   siquiera al pedírselo.
 Decisión de qué reglas bloquean `[pendiente]` (paso 4).
 
-**Pendiente**: decidir las comprobaciones (fase 6, paso 4) y las herramientas SQL y de ML. La
-fase 7 (Bedrock en la EC2, contenedor del agente en `docker-compose` y despliegue) queda fuera de
-este trabajo: la hace otro miembro del equipo.
+**Herramienta SQL (en construcción; fases 1 y 2 de 6 hechas el 2026-10-08).** Se empieza por **SQL
+libre** (un LLM redacta la consulta, un validador la limita y PostgreSQL la ejecuta); el catálogo
+cerrado de consultas solo se construye si el libre no alcanza el criterio de la evaluación. La
+fase 1 deja la base de datos y el acceso:
+- **Vista `mediciones_bloques`** como única relación consultable (§5.3) e índice nuevo por `fecha`.
+- **Tres capas de solo lectura**: rol `agente_lectura` con `SELECT` solo sobre la vista (la barrera
+  real, usado también en local), sesión con `default_transaction_read_only` y `statement_timeout`
+  de 5 s, y tope de 60 filas con aviso de truncado. Un único módulo abre conexiones.
+- **Entorno local sin RDS**: PostgreSQL en Docker con 2 años del parquet (`--desde` en el
+  cargador). El cargador ahora vacía la tabla en vez de borrarla, porque la vista depende de ella.
+- `FECHA_REFERENCIA` hace de «hoy» en la evaluación, para que el lote sea reproducible.
+- Tests: 4 en SQLite (68 en total) y 3 de integración con PostgreSQL fuera de la suite: media
+  ponderada contra un cálculo a mano, consulta con `INTERVAL`/`date_trunc` y permisos del rol
+  (lectura de la tabla, `UPDATE` y tiempo límite rechazados): **3/3** en el Postgres local.
+- Local verificado: 2 años del parquet (326.700 filas; la vista, 314.411, del 2024-04-30 al
+  2026-04-30). Índice por fecha: 2,2 MB. Consultas típicas de agregación: ~20 ms. El filtro por
+  periodo no usa ese índice (la vista expone `fecha::date`); solo el corte de 2 años.
+
+La fase 2 conecta el SQL libre y la ruta de datos (`consultar_datos`):
+- **Redactor**: una llamada a temperatura 0 a `LLM_MODELO_SQL` (vacío = el modelo del agente;
+  comparar modelos es un cambio de configuración). El prompt lleva el esquema de la vista, las 24
+  estaciones con su distrito, la fecha de hoy y el rango con datos, y reglas fijas: media ponderada
+  por horas (nunca `AVG(media)`), NO2 y PM10 si no se nombra contaminante, un resultado por
+  contaminante, días con dato en los rankings, «hora punta» = bloque de mañana, un periodo sin datos
+  no se sustituye por otro. Las fechas no las calcula: recibe el periodo calculado en Python (abajo).
+- **Validador** (`sqlglot`, dialecto PostgreSQL): una sentencia de consulta, solo la vista (las CTE
+  propias cuentan), sin DML dentro de un `WITH`, sin `INTO` ni `FOR UPDATE`, sin funciones de
+  sistema, `LIMIT` impuesto (tope + 1 para que el DAL detecte el truncado; un `LIMIT` menor que
+  el tope es del modelo y se respeta). Es la primera barrera; el rol sigue siendo la real.
+- **Un reintento** con el error del validador o de PostgreSQL. Si no se puede abrir la conexión
+  (base caída) no se reintenta: la pregunta recibe una frase fija.
+- **Resultado** al modelo: descripción, columnas, filas y truncado, con las cifras **redondeadas a
+  1 decimal en código** y un tope de tamaño (8.000 caracteres): el modelo las copia sin redondear
+  por su cuenta, y la comprobación de cifras las encuentra tal cual. El SQL va solo a la traza.
+- **Ruta de datos**: la consulta es obligatoria en las preguntas DATOS (si el modelo no la pide, la
+  lanza el código, como la búsqueda documental) y la respuesta la escribe una síntesis sin
+  herramientas con las filas y las fechas, que sale como tokens. `fuentes` lleva una entrada `sql`
+  por consulta con su descripción legible.
+- Tests: 14 nuevos (82 en total). Cinco casos del lote de 16 de punta a punta con LLM falso y
+  SQLite; validador, una regla por caso; reintento. En el Postgres local con el rol de lectura, una
+  consulta de ranking por distrito con `date_trunc`, `INTERVAL` y `::numeric` tardó **85 ms** y el
+  reintento corrigió una tabla prohibida.
+- Evaluada con Bedrock en dos lotes (resultados abajo). La ruta de datos añade dos llamadas al
+  LLM por pregunta: redactor SQL y síntesis.
+
+**Preguntas mixtas: datos y documentación (2026-10-09).** El clasificador admite una o dos
+intenciones. La respuesta muestra primero las mediciones y después la explicación documental,
+con citas y aviso sanitario. Cada parte puede responder aunque la otra falle. El bloque documental
+no recibe las filas SQL y se valida antes de mostrar la respuesta completa.
+Si se piden datos y predicciones, se consultan los datos y se avisa de que no se hacen predicciones.
+Una respuesta mixta requiere unas 6 llamadas al LLM, más una si hay reparación `[estimación]`.
+
+**Clasificador.** Tras ajustar las instrucciones, gpt-oss-120b acertó las 29 preguntas originales
+en dos pasadas; Ministral, 27/29 en ambas. Se eligió gpt-oss-120b mediante
+`LLM_MODELO_CLASIFICADOR`, independiente del modelo de conversación. No se siguió ajustando
+Ministral para evitar adaptarlo demasiado a las preguntas de prueba. Las dos preguntas mixtas
+nuevas obtuvieron 2/2 y 1/2 con gpt-oss: el clasificador aún falla fuera del lote original.
+
+**Evaluación SQL (2026-10-09).** Se prepararon 16 casos con resultados de referencia (*gold*)
+calculados en PostgreSQL local (`gold_datos.sql`). El criterio exige acertar al menos 9/11 preguntas
+de datos, las 2 mixtas y los 3 casos límite. Los veredictos de ambos lotes están
+**[por confirmar en la revisión humana]**; los costes son estimaciones por consumo.
+
+Las definiciones cambian el resultado: en Plaza de España hubo **22 días** de 2025 con media diaria
+de PM10 superior a 50 µg/m³; contar días con algún pico horario daría 122. Para las pruebas,
+«media anual» significa últimos 12 meses; «semana pasada», semana natural anterior; y «patrón en
+hora punta», diferencia entre la mañana y el resto del día.
+
+**Primer lote.** Siete combinaciones, coste total 0,31 $. Ninguna cumplió el criterio.
+MiniMax M2.5 se probó como modelo de referencia al no disponer de Haiku 5.5. Fue más caro y acertó
+menos, por lo que se descartó (§2). Las latencias son orientativas: hubo tres ejecuciones simultáneas.
+Detalle: `resultados/revision_featuresql_20261009.md`.
+
+| Conversación · redactor | Datos (/11) | Mixtas | Límites | SQL a la 1.ª | Turno (mediana) | Coste lote |
+|-|-|-|-|-|-|-|
+| Ministral · mismo | 3 | 0/2 | 1/3 | 3/11 | 15,4 s | 0,029 $ |
+| Ministral · Qwen3 Coder | 3 | 0/2 | 2/3 | 7/11 | 6,8 s | 0,023 $ |
+| Ministral · gpt-oss-20b | 3 | 0/2 | 3/3 | 7/11 | 10,9 s | 0,030 $ |
+| gpt-oss-120b · mismo | 4 | 0/2 | 2/3 | 11/11 | 13,7 s | 0,038 $ |
+| gpt-oss-120b · Qwen3 Coder | 3 | 0/2 | 1/3 | 7/11 | 8,7 s | 0,040 $ |
+| gpt-oss-120b · gpt-oss-20b | 2 | 0/2 | 3/3 | 9/11 | 17,1 s | 0,043 $ |
+| MiniMax M2.5 (techo) | 2 | 0/2 | 2/3 | 6/11 | 23,9 s | 0,085 $ |
+
+
+**Cambios antes del segundo lote.** Se corrigió el aviso de resultados recortados y se pasó el
+cálculo de periodos a Python. El redactor recibe la pregunta original y las fechas calculadas;
+el validador rechaza fechas literales fuera del rango y funciones como `CURRENT_DATE` o `NOW()`.
+También se aclaró cómo agrupar resultados, usar las estaciones de la vista y escribir SQL válido
+para PostgreSQL. Se prefirió ajustar el prompt a reescribir expresiones `ROUND` en el validador.
+
+`business/periodos.py` interpreta el periodo de la pregunta y, en preguntas de seguimiento,
+consulta las dos anteriores. «Ahora mismo» usa el último día disponible; «ayer» mantiene su fecha
+literal; «esta semana» usa los últimos 7 días disponibles. Sin un periodo reconocido, el modelo
+usa un calendario de apoyo. Las 15 consultas de referencia con SQL pasaron el validador.
+
+**Segundo lote.** Tres combinaciones ejecutadas en serie, con coste total de 0,10 $.
+Los periodos reconocidos se resolvieron bien y el recorte de filas se avisó. Solo hubo un error de
+sintaxis o funciones de PostgreSQL. Aun así, las tres combinaciones acertaron solo 4/11 preguntas
+de datos y ninguna respuesta mixta completa. Detalle: `resultados/revision_featuresql2_20261009.md`.
+
+| Conversación · redactor | Datos (/11) | Mixtas | Límites | SQL a la 1.ª | Turno (mediana) | Coste lote |
+|-|-|-|-|-|-|-|
+| gpt-oss-120b · mismo | 4 (+3 parciales) | 0/2 | 1/3 | 10/10 | 12,0 s | 0,039 $ |
+| gpt-oss-120b · Qwen3 Coder | 4 | 0/2 | 1/3 | 10/11 | 7,0 s | 0,033 $ |
+| Ministral · Qwen3 Coder | 4 | 0/2 | 2/3 | 9/10 | 9,3 s | 0,029 $ |
+
+**Tercer lote.** Mismas tres combinaciones, en serie, con las correcciones posteriores al segundo
+lote; coste 0,10 $. Ninguna cumple el criterio. La mejor, gpt-oss-120b como conversación y redactor,
+sube de 4 a 6/11 en datos; Ministral · Qwen3 Coder es la primera con 3/3 en límites. Veredictos
+**[por confirmar en la revisión humana]**. Detalle: `resultados/revision_featuresql3_20261009.md`.
+
+| Conversación · redactor | Datos (/11) | Mixtas | Límites | SQL a la 1.ª | Turno (mediana) | Coste lote |
+|-|-|-|-|-|-|-|
+| gpt-oss-120b · mismo | 6 (+2 parciales) | 0/2 | 2/3 | 10/10 | 11,6 s | 0,033 $ |
+| gpt-oss-120b · Qwen3 Coder | 3 (+4 parciales) | 1/2 | 2/3 | 8/11 | 8,1 s | 0,039 $ |
+| Ministral · Qwen3 Coder | 5 (+1 parcial) | 0/2 | 3/3 | 8/10 | 5,4 s | 0,030 $ |
+
+**Hallazgos y estado actual (2026-10-09).** Los fallos aparecen tanto al preparar la consulta como
+al redactar la respuesta. En la mejor combinación quedan cinco casos de datos sin acertar: un
+`LIMIT 1` que recorta el ranking, la definición de hora punta, un agregado de toda la ciudad, la
+regla de contaminantes por defecto aplicada a anomalías y el clasificador en dat-10.
+
+| Problema | Corrección o pendiente |
+|---|---|
+| El límite de 60 filas impedía detectar el recorte | Corregido antes del segundo lote: se permite leer una fila adicional |
+| El modelo cambiaba los periodos al reformular la pregunta | Periodos calculados en Python antes del segundo lote |
+| Agrupaciones incorrectas, estaciones copiadas y errores de SQL | Prompt mejorado; quedó un error de PostgreSQL en el segundo lote |
+| La descripción de la herramienta inducía filtros de anomalías y contaminantes no pedidos | Descripción simplificada: el filtro de anomalías desaparece en el tercer lote; gpt-oss sigue copiando «por estación, distrito, día y bloque horario» y pide filas sin agregar. Pendiente |
+| Una media mezclaba varios contaminantes | El validador la rechaza; resuelto en el tercer lote. Queda la media sin ponderar (`AVG(media)`), que el validador no para. Pendiente |
+| La síntesis inventaba el periodo o decía «0 días» fuera del histórico | Periodo explícito y frase fija para fechas sin cobertura; resuelto en el tercer lote |
+| Ministral inventa estaciones o periodos al reformular | Pendiente |
+| `LIMIT 1` pierde parte del ranking; se interpreta mal la comparación mañana − resto | Pendiente; el `LIMIT 1` falla dat-01 en las tres combinaciones del tercer lote |
+| «NO2 y PM10 por defecto» aplicado a preguntas de anomalías: pierde una anomalía de O3 | Pendiente (tercer lote) |
+| La síntesis inventa mediciones cuando no hay filas | lim-02 sin cifras inventadas en el tercer lote; Ministral inventa con filas que no responden a la pregunta (mismo valor para dos años). Pendiente |
+| Las respuestas mixtas confunden datos recientes con actuales y contienen avisos contradictorios | Pendiente |
+| El clasificador varía en preguntas fuera de las 29 originales | Pendiente |
+
+**Validación de los últimos cambios.** 126 tests del agente y la integración con PostgreSQL en
+verde; las 15 consultas de referencia pasan el validador. El tercer lote confirma la mejora con
+Bedrock (de 4 a 6/11 en la mejor combinación), insuficiente para el criterio.
+
+**Límites.** El control temporal solo comprueba fechas literales, no filtros por `ano`/`mes` ni
+aritmética de fechas. Si no reconoce el periodo, el modelo aún puede elegirlo; la respuesta indica
+«no calculado» cuando filtra fechas, o «todo el histórico» cuando no las filtra. La comprobación
+`cifras` tampoco garantiza fidelidad: dejó pasar «21 días» cuando las filas decían 22.
+
+**Alternativa: catálogo de consultas fijas.** Evitaría algunos errores del SQL, pero seguiría
+necesitando interpretar la pregunta y redactar la respuesta. Se corrigen primero esas partes
+compartidas; el catálogo se reconsiderará si la siguiente evaluación no alcanza el criterio.
+Tras el tercer lote, cuatro de los cinco fallos de la mejor combinación son de forma del SQL, que el
+catálogo sí resolvería; el clasificador y la síntesis seguirían igual. Decisión pendiente.
+
+**Lecciones.** Comparar respuestas con resultados de referencia descubrió fallos que no aparecían
+en tests con pocas filas. El modelo más caro no mejoró los resultados: cambiar de modelo no bastó.
+Además, el LLM puede copiar la descripción de una herramienta como si fuera una instrucción.
+Tres rondas de arreglos guiadas por los mismos 16 casos arriesgan sobreajustar el sistema al guion.
+
+**Pendiente:** decidir entre otra ronda de arreglos o el catálogo, elegir qué
+comprobaciones bloquean respuestas e incorporar las herramientas de ML. Otro miembro del equipo
+se encarga del contenedor y el despliegue en EC2 con Bedrock.
 
 #### 7.3.2 `LLMOrchestrator` — primer agente (implementado el 2026-09-28; descartado el 2026-10-08)
 
@@ -1493,6 +1662,19 @@ la enciende a mano para trabajar o hacer una demo.
 | 2026-10-06 | **Agente LLM, fase 6: comprobaciones posteriores, pasos 1 y 2** (Carlos, rama `feature/Agente`): reglas de cifras sin respaldo, fuga del prompt e internos sobre lo que escribió el modelo, en modo observación (evento en la traza y campo en el log); `COMPROBACIONES_BLOQUEAN` para que una regla sustituya la respuesta por una frase fija (sin tokens en el stream si alguna bloquea). Excluidas de la fuga las frases de presentación que el modelo repite. 62 tests (11 nuevos); sin llamadas a Bedrock. Pendiente: medir sobre las 128 trazas y un lote adversario y decidir qué reglas bloquean |
 | 2026-10-06 | **Agente LLM, fase 6: medición de las comprobaciones** (Carlos, rama `feature/Agente`): script que aplica las reglas a las trazas guardadas (128 turnos) y lote adversario + sonda de síntesis forzada en Bedrock (26 turnos, 63 llamadas, 0,011 $). Cifras: 10 hallazgos, 3 falsos positivos (el «2.5 micras» de PM2.5) y una cita mal puesta. Fuga: Ministral repite el prompt de charla cada vez que la pregunta llega a la charla (4 de 4) y la regla solo detecta la copia literal (1 de 4). Internos: 0. Conteo por regla en el informe de trazas y en la evaluación de turnos. 63 tests |
 | 2026-10-08 | **`LLMOrchestrator` descartado y reparto de la fase 7** (Carlos): `Agente` queda como único agente; el código del orquestador se conserva sin previsión de uso (§2). El despliegue del agente con Bedrock y su dockerización pasan a otro miembro del equipo. El informe de trazas cuenta aparte los turnos cancelados por el cliente (antes salían como ruta `error`). 64 tests |
+| 2026-10-08 | **Agente LLM, herramienta SQL, fase 1: datos y entorno local** (Carlos con Claude Code, rama `feature/Agente`): vista `mediciones_bloques` e índice por fecha, rol `agente_lectura` (scripts en `deploy/sql/`), DAL de solo lectura con tiempo límite y tope de filas, `--desde` y recarga con `TRUNCATE` en el cargador. 68 tests (4 nuevos) y 3 de integración con PostgreSQL, 3/3 en local; consultas típicas ~20 ms |
+| 2026-10-08 | **Agente LLM, herramienta SQL, fase 2: SQL libre y ruta de datos** (Carlos con Claude Code, rama `feature/Agente`): `consultar_datos` con redactor (`LLM_MODELO_SQL`), validador `sqlglot`, un reintento y cifras a 1 decimal; DATOS deja la frase fija y obliga la consulta; síntesis de datos con fechas y fuentes `sql`; lote `casos_datos.json` (16 casos). 82 tests (14 nuevos); probado en el Postgres local con el rol de lectura (85 ms), sin evaluar aún con Bedrock |
+| 2026-10-09 | **Fuentes en el streaming** (Carlos con Claude Code): `done` incluye siempre fuentes y advertencia, también en `ApiUsuario`. Evita perder las fuentes SQL al emitir tokens. Se descartó repetir el texto con un `passthrough` adicional. 94 tests del agente y 22 de la API. |
+| 2026-10-09 | **Preguntas mixtas** (Carlos con Claude Code): Respuesta con datos y documentación en bloques separados; el fallo de uno no impide responder al otro. 93 tests con LLM falso. |
+| 2026-10-09 | **Referencia para evaluar SQL** (Carlos con Claude Code): 16 casos con resultados calculados en PostgreSQL local. Acceso comprobado a Qwen3 Coder y gpt-oss-20b; Haiku no disponible. Corregido el perfil `eu.` en el cliente. Clasificador inicial: 28/29 originales con ambos modelos. 94 tests. |
+| 2026-10-09 | **Elección del clasificador** (Carlos con Claude Code): Tras ajustar el prompt, gpt-oss-120b logra 29/29 originales en dos pasadas; Ministral, 27/29. Se elige gpt-oss mediante `LLM_MODELO_CLASIFICADOR`; las mixtas aún presentan fallos. |
+| 2026-10-09 | **Primera evaluación SQL** (Carlos con Claude Code): Siete combinaciones de modelos y 16 casos: ninguna cumple; mejor resultado, 4/11 en datos y 0/2 mixtas. Coste estimado: 0,31 $. Detectados fallos de truncado y periodos. Veredictos pendientes de revisión humana. |
+| 2026-10-09 | **Truncado y modelo de referencia** (Carlos con Claude Code): Se corrige el límite de filas para detectar el recorte, verificado en PostgreSQL local. MiniMax se descarta por mayor coste y menor acierto. 96 tests. |
+| 2026-10-09 | **Periodos calculados en Python** (Carlos con Claude Code): Las fechas parten de la pregunta original y se validan antes de ejecutar SQL. Pasan las 15 consultas de referencia; 123 tests. Pendiente evaluar con Bedrock. |
+| 2026-10-09 | **Instrucciones del redactor SQL** (Carlos con Claude Code): Se aclaran agrupaciones, uso de estaciones y sintaxis de PostgreSQL, con dos ejemplos. 123 tests; pendiente evaluar con Bedrock. |
+| 2026-10-09 | **Segunda evaluación SQL** (Carlos con Claude Code): Tres combinaciones: todas logran 4/11 en datos. Mejoran periodos, aviso de recorte y SQL; persisten errores al reformular y redactar. Coste estimado: 0,10 $. Veredictos pendientes de revisión humana. |
+| 2026-10-09 | **Correcciones tras la segunda evaluación** (Carlos con Claude Code): Descripción de herramienta simplificada, periodo explícito, respuesta fija fuera del histórico y rechazo de medias que mezclan contaminantes. 126 tests e integración con PostgreSQL en verde; falta otro lote con Bedrock. |
+| 2026-10-09 | **Tercera evaluación SQL** (Carlos con Claude Code): Tres combinaciones; ninguna cumple. Mejor resultado 6/11 en datos (gpt-oss-120b · mismo); límites 3/3 con Ministral · Qwen3 Coder. Resueltos el caso fuera del histórico, el filtro de anomalías y las medias mezcladas; quedan rankings recortados, filas sin agregar y medias sin ponderar. Coste 0,10 $. Veredictos pendientes de revisión humana. |
 
 
 ---
@@ -1525,6 +1707,7 @@ la enciende a mano para trabajar o hacer una demo.
 - [x] **¿Cómo se citan los datos de SQL?** → resuelto el 2026-09-30 separando rutas: los datos
   responden en texto libre (deterministas por construcción) y lo documental pasa por el flujo
   evidencias/validar; en respuestas mixtas la cifra va dentro de la afirmación (§7.3, §2).
+  Sustituido el 2026-10-09 en el `Agente` por la respuesta compuesta (§2, §7.3.1).
 - [x] Reconciliar `LLMOrchestrator` con la Fase 2 reescrita → hecho el 2026-09-30: el orquestador
   adopta el contrato de evidencias en proceso (tool `buscar_evidencias` + validación en el
   cierre); el umbral y las fuentes son ya los del servicio (§7.3).

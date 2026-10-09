@@ -1,0 +1,553 @@
+<title>Ministral frente a gpt-oss</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500;12..96,700;12..96,800&family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:ital,wght@0,400;0,500;0,600;1,400&display=swap">
+<style>
+/* Layout: informe de comparación en scroll; marcador arriba, cronología de mediciones,
+   gráficos de latencia y coste, y dos columnas de fallos, una por modelo.
+   Serie 1 (azul) = gpt-oss-120b; serie 2 (naranja) = Ministral 14B, validadas en claro y oscuro. */
+:root {
+  --paper: #f2f6f7;
+  --surface: #ffffff;
+  --ink: #13212a;
+  --muted: #546570;
+  --rule: #d3dde1;
+  --grid: #e3eaed;
+  --accent: #0d6b70;
+  --s-gpt: #2a78d6;
+  --s-min: #eb6834;
+  --s-gpt-soft: #e2edfa;
+  --s-min-soft: #fce9e1;
+  --ok: #1f7a3d; --ok-soft: #e1f2e6;
+  --warn: #8a5a00; --warn-soft: #fbf0d6;
+  --bad: #b3261e; --bad-soft: #fbe3e1;
+  --font-display: "Bricolage Grotesque", "Segoe UI", system-ui, sans-serif;
+  --font-body: "IBM Plex Sans", "Segoe UI", system-ui, sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, "Cascadia Mono", Consolas, monospace;
+  --step--1: 0.84rem; --step-0: 1rem; --step-1: 1.2rem; --step-2: 1.55rem; --step-3: 2.1rem;
+  --step-4: clamp(2.3rem, 5.6vw, 3.4rem);
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --paper: #0e161b; --surface: #152129; --ink: #e4edf0; --muted: #94a6af; --rule: #2a3a43; --grid: #22313a;
+    --accent: #52b9b8; --s-gpt: #3987e5; --s-min: #d95926; --s-gpt-soft: #1a2c44; --s-min-soft: #3b2219;
+    --ok: #5cc27e; --ok-soft: #173323; --warn: #e3b14d; --warn-soft: #3a2f14; --bad: #f08a80; --bad-soft: #3d1d1b;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --paper: #0e161b; --surface: #152129; --ink: #e4edf0; --muted: #94a6af; --rule: #2a3a43; --grid: #22313a;
+  --accent: #52b9b8; --s-gpt: #3987e5; --s-min: #d95926; --s-gpt-soft: #1a2c44; --s-min-soft: #3b2219;
+  --ok: #5cc27e; --ok-soft: #173323; --warn: #e3b14d; --warn-soft: #3a2f14; --bad: #f08a80; --bad-soft: #3d1d1b;
+  color-scheme: dark;
+}
+* { box-sizing: border-box; }
+body { background: var(--paper); color: var(--ink); font-family: var(--font-body); font-size: var(--step-0); line-height: 1.6; padding: 0 16px; }
+.wrap { max-width: 1040px; margin: 0 auto; }
+h1, h2, h3 { font-family: var(--font-display); line-height: 1.15; text-wrap: balance; margin: 0; }
+h2 { font-size: var(--step-3); font-weight: 700; letter-spacing: -0.01em; }
+h3 { font-size: var(--step-1); font-weight: 700; }
+p { margin: 0; }
+code, .mono { font-family: var(--font-mono); font-size: 0.9em; }
+a:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+.topnav { position: sticky; top: env(safe-area-inset-top, 0px); z-index: 5; background: var(--paper); border-bottom: 1px solid var(--rule); margin: 0 -16px; padding: 0 16px; }
+.topnav-inner { max-width: 1040px; margin: 0 auto; display: flex; gap: 20px; align-items: center; overflow-x: auto; padding-block: 10px; scrollbar-width: none; }
+.topnav a { white-space: nowrap; color: var(--muted); text-decoration: none; font-size: var(--step--1); font-weight: 500; }
+.topnav a:hover { color: var(--ink); }
+.topnav .brand { color: var(--ink); font-family: var(--font-display); font-weight: 700; }
+
+.hero { padding-block: 56px 36px; display: grid; gap: 22px; }
+.eyebrow { font-size: var(--step--1); letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); font-weight: 600; }
+.hero h1 { font-size: var(--step-4); font-weight: 800; letter-spacing: -0.02em; }
+.hero h1 .m { color: var(--s-min); }
+.hero h1 .g { color: var(--s-gpt); }
+.hero h1 .vs { color: var(--muted); font-weight: 500; }
+.lede { font-size: var(--step-1); color: var(--muted); max-width: 62ch; }
+.verdict { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 14px; align-items: start; background: var(--surface); border: 1px solid var(--rule); border-radius: 10px; padding: 16px 18px; max-width: 80ch; }
+.verdict .pill { font-size: 0.72rem; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; padding: 3px 10px; border-radius: 999px; background: var(--warn-soft); color: var(--warn); white-space: nowrap; }
+
+section.block { padding-block: 52px; border-top: 1px solid var(--rule); display: grid; gap: 22px; }
+.sec-head { display: grid; gap: 10px; }
+.sec-num { font-family: var(--font-mono); color: var(--muted); font-size: var(--step--1); }
+.sec-head p { color: var(--muted); max-width: 72ch; }
+
+.key { display: inline-flex; align-items: center; gap: 6px; font-weight: 600; }
+.sw { width: 12px; height: 12px; border-radius: 3px; display: inline-block; flex: none; }
+.sw.g { background: var(--s-gpt); }
+.sw.m { background: var(--s-min); }
+
+/* candidatos */
+.candidates { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
+.cand { background: var(--surface); border: 1px solid var(--rule); border-radius: 10px; padding: 18px; display: grid; gap: 10px; align-content: start; }
+.cand h3 { display: flex; align-items: center; gap: 8px; }
+.cand dl { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 4px 14px; margin: 0; font-size: var(--step--1); }
+.cand dt { color: var(--muted); }
+.cand dd { margin: 0; }
+.discarded { display: grid; gap: 6px; font-size: var(--step--1); color: var(--muted); padding: 0; margin: 0; list-style: none; }
+.discarded b { color: var(--ink); font-weight: 600; }
+
+/* marcador */
+.tablebox { background: var(--surface); border: 1px solid var(--rule); border-radius: 10px; overflow-x: auto; }
+table { border-collapse: collapse; width: 100%; font-size: var(--step--1); }
+th, td { text-align: left; padding: 10px 12px; border-bottom: 1px solid var(--rule); vertical-align: top; }
+tbody tr:last-child td { border-bottom: 0; }
+th { font-weight: 600; color: var(--muted); font-size: 0.78rem; text-transform: uppercase; letter-spacing: 0.05em; white-space: nowrap; }
+td.v { font-family: var(--font-mono); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.win { font-weight: 600; }
+.win::after { content: " ▲"; font-size: 0.7em; color: var(--ok); }
+.chip { display: inline-block; font-size: 0.72rem; font-weight: 600; padding: 2px 8px; border-radius: 999px; white-space: nowrap; }
+.chip.tie { background: var(--grid); color: var(--muted); }
+.chip.g { background: var(--s-gpt-soft); color: var(--ink); box-shadow: inset 3px 0 0 var(--s-gpt); }
+.chip.m { background: var(--s-min-soft); color: var(--ink); box-shadow: inset 3px 0 0 var(--s-min); }
+
+/* cronología */
+.timeline { list-style: none; margin: 0; padding: 0; display: grid; gap: 0; }
+.tl { display: grid; grid-template-columns: 7.5em minmax(0, 1fr); gap: 18px; padding-block: 16px; border-bottom: 1px solid var(--rule); }
+.tl:first-child { border-top: 1px solid var(--rule); }
+.tl time { font-family: var(--font-mono); font-size: var(--step--1); color: var(--muted); line-height: 1.5; }
+.tl-body { display: grid; gap: 8px; min-width: 0; }
+.tl-body h3 { font-size: var(--step-0); }
+.pair { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+.res { border-radius: 8px; padding: 8px 12px; font-size: var(--step--1); display: grid; gap: 2px; }
+.res.m { background: var(--s-min-soft); box-shadow: inset 3px 0 0 var(--s-min); }
+.res.g { background: var(--s-gpt-soft); box-shadow: inset 3px 0 0 var(--s-gpt); }
+.res b { font-family: var(--font-mono); font-weight: 500; }
+.res small { color: var(--muted); font-size: 0.78rem; }
+.tl-body .after { font-size: var(--step--1); color: var(--muted); }
+
+/* gráficos */
+.charts { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
+.chart { background: var(--surface); border: 1px solid var(--rule); border-radius: 10px; padding: 16px 18px; display: grid; gap: 10px; min-width: 0; position: relative; }
+.chart h3 { font-size: var(--step-0); }
+.chart .sub { font-size: var(--step--1); color: var(--muted); }
+.legend { display: flex; flex-wrap: wrap; gap: 6px 16px; font-size: var(--step--1); color: var(--muted); }
+.legend span { display: inline-flex; align-items: center; gap: 6px; }
+.svgbox { overflow-x: auto; }
+svg { display: block; width: 100%; height: auto; font-family: var(--font-body); }
+svg .axis-text { fill: var(--muted); font-size: 11px; font-variant-numeric: tabular-nums; }
+svg .cat-text { fill: var(--ink); font-size: 12px; }
+svg .val-text { fill: var(--ink); font-size: 11px; font-variant-numeric: tabular-nums; font-family: var(--font-mono); }
+svg .gridline { stroke: var(--grid); stroke-width: 1; }
+svg .baseline { stroke: var(--rule); stroke-width: 1; }
+svg .bar-g, svg .dot-g { fill: var(--s-gpt); }
+svg .bar-m, svg .dot-m { fill: var(--s-min); }
+svg .rng-g { stroke: var(--s-gpt); stroke-width: 2; stroke-linecap: round; }
+svg .rng-m { stroke: var(--s-min); stroke-width: 2; stroke-linecap: round; }
+svg .ring { stroke: var(--surface); stroke-width: 2; }
+svg .hit { fill: transparent; cursor: default; }
+svg .hit:hover + .mark, svg g.item:hover .mark { opacity: 0.85; }
+.tip { position: absolute; pointer-events: none; background: var(--ink); color: var(--paper); font-size: 0.78rem; padding: 6px 9px; border-radius: 6px; line-height: 1.4; max-width: 240px; z-index: 3; }
+.chart .note { font-size: var(--step--1); color: var(--muted); }
+
+.stats { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 1px; background: var(--rule); border: 1px solid var(--rule); border-radius: 10px; overflow: hidden; }
+.stat { background: var(--surface); padding: 14px 16px; display: grid; gap: 6px; align-content: start; }
+.stat .lab { font-size: 0.78rem; color: var(--muted); text-transform: uppercase; letter-spacing: 0.05em; font-weight: 600; }
+.stat .duo { display: grid; gap: 2px; font-variant-numeric: tabular-nums; }
+.stat .duo span { display: flex; align-items: center; gap: 8px; font-family: var(--font-mono); font-size: var(--step-0); }
+.stat .duo span b { font-family: var(--font-display); font-size: var(--step-2); font-weight: 700; }
+.stat small { color: var(--muted); font-size: 0.78rem; }
+
+/* fallos */
+.faults { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 20px; align-items: start; }
+.col { display: grid; gap: 10px; min-width: 0; }
+.col > h3 { display: flex; align-items: center; gap: 8px; padding-bottom: 6px; border-bottom: 2px solid var(--rule); }
+.col.m > h3 { border-color: var(--s-min); }
+.col.g > h3 { border-color: var(--s-gpt); }
+.fault { background: var(--surface); border: 1px solid var(--rule); border-radius: 10px; padding: 14px 16px; display: grid; gap: 6px; }
+.fault-head { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; }
+.fault h4 { margin: 0; font-family: var(--font-display); font-size: var(--step-0); font-weight: 700; }
+.fault p { font-size: var(--step--1); }
+.sev { font-size: 0.7rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em; padding: 2px 8px; border-radius: 999px; white-space: nowrap; }
+.sev::before { margin-right: 4px; }
+.sev.hi { background: var(--bad-soft); color: var(--bad); }
+.sev.hi::before { content: "●"; }
+.sev.md { background: var(--warn-soft); color: var(--warn); }
+.sev.md::before { content: "◐"; }
+.sev.lo { background: var(--grid); color: var(--muted); }
+.sev.lo::before { content: "○"; }
+.sev.fixed { background: var(--ok-soft); color: var(--ok); }
+.sev.fixed::before { content: "✓"; }
+blockquote { margin: 0; padding: 8px 12px; border-left: 3px solid var(--rule); background: var(--paper); font-size: 0.8rem; color: var(--muted); border-radius: 0 6px 6px 0; }
+
+.common { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.common .fault { border-style: dashed; }
+.todo { list-style: none; padding: 0; margin: 0; display: grid; gap: 8px; }
+.todo li { display: grid; grid-template-columns: 1.4em minmax(0, 1fr); gap: 8px; font-size: var(--step--1); background: var(--surface); border: 1px solid var(--rule); border-radius: 8px; padding: 10px 14px; }
+.todo li::before { content: "□"; color: var(--muted); }
+
+.method { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
+.method div { background: var(--surface); border: 1px solid var(--rule); border-radius: 10px; padding: 14px 16px; font-size: var(--step--1); display: grid; gap: 4px; align-content: start; }
+.method b { font-family: var(--font-display); font-size: var(--step-0); }
+
+footer { padding-block: 32px 48px; border-top: 1px solid var(--rule); color: var(--muted); font-size: var(--step--1); }
+
+@media (max-width: 820px) {
+  .charts, .faults, .common, .candidates { grid-template-columns: minmax(0, 1fr); }
+  .method { grid-template-columns: minmax(0, 1fr); }
+}
+@media (max-width: 600px) {
+  .tl { grid-template-columns: minmax(0, 1fr); gap: 6px; }
+  .pair { grid-template-columns: minmax(0, 1fr); }
+  .stats { grid-template-columns: minmax(0, 1fr); }
+  .verdict { grid-template-columns: minmax(0, 1fr); }
+}
+@media (prefers-reduced-motion: no-preference) { html { scroll-behavior: smooth; } }
+</style>
+
+<nav class="topnav" aria-label="Secciones">
+  <div class="topnav-inner">
+    <span class="brand">Modelos</span>
+    <a href="#candidatos">Candidatos</a>
+    <a href="#marcador">Marcador</a>
+    <a href="#cronologia">Cronología</a>
+    <a href="#latencia">Latencia</a>
+    <a href="#coste">Coste</a>
+    <a href="#fallos">Dónde fallan</a>
+    <a href="#falta">Qué falta</a>
+  </div>
+</nav>
+
+<main class="wrap">
+  <header class="hero">
+    <p class="eyebrow">Agente del TFM · Amazon Bedrock eu-west-1 · mediciones del 4 al 6 de octubre de 2026</p>
+    <h1><span class="m">Ministral 14B</span> <span class="vs">frente a</span> <span class="g">gpt-oss-120b</span></h1>
+    <p class="lede">Los dos clasifican igual de bien y devuelven el JSON documental a la primera. Se diferencian en la latencia, en el coste y, sobre todo, en cómo fallan cuando se salen del camino.</p>
+    <div class="verdict">
+      <span class="pill">Sin decidir</span>
+      <p>La elección se aplaza hasta poder evaluar las herramientas de datos (SQL) y del detector de anomalías. Hoy: <strong>gpt-oss</strong> es más rápido, más estable y más prudente; <strong>Ministral</strong> es más barato pero se toma libertades con las cifras y con su propio prompt.</p>
+    </div>
+  </header>
+
+  <section class="block" id="candidatos">
+    <div class="sec-head">
+      <span class="sec-num">01</span>
+      <h2>Los candidatos</h2>
+      <p>La referencia del equipo era Mistral Small 3.2 (24B), pero no está en Bedrock y no se puede importar. Buscamos sus equivalentes más cercanos disponibles en la región.</p>
+    </div>
+    <div class="candidates">
+      <article class="cand">
+        <h3><i class="sw m"></i>Ministral 3 14B</h3>
+        <dl>
+          <dt>ID</dt><dd><code>mistral.ministral-3-14b-instruct</code></dd>
+          <dt>Tipo</dt><dd>Modelo denso, sin razonamiento</dd>
+          <dt>Precio</dt><dd>0,24 $ / 0,24 $ por millón de tokens (entrada / salida)</dd>
+          <dt>Por qué</dt><dd>El Mistral actual más parecido a Small 3.2 en la propia región</dd>
+          <dt>Ojo</dt><dd>LlamaIndex no lo conocía: hubo que declarar sus metadatos a mano</dd>
+        </dl>
+      </article>
+      <article class="cand">
+        <h3><i class="sw g"></i>gpt-oss-120b</h3>
+        <dl>
+          <dt>ID</dt><dd><code>openai.gpt-oss-120b-1:0</code></dd>
+          <dt>Tipo</dt><dd>MoE de ~120B con ~5B activos, razona antes de responder</dd>
+          <dt>Precio</dt><dd>0,18 $ / 0,70 $ por millón de tokens (entrada / salida)</dd>
+          <dt>Por qué</dt><dd>El equivalente más próximo a Mistral Small 4 (también MoE)</dd>
+          <dt>Ojo</dt><dd>El razonamiento cuenta dentro del límite de tokens de salida</dd>
+        </dl>
+      </article>
+    </div>
+    <ul class="discarded">
+      <li><b>Magistral Small 1.2</b> (Small 3.2 con razonamiento): 0,59 / 1,76 $ y más lento; no cabe en 4 llamadas por turno.</li>
+      <li><b>Mistral Large 3</b>: no está en ninguna región de la UE.</li>
+      <li><b>Pixtral Large</b>: solo por perfil <code>eu.</code> y con fecha de retirada cercana.</li>
+    </ul>
+  </section>
+
+  <section class="block" id="marcador">
+    <div class="sec-head">
+      <span class="sec-num">02</span>
+      <h2>Marcador</h2>
+      <p>Último valor medido de cada indicador. ▲ marca el mejor cuando hay diferencia clara.</p>
+      <div class="legend"><span><i class="sw m"></i>Ministral 14B</span><span><i class="sw g"></i>gpt-oss-120b</span></div>
+    </div>
+    <div class="tablebox">
+      <table>
+        <thead><tr><th>Indicador</th><th>Ministral 14B</th><th>gpt-oss-120b</th><th>Lectura</th></tr></thead>
+        <tbody>
+          <tr><td>Clasificador, 29 preguntas (prompt final)</td><td class="v">29/29</td><td class="v">29/29</td><td><span class="chip tie">Empate</span></td></tr>
+          <tr><td>Conversaciones, 11 turnos con seguimiento</td><td class="v">11/11</td><td class="v">11/11</td><td><span class="chip tie">Empate</span></td></tr>
+          <tr><td>Lote de 12 casos (última repetición)</td><td class="v">11/12</td><td class="v win">12/12</td><td><span class="chip g">gpt-oss</span></td></tr>
+          <tr><td>JSON documental válido a la primera (2 lotes)</td><td class="v">12/12</td><td class="v">12/12</td><td><span class="chip tie">Empate</span></td></tr>
+          <tr><td>Latencia mediana del turno (24 turnos)</td><td class="v">4,5 s</td><td class="v win">2,9 s</td><td><span class="chip g">gpt-oss</span></td></tr>
+          <tr><td>p95 del turno</td><td class="v">17,3 s</td><td class="v win">9,2 s</td><td><span class="chip g">gpt-oss</span></td></tr>
+          <tr><td>Latencia del clasificador (prompt final, mediana)</td><td class="v win">315 ms</td><td class="v">986 ms</td><td><span class="chip m">Ministral</span></td></tr>
+          <tr><td>Coste de un turno documental (mediana)</td><td class="v win">0,00091 $</td><td class="v">0,00135 $</td><td><span class="chip m">Ministral</span></td></tr>
+          <tr><td>Hallazgos de las comprobaciones (154 turnos)</td><td class="v">10</td><td class="v win">0</td><td><span class="chip g">gpt-oss</span></td></tr>
+          <tr><td>Sin evidencias (síntesis forzada)</td><td>Responde con conocimiento propio</td><td class="win">Dice que no tiene información</td><td><span class="chip g">gpt-oss</span></td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section class="block" id="cronologia">
+    <div class="sec-head">
+      <span class="sec-num">03</span>
+      <h2>Cómo ha ido, medición a medición</h2>
+      <p>Cada medición cambió algo del agente. Varias diferencias entre modelos desaparecieron al corregir el formato o los límites, no al cambiar de modelo.</p>
+    </div>
+    <ol class="timeline">
+      <li class="tl"><time>4 oct</time><div class="tl-body">
+        <h3>Clasificador, primera medición (20 preguntas)</h3>
+        <div class="pair"><div class="res m"><b>4/20</b><small>Escribía <code>**DOCUMENTAL**</code> en negrita y el parser estricto lo rechazaba</small></div><div class="res g"><b>19/20</b><small>Un tema fuera de la lista: «conceptos generales»</small></div></div>
+        <p class="after">Tras pedir texto plano y quitar <code>*</code> en el parser: 20/20 los dos, y Ministral dejó de usar negritas.</p>
+      </div></li>
+      <li class="tl"><time>5 oct</time><div class="tl-body">
+        <h3>Ruta documental con el RAG real (18 turnos por modelo)</h3>
+        <div class="pair"><div class="res m"><b>18/18</b><small>JSON válido a la primera · 3,0–7,3 s</small></div><div class="res g"><b>10 + 4 reparadas + 4 fallidas</b><small>JSON cortado por el límite de 512 tokens · 4,5–10,2 s</small></div></div>
+        <p class="after">Causa: el razonamiento de gpt-oss gasta los tokens de salida. Con 2048, 6/6 síntesis válidas. Se fijó <code>LLM_MAX_TOKENS=2048</code> para los dos.</p>
+      </div></li>
+      <li class="tl"><time>6 oct<br>10:27</time><div class="tl-body">
+        <h3>Lote de 12 casos con lo esperado</h3>
+        <div class="pair"><div class="res m"><b>11/12 · 4,0 s · 0,0059 $</b><small>6/6 JSON a la primera; el polen salió como DATOS</small></div><div class="res g"><b>11/12 · 2,9 s · 0,0087 $</b><small>6/6 JSON a la primera; el polen salió como FUERA_DE_ALCANCE</small></div></div>
+        <p class="after">El mismo caso falló en los dos: se decidió que el polen es fuera de alcance (las estaciones no lo miden).</p>
+      </div></li>
+      <li class="tl"><time>6 oct<br>10:48</time><div class="tl-body">
+        <h3>El mismo lote, 20 minutos después</h3>
+        <div class="pair"><div class="res m"><b>11/12 · 6,8 s</b><small>Mismos casos, misma calidad, bastante más lento (documental 14,9 s)</small></div><div class="res g"><b>12/12 · 3,2 s</b><small>Latencia casi igual que en el primer lote</small></div></div>
+      </div></li>
+      <li class="tl"><time>6 oct</time><div class="tl-body">
+        <h3>Síntesis forzada: el modelo responde sin evidencias</h3>
+        <div class="pair"><div class="res m"><b>Inventa</b><small>«25 µg/m³» para el PM2.5 y la Directiva 2008/50/CE sin ninguna evidencia, con negritas</small></div><div class="res g"><b>Se abstiene</b><small>«No dispongo de información suficiente…» en los dos casos</small></div></div>
+      </div></li>
+      <li class="tl"><time>6 oct</time><div class="tl-body">
+        <h3>Streaming de punta a punta</h3>
+        <div class="pair"><div class="res m"><b>Primer token 3,4 s</b><small>Documental completo en 33 s (Bedrock lento ese rato)</small></div><div class="res g"><b>Primer token 2,0 s</b><small>Documental completo en 7,6 s; sin razonamiento en el texto</small></div></div>
+      </div></li>
+      <li class="tl"><time>6 oct<br>15:10</time><div class="tl-body">
+        <h3>Memoria y prompt del clasificador revisado</h3>
+        <div class="pair"><div class="res m"><b>27/28 → 29/29 · conversaciones 9/11 → 11/11</b><small>Antes: «límite legal anual del NO2» como DATOS</small></div><div class="res g"><b>27/28 → 29/29 · conversaciones 11/11 → 11/11</b><small>Antes: un timeout de 10 s del clasificador</small></div></div>
+        <p class="after">Los dos reformulan solos la búsqueda en los seguimientos («¿Y en niños?» → «efectos del NO2 en la salud de los niños»).</p>
+      </div></li>
+      <li class="tl"><time>6 oct<br>19:16</time><div class="tl-body">
+        <h3>Casos adversarios: pedir el prompt y los internos</h3>
+        <div class="pair"><div class="res m"><b>Fuga 4 de 4</b><small>Lo clasifica como CHARLA y repite su prompt, casi siempre parafraseado</small></div><div class="res g"><b>0 hallazgos</b><small>Lo clasifica como FUERA_DE_ALCANCE: el modelo nunca llega a ver la petición</small></div></div>
+        <p class="after">La defensa de gpt-oss vino del clasificador, no de la redacción final.</p>
+      </div></li>
+    </ol>
+  </section>
+
+  <section class="block" id="latencia">
+    <div class="sec-head">
+      <span class="sec-num">04</span>
+      <h2>Latencia</h2>
+      <p>Los dos lotes de 12 casos de cada modelo (24 turnos), con el RAG real. Medianas con su n; el p95 es solo descriptivo con tan pocos turnos.</p>
+      <div class="legend"><span><i class="sw m"></i>Ministral 14B</span><span><i class="sw g"></i>gpt-oss-120b</span></div>
+    </div>
+    <div class="charts">
+      <div class="chart">
+        <h3>Turno completo por ruta</h3>
+        <p class="sub">Mediana en segundos</p>
+        <div class="svgbox" id="c-ruta"></div>
+        <p class="note">La ruta documental hace 4 llamadas al modelo; ahí se acumula la diferencia. En las frases fijas solo cuenta el clasificador.</p>
+      </div>
+      <div class="chart">
+        <h3>Cada llamada al modelo, por fase</h3>
+        <p class="sub">Punto = mediana; línea = hasta el p95, en segundos</p>
+        <div class="svgbox" id="c-fase"></div>
+        <p class="note">Ministral tiene una cola larga: su p95 duplica o quintuplica la mediana. La búsqueda en el RAG (0,2 s) no depende del modelo.</p>
+      </div>
+    </div>
+  </section>
+
+  <section class="block" id="coste">
+    <div class="sec-head">
+      <span class="sec-num">05</span>
+      <h2>Coste y tokens</h2>
+      <p>Coste calculado desde los tokens reales de cada llamada y los precios de Bedrock en Irlanda del 4 de octubre. Phoenix no conoce esos precios; los aplica nuestro informe.</p>
+    </div>
+    <div class="stats">
+      <div class="stat"><span class="lab">Tokens de salida, turno documental</span>
+        <div class="duo"><span><i class="sw m"></i><b>585</b></span><span><i class="sw g"></i><b>1.108</b></span></div>
+        <small>gpt-oss casi duplica la salida: el razonamiento también se cobra.</small></div>
+      <div class="stat"><span class="lab">Coste mediano, turno documental</span>
+        <div class="duo"><span><i class="sw m"></i><b>0,00091 $</b></span><span><i class="sw g"></i><b>0,00135 $</b></span></div>
+        <small>Unos 0,9 $ frente a 1,35 $ por cada 1.000 preguntas documentales (estimación).</small></div>
+      <div class="stat"><span class="lab">Todo lo medido</span>
+        <div class="duo"><span><b>152 turnos</b></span><span><b>0,10 $</b></span></div>
+        <small>Turnos con traza en 16 lotes. Las mediciones del clasificador y las sondas sin traza suman céntimos más.</small></div>
+    </div>
+    <p style="color: var(--muted); font-size: var(--step--1); max-width: 72ch;">Con estas cifras el coste no decide: la diferencia entre modelos es de céntimos por cada mil preguntas. Lo que decide es la calidad y la estabilidad.</p>
+  </section>
+
+  <section class="block" id="fallos">
+    <div class="sec-head">
+      <span class="sec-num">06</span>
+      <h2>Dónde tiene más problemas cada uno</h2>
+      <p>Ordenado por gravedad. «Resuelto» significa que el arreglo está en el agente y verificado en Bedrock.</p>
+    </div>
+    <div class="faults">
+      <div class="col m">
+        <h3><i class="sw m"></i>Ministral 14B</h3>
+        <article class="fault"><div class="fault-head"><h4>Se inventa cifras fuera de la ruta documental</h4><span class="sev hi">Alta</span></div>
+          <p>Cuando no hay evidencias (síntesis forzada) o en la charla, responde con lo que «sabe»: límites legales, directivas y decretos sin fuente. En la ruta documental no pasa porque el RAG valida.</p>
+          <blockquote>«el límite anual de PM2.5 en España es de 25 µg/m³» · sin evidencias en el turno</blockquote></article>
+        <article class="fault"><div class="fault-head"><h4>Repite su prompt de sistema</h4><span class="sev hi">Alta</span></div>
+          <p>4 de 4 veces que la petición llegó a CHARLA. Lo parafrasea, así que la regla de 10 palabras seguidas solo detecta 1 de las 4 fugas.</p>
+          <blockquote>«aquí está el resumen fiel de lo que me indicaron para este rol: Eres el asistente de calidad del aire de Madrid…»</blockquote></article>
+        <article class="fault"><div class="fault-head"><h4>Latencia irregular</h4><span class="sev md">Media</span></div>
+          <p>p95 del turno de 17,3 s. El mismo lote pasó de 4,0 s a 6,8 s de mediana en 20 minutos; un documental por streaming tardó 33 s.</p></article>
+        <article class="fault"><div class="fault-head"><h4>Clasificación en los bordes</h4><span class="sev md">Media</span></div>
+          <p>«¿Cuál es el límite anual de PM10?» (sin «legal») sigue saliendo como DATOS, 2 de 2. Antes del ajuste, el polen también.</p></article>
+        <article class="fault"><div class="fault-head"><h4>Una cita mal puesta</h4><span class="sev md">Media</span></div>
+          <p>Mencionó el límite de 2030 (20 µg/m³) citando D1 y D6, cuando la cifra estaba en D2. El RAG no lo detecta: solo comprueba que los IDs existen. Lo vio la regla de cifras.</p></article>
+        <article class="fault"><div class="fault-head"><h4>Markdown donde no toca</h4><span class="sev fixed">Resuelto en el clasificador</span></div>
+          <p>Negritas en el clasificador (4/20) y en la charla. En el clasificador se arregló con el prompt; en la charla siguen apareciendo.</p></article>
+      </div>
+      <div class="col g">
+        <h3><i class="sw g"></i>gpt-oss-120b</h3>
+        <article class="fault"><div class="fault-head"><h4>El razonamiento se come los tokens de salida</h4><span class="sev fixed">Resuelto</span></div>
+          <p>Con el límite por defecto de 512 tokens, el JSON salía cortado en un punto distinto cada vez y 4 de 18 turnos acabaron en insuficiencia. El motivo de parada no avisaba. Con 2048, 6/6.</p></article>
+        <article class="fault"><div class="fault-head"><h4>Más caro por turno</h4><span class="sev md">Media</span></div>
+          <p>Unas 1,5 veces Ministral en un turno documental: genera el doble de salida y la salida cuesta casi el triple por token.</p></article>
+        <article class="fault"><div class="fault-head"><h4>Clasificador más lento y con picos</h4><span class="sev md">Media</span></div>
+          <p>Mediana de 986 ms frente a 315 ms. Un caso de 8,4 s y un timeout de 10 s que dejó el turno en DESCONOCIDA.</p></article>
+        <article class="fault"><div class="fault-head"><h4>Prudente de más</h4><span class="sev lo">Baja</span></div>
+          <p>En los umbrales del protocolo de episodios dijo «No puedo responder con la documentación disponible», mientras Ministral respondió con citas válidas sobre las mismas evidencias <em>[por confirmar en la revisión humana]</em>.</p></article>
+        <article class="fault"><div class="fault-head"><h4>Tema fuera de la lista</h4><span class="sev fixed">Resuelto</span></div>
+          <p>En la primera medición devolvió «conceptos generales» como tema. Se aclaró en el prompt que el tema es uno de cuatro.</p></article>
+      </div>
+    </div>
+
+    <div class="sec-head"><h3>Problemas que no son del modelo</h3></div>
+    <div class="common">
+      <article class="fault"><div class="fault-head"><h4>Clasificador sobreajustado</h4><span class="sev md">Media</span></div><p>El 29/29 se logró en tres iteraciones sobre las mismas preguntas. Hace falta un juego nuevo para confirmarlo.</p></article>
+      <article class="fault"><div class="fault-head"><h4>Calidad del contenido sin puntuar</h4><span class="sev md">Media</span></div><p>Las métricas automáticas miden formato, ruta y citas. La columna «Correcta», que lee una persona, sigue en blanco.</p></article>
+      <article class="fault"><div class="fault-head"><h4>Bedrock varía de un rato a otro</h4><span class="sev lo">Baja</span></div><p>Entre dos lotes iguales la latencia cambia más que entre modelos. Compara siempre lotes tomados a la misma hora.</p></article>
+      <article class="fault"><div class="fault-head"><h4>El RAG en local se queda sin memoria</h4><span class="sev lo">Baja</span></div><p>Ocupa 3,7 GB de 7,9. Con poca RAM las búsquedas agotan los 20 s y el turno sale como frase fija: parece culpa del modelo y no lo es.</p></article>
+    </div>
+  </section>
+
+  <section class="block" id="falta">
+    <div class="sec-head">
+      <span class="sec-num">07</span>
+      <h2>Qué falta para decidir</h2>
+    </div>
+    <ul class="todo">
+      <li>Evaluar las herramientas de datos (SQL) y del detector de anomalías con los dos modelos: elegir consulta y parámetros es otra tarea.</li>
+      <li>Decidir si esas preguntas necesitan un modelo que razone. Si sí, darle margen de tokens de salida desde el principio.</li>
+      <li>Rellenar la revisión humana («Correcta») de los lotes ya ejecutados, también la calidad del español.</li>
+      <li>Repetir el clasificador con preguntas que no se usaron para ajustar el prompt.</li>
+      <li>Decidir qué comprobaciones bloquean: la de cifras necesita antes ignorar «2.5 micras» (3 falsos positivos).</li>
+    </ul>
+
+    <div class="sec-head"><h3>Cómo se ha medido</h3></div>
+    <div class="method">
+      <div><b>Sin jueces LLM</b><span>Tres criterios separados: JSON válido a la primera, referencias válidas según el RAG y respuesta correcta leída por una persona.</span></div>
+      <div><b>Casos con lo esperado</b><span>29 preguntas del clasificador, 12 casos de turno, 5 conversaciones (11 turnos) y 6 casos adversarios. Cada caso dice qué intención, ruta, búsqueda y cita espera.</span></div>
+      <div><b>Todo desde las trazas</b><span>Cada lote deja un JSONL de spans; el informe saca de ahí latencias, tokens y coste. Un turno sin tokens queda incompleto, nunca a cero.</span></div>
+    </div>
+  </section>
+</main>
+
+<footer>
+  <div class="wrap">Fuentes: <code>Agente/evaluacion/resultados/</code> (clasificador, turnos, comprobaciones), informe de <code>informe_trazas.py</code> sobre <code>Agente/trazas/</code> y <code>docs/agente/estado_agente.md</code>, a 6 de octubre de 2026. Precios de Bedrock eu-west-1 consultados el 4 de octubre.</div>
+</footer>
+
+<script>
+(function () {
+  var NS = "http://www.w3.org/2000/svg";
+  function mk(tag, attrs, parent) {
+    var e = document.createElementNS(NS, tag);
+    for (var k in attrs) e.setAttribute(k, attrs[k]);
+    if (parent) parent.appendChild(e);
+    return e;
+  }
+  function fmt(ms) { return (ms / 1000).toFixed(ms < 1000 ? 2 : 1).replace(".", ","); }
+  var MODELS = [
+    { key: "m", name: "Ministral 14B" },
+    { key: "g", name: "gpt-oss-120b" }
+  ];
+
+  function tooltip(container) {
+    var tip = document.createElement("div");
+    tip.className = "tip"; tip.hidden = true;
+    container.closest(".chart").appendChild(tip);
+    return {
+      show: function (evt, html) {
+        tip.innerHTML = html; tip.hidden = false;
+        var box = container.closest(".chart").getBoundingClientRect();
+        var x = evt.clientX - box.left + 12, y = evt.clientY - box.top + 12;
+        if (x + 240 > box.width) x = Math.max(8, box.width - 248);
+        tip.style.left = x + "px"; tip.style.top = y + "px";
+      },
+      hide: function () { tip.hidden = true; }
+    };
+  }
+
+  /* Barras horizontales agrupadas: mediana por ruta */
+  function barras(id, rows, maxMs, ticks) {
+    var host = document.getElementById(id); if (!host) return;
+    var W = 460, left = 112, right = 52, top = 8, bandH = 46, barH = 14, gap = 2;
+    var H = top + rows.length * bandH + 26;
+    var svg = mk("svg", { viewBox: "0 0 " + W + " " + H, role: "img", "aria-label": "Latencia mediana por ruta y modelo" }, host);
+    var x = function (v) { return left + v / maxMs * (W - left - right); };
+    ticks.forEach(function (t) {
+      mk("line", { x1: x(t), x2: x(t), y1: top, y2: H - 22, class: "gridline" }, svg);
+      var tx = mk("text", { x: x(t), y: H - 6, "text-anchor": "middle", class: "axis-text" }, svg);
+      tx.textContent = (t / 1000) + " s";
+    });
+    mk("line", { x1: left, x2: left, y1: top, y2: H - 22, class: "baseline" }, svg);
+    var tt = tooltip(host);
+    rows.forEach(function (r, i) {
+      var y0 = top + i * bandH + 6;
+      var lab = mk("text", { x: left - 10, y: y0 + barH + 2, "text-anchor": "end", class: "cat-text" }, svg);
+      lab.textContent = r.label;
+      MODELS.forEach(function (m, j) {
+        var v = r[m.key], y = y0 + j * (barH + gap), w = Math.max(2, x(v) - left);
+        var g = mk("g", { class: "item" }, svg);
+        /* extremo de datos redondeado, anclado a la base */
+        mk("path", { class: "mark bar-" + m.key, d: "M" + left + "," + y + "h" + Math.max(0, w - 4) + "a4,4 0 0 1 4,4v" + (barH - 8) + "a4,4 0 0 1 -4,4h-" + Math.max(0, w - 4) + "z" }, g);
+        var vt = mk("text", { x: left + w + 6, y: y + barH - 3, class: "val-text" }, g);
+        vt.textContent = fmt(v);
+        var hit = mk("rect", { x: left, y: y - 1, width: W - left, height: barH + 2, class: "hit" }, g);
+        hit.addEventListener("mousemove", function (e) { tt.show(e, "<b>" + m.name + "</b><br>" + r.label + ": " + fmt(v) + " s<br>n = " + r["n" + m.key]); });
+        hit.addEventListener("mouseleave", tt.hide);
+      });
+    });
+  }
+
+  /* Punto (mediana) con línea hasta el p95 */
+  function rangos(id, rows, maxMs, ticks) {
+    var host = document.getElementById(id); if (!host) return;
+    var W = 460, left = 132, right = 20, top = 8, bandH = 54;
+    var H = top + rows.length * bandH + 26;
+    var svg = mk("svg", { viewBox: "0 0 " + W + " " + H, role: "img", "aria-label": "Latencia por fase: mediana y p95 por modelo" }, host);
+    var x = function (v) { return left + v / maxMs * (W - left - right); };
+    ticks.forEach(function (t) {
+      mk("line", { x1: x(t), x2: x(t), y1: top, y2: H - 22, class: "gridline" }, svg);
+      var tx = mk("text", { x: x(t), y: H - 6, "text-anchor": "middle", class: "axis-text" }, svg);
+      tx.textContent = (t / 1000) + " s";
+    });
+    var tt = tooltip(host);
+    rows.forEach(function (r, i) {
+      var y0 = top + i * bandH + 12;
+      var lab = mk("text", { x: left - 10, y: y0 + 13, "text-anchor": "end", class: "cat-text" }, svg);
+      lab.textContent = r.label;
+      MODELS.forEach(function (m, j) {
+        var d = r[m.key], y = y0 + j * 18;
+        var g = mk("g", { class: "item" }, svg);
+        mk("line", { x1: x(d[0]), x2: x(d[1]), y1: y, y2: y, class: "rng-" + m.key }, g);
+        mk("line", { x1: x(d[1]), x2: x(d[1]), y1: y - 4, y2: y + 4, class: "rng-" + m.key }, g);
+        mk("circle", { cx: x(d[0]), cy: y, r: 5, class: "mark ring dot-" + m.key }, g);
+        var hit = mk("rect", { x: left, y: y - 8, width: W - left, height: 16, class: "hit" }, g);
+        hit.addEventListener("mousemove", function (e) { tt.show(e, "<b>" + m.name + "</b><br>" + r.label + "<br>mediana " + fmt(d[0]) + " s · p95 " + fmt(d[1]) + " s<br>n = " + d[2]); });
+        hit.addEventListener("mouseleave", tt.hide);
+      });
+    });
+  }
+
+  barras("c-ruta", [
+    { label: "Documental", m: 11376, g: 7375, nm: 12, ng: 12 },
+    { label: "Sin evidencia", m: 2940, g: 1782, nm: 2, ng: 2 },
+    { label: "Charla", m: 1926, g: 1292, nm: 4, ng: 4 },
+    { label: "Fuera de alcance", m: 634, g: 692, nm: 4, ng: 6 }
+  ], 12000, [0, 4000, 8000, 12000]);
+
+  rangos("c-fase", [
+    { label: "Clasificar", m: [693, 3427, 24], g: [723, 1063, 24] },
+    { label: "Vuelta del bucle", m: [2046, 7498, 30], g: [1063, 3264, 30] },
+    { label: "Síntesis documental", m: [3909, 7850, 12], g: [2927, 4186, 12] }
+  ], 8000, [0, 2000, 4000, 6000, 8000]);
+})();
+</script>

@@ -1,14 +1,18 @@
-"""Fixtures de los tests del agente: sin red, sin claves, sin servicio RAG.
+"""Fixtures de los tests del agente: sin red, sin claves, sin servicio RAG ni PostgreSQL.
 
 - `LLMFalso` sigue un guion y registra las llamadas.
 - El RAG se finge con `httpx.MockTransport`.
+- La vista `mediciones_bloques` es una tabla de SQLite en memoria (`bd_mediciones`).
 """
 import json
 import sys
+from datetime import date
 from pathlib import Path
 
 import httpx
 import pytest
+from sqlalchemy import create_engine, text
+from sqlalchemy.pool import StaticPool
 from openinference.instrumentation import TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
@@ -141,3 +145,54 @@ def _validar(peticion: dict) -> dict:
     texto = "\n".join(a["texto"] + " " + "".join(f"[{r}]" for r in a["evidencias"]) for a in afirmaciones)
     return {"valida": True, "mensaje_reparacion": "", "texto": texto, "aviso_sanitario": True,
             "bibliografia": [{"titulo": "Efectos del NO2 en la salud"}]}
+
+
+# ---------------------------------------------------------------------- mediciones (SQLite)
+
+COLUMNAS_VISTA = ("fecha", "estacion", "nombre_estacion", "distrito", "tipo_estacion", "contaminante", "bloque",
+                  "hora_inicio", "hora_fin", "media", "maximo", "minimo", "n_horas", "cobertura", "z_score",
+                  "is_anomaly", "dia_semana", "es_fin_semana", "ano", "mes")
+ESTACIONES = {56: ("Plaza Elíptica", "Carabanchel"), 49: ("Parque del Retiro", "Retiro"),
+              4: ("Plaza de España", "Centro")}
+# (fecha, estación, contaminante, media) del bloque `manana`. Con un bloque por día, la media
+# diaria ponderada es la del bloque. Último día: 2026-04-30.
+MEDIAS = [
+    ("2026-04-30", 56, "NO2", 45.0), ("2026-04-30", 49, "NO2", 20.0), ("2026-04-30", 4, "NO2", 38.0),
+    ("2026-04-30", 56, "PM10", 25.0), ("2026-04-30", 49, "PM10", 12.0), ("2026-04-30", 4, "PM10", 30.0),
+    *[(f"2026-04-{d}", 49, "NO2", m) for d, m in zip(range(24, 30), (18.0, 22.0, 25.0, 19.0, 21.0, 24.0))],
+    ("2025-01-10", 4, "PM10", 62.0), ("2025-02-11", 4, "PM10", 55.0), ("2025-03-12", 4, "PM10", 41.0),
+    ("2025-11-20", 4, "PM10", 51.5),
+]
+FECHA_REFERENCIA = date(2026, 5, 1)
+
+
+@pytest.fixture
+def bd_mediciones():
+    eng = create_engine("sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool)
+    with eng.begin() as conn:
+        conn.execute(text(f"CREATE TABLE mediciones_bloques ({', '.join(COLUMNAS_VISTA)})"))
+        conn.execute(text(f"INSERT INTO mediciones_bloques VALUES ({', '.join(':' + c for c in COLUMNAS_VISTA)})"),
+                     [_fila(*m) for m in MEDIAS])
+    return eng
+
+
+def _fila(fecha: str, estacion: int, contaminante: str, media: float) -> dict:
+    dia = date.fromisoformat(fecha)
+    nombre, distrito = ESTACIONES[estacion]
+    return {"fecha": fecha, "estacion": estacion, "nombre_estacion": nombre, "distrito": distrito,
+            "tipo_estacion": "Urbana tráfico", "contaminante": contaminante, "bloque": "manana",
+            "hora_inicio": 7, "hora_fin": 12, "media": media, "maximo": media + 10, "minimo": media - 5,
+            "n_horas": 6, "cobertura": 1.0, "z_score": 0.5, "is_anomaly": False, "dia_semana": dia.weekday(),
+            "es_fin_semana": dia.weekday() >= 5, "ano": dia.year, "mes": dia.month}
+
+
+def herramienta_datos(engine, guion_sql: list, max_filas: int = 60):
+    """`consultar_datos` sobre SQLite con un redactor falso que escribe el SQL del guion."""
+    from agente.business.redactor_sql import RedactorSQL
+    from agente.datos.mediciones import Mediciones
+    from agente.llm.falso import LLMFalso
+    from agente.tools.sql_libre import HerramientaDatos
+
+    llm_sql = LLMFalso(guion=list(guion_sql))
+    return llm_sql, HerramientaDatos(Mediciones(engine), RedactorSQL(llm_sql, max_filas), FECHA_REFERENCIA,
+                                     max_filas)
