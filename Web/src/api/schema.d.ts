@@ -75,6 +75,36 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/chat/stream": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Pregunta al asistente con la respuesta en streaming (SSE)
+         * @description Eventos: status, token, passthrough, error y done (ver README). Con el agente se
+         *     reenvían byte a byte; sin él, la respuesta de `/chat` sale como passthrough + done.
+         *
+         *     Cómo leerlo desde un frontend:
+         *     - El texto llega de una de dos formas, nunca de las dos: como `token` (fragmentos que se
+         *       concatenan) o como un único `passthrough` con el texto entero.
+         *     - Las fuentes y la advertencia definitivas están en `done`: los `token` no las llevan.
+         *       `passthrough` también las trae, pero son las mismas; muéstralas una sola vez, las de `done`.
+         *     - `status` solo sirve para el indicador de progreso y puede repetirse (heartbeat).
+         *     - `error` cierra el stream sin `done`: la respuesta no se completó; muestra su `detalle`.
+         *     - Si el stream se corta sin `done` ni `error`, la respuesta está incompleta.
+         */
+        post: operations["post_chat_stream_chat_stream_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -138,6 +168,11 @@ export interface components {
              * @description Pregunta del usuario en lenguaje natural
              */
             pregunta: string;
+            /**
+             * Session Id
+             * @description Sesión de la conversación; si no llega, se genera una
+             */
+            session_id?: string | null;
         };
         /**
          * PuntoSerie
@@ -179,6 +214,13 @@ export interface components {
             fuentes: components["schemas"]["FuenteChat"][];
             /** Advertencia */
             advertencia?: string | null;
+            /** Session Id */
+            session_id?: string | null;
+            /**
+             * Traza Id
+             * @description Traza del turno en el agente; null sin agente
+             */
+            traza_id?: string | null;
         };
         /** SerieBloques */
         SerieBloques: {
@@ -324,6 +366,37 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["RespuestaChat"];
                 };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    post_chat_stream_chat_stream_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PreguntaChat"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
             /** @description Validation Error */
             422: {

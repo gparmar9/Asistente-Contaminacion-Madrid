@@ -4,6 +4,6 @@
 fastapi>=0.115,<1.0
 httpx>=0.27,<1.0
 pydantic>=2,<3
-sqlalchemy>=2.0,<3.0
+sqlalchemy==2.0.49  # fijada: versiones posteriores eligen psycopg 3 para postgresql:// y aquí va psycopg2
 openai>=1.40,<3.0
 pytest>=8,<9

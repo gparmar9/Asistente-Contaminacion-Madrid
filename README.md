@@ -186,6 +186,7 @@ aws s3 cp s3://jupiter-calidad-aire-madrid/data/processed/ data/processed/ --rec
 
 ```bash
 python src/etl/cargar_resumen_ml.py     # ~1,27 M filas vía COPY
+# python src/etl/cargar_resumen_ml.py --desde 2024-01-01   # solo desde esa fecha
 python src/etl/cargar_estaciones.py     # catálogo de las 24 estaciones
 ```
 
@@ -256,11 +257,85 @@ pytest ApiUsuario/tests/ -v
 
 # Tests del orquestador LLM (LLM falso con guion, sin red ni torch):
 pytest LLMOrchestrator/tests/ -v
+
+# Tests del agente nuevo (LLM falso con guion y RAG fingido, sin red):
+pytest Agente/tests/ -v
 ```
 
 Cada servicio instala sus dependencias de test aparte
-(`ApiUsuario/requirements-dev.txt`, `LLMOrchestrator/requirements-dev.txt`).
-En CI los tres corren como jobs independientes. El frontend tiene los suyos: `cd Web && npm test`.
+(`ApiUsuario/requirements-dev.txt`, `LLMOrchestrator/requirements-dev.txt`, `Agente/requirements-dev.txt`).
+En CI corren como jobs independientes. El frontend tiene los suyos: `cd Web && npm test`.
+
+### Entorno de pruebas local (todo con un comando)
+
+[`entorno_local.sh`](entorno_local.sh) levanta el RAG, Phoenix, el agente y `ApiUsuario` sin
+construir imágenes, cada uno en un panel de una sesión de **tmux**, más un panel libre para las
+consultas. El modelo y la configuración del agente salen siempre de `Agente/.env`.
+
+Requisitos: `tmux`, el entorno `env-pontia-ml`, `Agente/.venv` y `Agente/.env` rellenado. Docker
+Desktop es opcional (sin él no hay Phoenix y las trazas solo van al JSONL). Con Bedrock, las
+credenciales del perfil de `Agente/.env` vivas: el script lo comprueba antes de arrancar.
+
+```bash
+./entorno_local.sh            # levantar todo y entrar en la sesión (el RAG tarda ~1 min)
+./entorno_local.sh estado     # qué responde
+./entorno_local.sh preguntar "¿Qué efectos tiene el NO2 en la salud?"
+./entorno_local.sh preguntar "¿Y en los niños?" <session_id>   # seguir la conversación
+./entorno_local.sh preguntar "Hola" --crudo                    # el SSE tal cual
+./entorno_local.sh parar      # parar todo (también Phoenix)
+```
+
+| Panel | Qué corre | Puerto |
+|-|-|-|
+| arriba izquierda | RAG (`rag.api`, umbral 0,1754) | 8010 |
+| arriba derecha | Agente (espera a que el RAG responda) | 8200 |
+| abajo izquierda | `ApiUsuario` con `AGENTE_URL` (espera al agente) | 8000 |
+| abajo derecha | consultas: al estar todo listo muestra `estado` | |
+
+Tmux en tres atajos: **clic** en un panel para moverse (o `Ctrl+b` y una flecha); `Ctrl+b` y `z`
+amplía o recupera el panel actual; `Ctrl+b` y `d` sale **sin parar nada** (`./entorno_local.sh`
+vuelve a entrar). Para desplazarse por el log, la rueda del ratón (`q` para volver).
+Si un servicio se cae o quieres reiniciarlo tras cambiar código: en su panel, `Ctrl+C`, flecha
+arriba y Enter.
+
+- `ApiUsuario` arranca sin base de datos (`/estaciones` fallará). Para darle una:
+  `DATABASE_URL=postgresql://... ./entorno_local.sh`.
+- Si dice «puertos ocupados», queda un servicio de otra sesión: `ss -ltnp` dice cuál.
+
+### La API en contenedores (como irá en la EC2)
+
+Cada servicio tiene su propia imagen, para poder desplegarlos por separado:
+
+| Servicio | Imagen | Puerto | Habla con |
+|---|---|---|---|
+| `api-usuario` | [`ApiUsuario/Dockerfile`](ApiUsuario/Dockerfile) | 8000 | base de datos, `orquestador` |
+| `orquestador` | [`LLMOrchestrator/Dockerfile`](LLMOrchestrator/Dockerfile) | 8100 | base de datos, `rag`, proveedor del LLM |
+| `rag` | [`deploy/Dockerfile.rag`](deploy/Dockerfile.rag) | 8010 | nadie: lleva el modelo y el índice dentro |
+
+Levantarlo todo en local (necesita Docker Desktop arrancado):
+
+```bash
+# 1. Claves del LLM: copiar LLMOrchestrator/.env.example a LLMOrchestrator/.env
+#    y rellenar LLM_BASE_URL, LLM_API_KEY y LLM_MODEL.
+# 2. Construir y arrancar (la primera vez tarda: la imagen del RAG ocupa ~2,5-3 GB):
+docker compose --profile api up -d --build
+
+# 3. Probar:
+curl http://localhost:8000/health
+curl -X POST http://localhost:8000/chat -H "Content-Type: application/json" \
+     -d '{"pregunta": "¿Qué efectos tiene el NO2 en la salud?"}'
+
+# Parar:
+docker compose --profile api down
+```
+
+- Sin `--profile api`, `docker compose up -d` sigue levantando **solo la base de datos**.
+- Por defecto la API usa la base de datos del contenedor `db`. Para usar la de RDS (con los datos
+  reales), define `DATABASE_URL_API` en el `.env` de la raíz y enciende la RDS antes.
+- Los puertos solo se abren en `127.0.0.1`. Dentro de Docker, los servicios se encuentran por
+  su nombre (`http://rag:8010`), que es justo lo que se repetirá en la EC2.
+- La primera pregunta que use documentos tarda unos segundos más: el RAG carga el modelo en
+  memoria en la primera búsqueda.
 
 ---
 
@@ -326,6 +401,7 @@ aws logs tail /aws/lambda/jupiter-pipeline --since 1d --format short
 │       ├── api.py                          # servicio FastAPI (tool `buscar_evidencias` para el LLM)
 │       └── errores.py                      # excepciones tipadas
 ├── ApiUsuario/                              # servicio FastAPI de usuario (Fase 4)
+│   ├── Dockerfile                           # imagen del servicio
 │   ├── src/api_usuario/                     # routers / entities / data_access / shared
 │   ├── tests/                               # tests con SQLite en memoria (sin BBDD externa)
 │   └── Dockerfile                           # imagen del servicio `api` del compose
@@ -335,15 +411,17 @@ aws logs tail /aws/lambda/jupiter-pipeline --since 1d --format short
 │   ├── Dockerfile · nginx.conf              # imagen node → nginx con proxy /api/* → api:8000
 │   └── scripts/exportar_openapi.py          # exporta el OpenAPI desde ApiUsuario
 ├── LLMOrchestrator/                         # servicio del agente LLM (Fase 3)
+│   ├── Dockerfile                           # imagen del servicio (sin torch: el RAG va aparte)
 │   ├── src/llm_orchestrator/
 │   │   ├── business/agente.py               # bucle del agente (LLM ↔ tools)
 │   │   ├── tools/sql_tool.py                # query_sql: 5 consultas predefinidas
 │   │   ├── tools/rag_tool.py                # buscar_evidencias: cliente HTTP del servicio RAG
 │   │   └── integrations/llm_client.py       # cliente OpenAI-compatible (proveedor por entorno)
 │   └── tests/                               # LLM falso con guion, sin red ni torch
-├── deploy/                                  # infraestructura AWS (imagen Lambda + roles IAM)
+├── deploy/                                  # infraestructura AWS (imágenes Lambda y RAG + roles IAM)
 ├── tests/                                   # tests unitarios y de integración
-├── docker-compose.yml                       # db (PostgreSQL 18 + volumen) + api (ApiUsuario) + web (nginx)
+├── docker-compose.yml                       # PostgreSQL 18; con --profile api, la API completa + web (nginx)
+├── entorno_local.sh                         # RAG + Phoenix + Agente + ApiUsuario en tmux, para pruebas
 ├── .env.example                             # plantilla de variables de entorno
 ├── requirements.txt
 ├── requirements-rag.txt                     # dependencias extra de la Fase 2 (RAG), versiones fijadas
@@ -423,7 +501,7 @@ data/rag/*.md ──▶ rag.corpus ──▶ rag.embeddings ──▶ ChromaDB (
 | [`embeddings.py`](src/rag/embeddings.py) | Modelo `intfloat/multilingual-e5-base` (512 tokens), recuento con el tokenizer real y colección Chroma con métrica **coseno**. |
 | [`indexar.py`](src/rag/indexar.py) | `python -m rag.indexar`: reconstruye el índice entero (**idempotente**). Calcula los embeddings antes de borrar el índice anterior y guarda modelo, commit del corpus y fecha. |
 | [`buscar.py`](src/rag/buscar.py) | `buscar(consulta, k, tema)`: los *k* fragmentos más cercanos. Rechaza un índice construido con otro modelo. |
-| [`evidencias.py`](src/rag/evidencias.py) | Filtra por umbral de distancia (0,22, provisional), numera `D1..Dn`, valida que cada afirmación del modelo cite IDs existentes y añade avisos y bibliografía. |
+| [`evidencias.py`](src/rag/evidencias.py) | Filtra por umbral de distancia (0,1754, calibrado con `rag.evaluar`), numera `D1..Dn`, valida que cada afirmación del modelo cite IDs existentes y añade avisos y bibliografía. |
 | [`api.py`](src/rag/api.py) | Servicio FastAPI: `/rag/evidencias`, `/rag/validar`, `/rag/herramienta` y `/salud`. Es lo que consume `LLMOrchestrator` por HTTP (tool `buscar_evidencias` de la Fase 3). |
 
 El contrato completo para la API de chat (flujo en tres pasos, esquema de salida del modelo,

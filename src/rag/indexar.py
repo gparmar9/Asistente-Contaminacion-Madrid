@@ -15,6 +15,7 @@ modelo y cualquier resultado sea trazable al corpus que lo generó.
 from __future__ import annotations
 
 import datetime as dt
+import os
 import subprocess
 from pathlib import Path
 
@@ -35,7 +36,13 @@ TAMANO_LOTE = 64
 
 
 def commit_corpus() -> str:
-    """Commit corto de HEAD; añade '-dirty' si data/rag tiene cambios sin commit."""
+    """Commit corto de HEAD; añade '-dirty' si data/rag tiene cambios sin commit.
+
+    `RAG_COMMIT` tiene prioridad: dentro de una imagen Docker no hay repositorio git y el
+    commit llega como argumento de construcción (ver deploy/Dockerfile.rag).
+    """
+    if os.getenv("RAG_COMMIT"):
+        return os.environ["RAG_COMMIT"]
     try:
         sha = subprocess.run(
             ["git", "rev-parse", "--short", "HEAD"], cwd=BASE_DIR,

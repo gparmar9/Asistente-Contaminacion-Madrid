@@ -1,42 +1,60 @@
-# Despliegue de la Lambda del pipeline (jupiter-pipeline) desde GitHub Actions.
+# Despliegue de cualquier pieza del proyecto desde GitHub Actions.
 #
-# Se lanza a mano: pestaña Actions → "Desplegar Lambda" → Run workflow, eligiendo la rama en
-# "Use workflow from". Automatiza el despliegue manual de deploy/README.md:
-#   tests → build de la imagen → push a ECR (tag = SHA del commit) → update-function-code
-#   → versión publicada con descripción → verificación. Para volver atrás: rollback_lambda.yml.
+# Se lanza a mano: pestaña Actions → "Desplegar" → Run workflow, eligiendo:
+#   - la rama en "Use workflow from" (lo normal es main): se despliega el código de esa rama;
+#   - el componente en el desplegable.
+# Para volver a una versión anterior: rollback.yml.
+#
+# Componentes:
+#   lambda  tests → build de la imagen → push a ECR (tag = SHA del commit) → update-function-code
+#           → versión publicada con descripción → verificación del digest.
+# Para añadir uno nuevo: sumarlo a `options` y crear su job con `if: inputs.componente == '<nombre>'`
+# (y el suyo equivalente en rollback.yml).
 #
 # Autenticación por OIDC: GitHub entrega un token firmado y AWS lo cambia por credenciales
 # temporales del rol jupiter-github-actions-deploy (deploy/iam/*-github-actions.json). No hay
 # claves de AWS en el repositorio. El único secreto es AWS_ACCOUNT_ID, para que el ID de la
 # cuenta no aparezca en los logs, que son públicos.
-name: 🚀 Desplegar Lambda
+name: 🚀 Desplegar
+run-name: Desplegar ${{ inputs.componente }} desde ${{ github.ref_name }}
 
 on:
   workflow_dispatch:
+    inputs:
+      componente:
+        description: "Qué desplegar"
+        type: choice
+        required: true
+        default: lambda
+        options:
+          - lambda
 
 permissions:
   contents: read
   id-token: write   # permite pedir el token OIDC que AWS cambia por credenciales temporales
 
-# Nunca dos despliegues a la vez: el segundo espera a que termine el primero.
+# Nunca dos despliegues (o un despliegue y un rollback) del mismo componente a la vez: el segundo
+# espera. Componentes distintos sí pueden desplegarse en paralelo.
 concurrency:
-  group: despliegue-lambda
+  group: despliegue-${{ inputs.componente }}
   cancel-in-progress: false
 
 env:
   AWS_REGION: eu-west-1
-  ECR_REPOSITORY: jupiter-pipeline
-  FUNCTION_NAME: jupiter-pipeline
 
 jobs:
   # Los mismos tests que en cada push (unitarios + integración contra PostgreSQL).
   tests:
     uses: ./.github/workflows/tests.yml
 
-  desplegar:
-    name: Build, push y despliegue
+  lambda:
+    name: Lambda · build, push y despliegue
     needs: tests
+    if: inputs.componente == 'lambda'
     runs-on: ubuntu-latest
+    env:
+      ECR_REPOSITORY: jupiter-pipeline
+      FUNCTION_NAME: jupiter-pipeline
     steps:
       - name: Checkout repositorio
         uses: actions/checkout@v4
@@ -77,8 +95,8 @@ jobs:
           echo "DIGEST=$DIGEST" >> "$GITHUB_ENV"
 
       # Subir la imagen no basta: la función sigue con la copia anterior hasta este paso.
-      # La versión se publica aparte para darle una descripción que rollback_lambda.yml muestra
-      # en su tabla; --code-sha256 impide publicar si la función no tiene la imagen recién subida.
+      # La versión se publica aparte para darle una descripción que rollback.yml muestra en su
+      # tabla; --code-sha256 impide publicar si la función no tiene la imagen recién subida.
       - name: Actualizar la función Lambda
         run: |
           aws lambda update-function-code --function-name "$FUNCTION_NAME" \
@@ -110,6 +128,7 @@ jobs:
             echo
             echo "| | |"
             echo "|---|---|"
+            echo "| Componente | lambda |"
             echo "| Rama | \`$GITHUB_REF_NAME\` |"
             echo "| Commit | \`$GITHUB_SHA\` |"
             echo "| Tag en ECR | \`$TAG\` |"

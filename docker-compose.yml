@@ -1,19 +1,23 @@
-# Entorno local del proyecto (calidad del aire de Madrid): base de datos, API y web.
+# Entorno local del proyecto (calidad del aire de Madrid).
 #
-# Servicios:
-#   db   PostgreSQL 18 con los datos en un VOLUMEN NOMBRADO (postgres_data): el
-#        contenedor se puede parar, actualizar o recrear sin perder la base de datos.
-#   api  ApiUsuario (FastAPI). Sin puerto publicado: solo se accede a través de `web`.
-#   web  Frontend (nginx). Sirve el build en / y hace de reverse proxy de /api/* -> api:8000.
-#        Es el ÚNICO punto de entrada: http://localhost:${WEB_PORT:-8080}
+# Por defecto solo levanta la base de datos PostgreSQL. Los datos se guardan en un VOLUMEN
+# NOMBRADO (postgres_data), no dentro del contenedor: así el contenedor se puede parar,
+# actualizar o recrear sin perder la base de datos. Las credenciales se leen de .env (no
+# versionado en git).
 #
-# Las credenciales se leen de .env (no versionado en git; plantilla en .env.example).
+#   docker compose up -d      # levantar la base de datos
+#   docker compose down       # parar (los datos siguen en el volumen)
+#   docker compose down -v    # parar Y BORRAR los datos (cuidado)
 #
-# Uso:
-#   docker compose up -d --build   # levantar todo (construye api y web la primera vez)
-#   docker compose up -d db        # solo la base de datos (para el ETL o los notebooks)
-#   docker compose down            # parar (los datos siguen en el volumen)
-#   docker compose down -v         # parar Y BORRAR los datos (cuidado)
+# Con el perfil "api" levanta además la API completa y la web, cada servicio en su
+# contenedor, igual que irá en la EC2 (ver la sección "La API en contenedores" del README).
+# La web es el único punto de entrada pensado para personas: http://localhost:${WEB_PORT:-8080}
+#
+#   docker compose --profile api up -d --build
+#   docker compose --profile api down
+#
+# Los servicios se encuentran por su nombre dentro de la red de Docker (http://rag:8010).
+# Los puertos se publican solo en 127.0.0.1: accesibles desde este equipo, no desde la red.
 
 services:
   db:
@@ -36,36 +40,89 @@ services:
       timeout: 5s
       retries: 5
 
-  api:
+  # Servicio de evidencias (src/rag). La imagen lleva el modelo y el índice dentro: el
+  # primer build tarda (descarga torch de CPU y el modelo, ~2,5-3 GB en total).
+  rag:
+    profiles: ["api"]
     build:
-      context: ./ApiUsuario
-    container_name: jupiter_api
+      context: .
+      dockerfile: deploy/Dockerfile.rag
+      args:
+        COMMIT: ${COMMIT:-local}
+    image: jupiter-rag:local
     restart: unless-stopped
+    ports:
+      - "127.0.0.1:8010:8010"
+
+  # Agente: LLM + tools. Las claves del LLM salen de LLMOrchestrator/.env (LLM_BASE_URL,
+  # LLM_API_KEY, LLM_MODEL); lo de `environment` tiene prioridad sobre ese fichero.
+  orquestador:
+    profiles: ["api"]
+    build: ./LLMOrchestrator
+    image: jupiter-orquestador:local
+    restart: unless-stopped
+    env_file:
+      - path: LLMOrchestrator/.env
+        required: false
     environment:
-      APP_NAME: ApiUsuario
-      APP_ENV: ${APP_ENV:-development}
-      # Dentro de la red de Docker la base de datos se llama `db`. Para apuntar a
-      # RDS u otra instancia, sobrescribe DATABASE_URL en un docker-compose.override.yml.
-      DATABASE_URL: postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@db:5432/${POSTGRES_DB:-postgres}
-      # Vacía = /chat responde con un stub que respeta el contrato (sin LLM).
-      ORCHESTRATOR_URL: ${ORCHESTRATOR_URL:-}
-      ORCHESTRATOR_TIMEOUT_S: ${ORCHESTRATOR_TIMEOUT_S:-120}
+      RAG_URL: http://rag:8010
+      # Por defecto, la base de datos del contenedor `db`. Para usar otra (p. ej. RDS con
+      # los datos reales), define DATABASE_URL_API en el .env de la raíz.
+      DATABASE_URL: ${DATABASE_URL_API:-postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@db:5432/${POSTGRES_DB:-postgres}}
     depends_on:
       db:
         condition: service_healthy
-    # Para depurar la API directamente, descomentar:
-    # ports:
-    #   - "8000:8000"
+      rag:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:8100:8100"
 
+  # La API que consume la web: estaciones, series y /chat (proxy al orquestador).
+  api-usuario:
+    profiles: ["api"]
+    build: ./ApiUsuario
+    image: jupiter-api-usuario:local
+    restart: unless-stopped
+    environment:
+      ORCHESTRATOR_URL: http://orquestador:8100
+      DATABASE_URL: ${DATABASE_URL_API:-postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@db:5432/${POSTGRES_DB:-postgres}}
+    depends_on:
+      db:
+        condition: service_healthy
+      orquestador:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:8000:8000"
+
+  # Frontend (nginx): sirve el build de la SPA en / y hace de reverse proxy de
+  # /api/* -> api-usuario:8000. Punto de entrada: http://localhost:${WEB_PORT:-8080}
   web:
-    build:
-      context: ./Web
+    profiles: ["api"]
+    build: ./Web
+    image: jupiter-web:local
     container_name: jupiter_web
     restart: unless-stopped
     ports:
-      - "${WEB_PORT:-8080}:80"
+      - "127.0.0.1:${WEB_PORT:-8080}:80"
     depends_on:
-      - api
+      - api-usuario
+
+  # Phoenix: cascada de los turnos del agente (spans OpenTelemetry). Solo con el perfil
+  # "observabilidad". El agente le envía las trazas si PHOENIX_ENDPOINT apunta aquí
+  # (http://localhost:6006/v1/traces desde el equipo). UI en http://localhost:6006.
+  #
+  #   docker compose --profile observabilidad up -d phoenix
+  phoenix:
+    profiles: ["observabilidad"]
+    image: arizephoenix/phoenix:version-20.19.0
+    restart: unless-stopped
+    environment:
+      PHOENIX_WORKING_DIR: /mnt/data   # SQLite de Phoenix, en el volumen
+    volumes:
+      - phoenix_data:/mnt/data
+    ports:
+      - "127.0.0.1:6006:6006"
 
 volumes:
   postgres_data:
+  phoenix_data:

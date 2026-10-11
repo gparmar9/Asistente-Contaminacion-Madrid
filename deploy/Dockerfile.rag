@@ -1,0 +1,60 @@
+# Imagen del servicio RAG de evidencias (src/rag, `python -m rag.api`, puerto 8010).
+#
+# Construir desde la RAÍZ del repositorio (necesita pyproject.toml, src/rag y data/rag):
+#   docker build -f deploy/Dockerfile.rag --build-arg COMMIT=$(git rev-parse --short HEAD) -t jupiter-rag .
+# Lo que viaja al build lo limita deploy/Dockerfile.rag.dockerignore.
+#
+# La imagen lleva DENTRO el modelo de embeddings y el índice Chroma ya construido:
+#   - arranca sin descargar nada (en la EC2 no hay que esperar a Hugging Face);
+#   - cada imagen corresponde a un corpus concreto, el del commit COMMIT, que queda en los
+#     metadatos del índice y se ve en GET /salud.
+# Tamaño aproximado: 2,5-3 GB (torch de CPU + modelo de ~1,1 GB).
+FROM python:3.12-slim
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    HF_HOME=/opt/huggingface \
+    RAG_RUTA_CHROMA=/opt/rag/chroma
+
+# El modelo y el índice se escriben como el usuario sin privilegios: cambiar el dueño
+# después (chown) copiaría 1,1 GB a otra capa y duplicaría el tamaño de la imagen.
+RUN useradd --create-home --uid 10001 app \
+    && mkdir -p /opt/huggingface /opt/rag \
+    && chown app:app /opt/huggingface /opt/rag
+
+WORKDIR /app
+
+# torch de CPU antes que el resto: la versión por defecto trae librerías de GPU (varios GB)
+# que en la EC2 no se usan. Misma versión que el entorno de desarrollo.
+RUN pip install torch==2.14.0 --index-url https://download.pytorch.org/whl/cpu
+
+COPY requirements-rag.txt pyproject.toml ./
+COPY src/rag/ src/rag/
+RUN pip install -r requirements-rag.txt
+
+USER app
+
+# Modelo de embeddings (RAG_MODELO_EMBEDDINGS, por defecto intfloat/multilingual-e5-base).
+# Va en su propia capa, antes del corpus: cambiar un documento no lo vuelve a descargar.
+RUN python -c "from rag.embeddings import cargar_modelo; cargar_modelo()"
+
+COPY data/rag/ data/rag/
+
+# Índice construido en la propia imagen. Sin git dentro, el commit llega como argumento.
+ARG COMMIT=desconocido
+RUN RAG_COMMIT="$COMMIT" python -m rag.indexar
+
+# En ejecución todo está en la imagen: nada de consultar Hugging Face.
+ENV HF_HUB_OFFLINE=1 \
+    TRANSFORMERS_OFFLINE=1
+
+EXPOSE 8010
+
+# GET /salud no carga el modelo (solo lee el índice); la primera búsqueda sí, y tarda unos
+# segundos más. El orquestador lo tiene en cuenta con RAG_TIMEOUT_S.
+HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
+    CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8010/salud', timeout=4)"
+
+CMD ["python", "-m", "rag.api"]

@@ -204,6 +204,41 @@
           }
         }
       }
+    },
+    "/chat/stream": {
+      "post": {
+        "tags": [
+          "chat"
+        ],
+        "summary": "Pregunta al asistente con la respuesta en streaming (SSE)",
+        "description": "Eventos: status, token, passthrough, error y done (ver README). Con el agente se\nreenvían byte a byte; sin él, la respuesta de `/chat` sale como passthrough + done.\n\nCómo leerlo desde un frontend:\n- El texto llega de una de dos formas, nunca de las dos: como `token` (fragmentos que se\n  concatenan) o como un único `passthrough` con el texto entero.\n- Las fuentes y la advertencia definitivas están en `done`: los `token` no las llevan.\n  `passthrough` también las trae, pero son las mismas; muéstralas una sola vez, las de `done`.\n- `status` solo sirve para el indicador de progreso y puede repetirse (heartbeat).\n- `error` cierra el stream sin `done`: la respuesta no se completó; muestra su `detalle`.\n- Si el stream se corta sin `done` ni `error`, la respuesta está incompleta.",
+        "operationId": "post_chat_stream_chat_stream_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PreguntaChat"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
@@ -354,6 +389,21 @@
             "minLength": 1,
             "title": "Pregunta",
             "description": "Pregunta del usuario en lenguaje natural"
+          },
+          "session_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 64,
+                "minLength": 1,
+                "pattern": "^[A-Za-z0-9_-]+$"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Session Id",
+            "description": "Sesión de la conversación; si no llega, se genera una"
           }
         },
         "type": "object",
@@ -494,6 +544,29 @@
               }
             ],
             "title": "Advertencia"
+          },
+          "session_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Session Id"
+          },
+          "traza_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Traza Id",
+            "description": "Traza del turno en el agente; null sin agente"
           }
         },
         "type": "object",
