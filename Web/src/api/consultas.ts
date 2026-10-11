@@ -5,8 +5,10 @@
  * cualquier fallo en `ErrorApi`; los hooks añaden caché, estados de carga y
  * reintentos. Los componentes solo usan los hooks.
  */
-import { useMutation, useQueries, useQuery } from '@tanstack/react-query'
+import { useQueries, useQuery } from '@tanstack/react-query'
 
+import { interpretarEventoChat, textoFase } from '../dominio/chat'
+import { crearParserSSE } from '../dominio/sse'
 import { cliente } from './cliente'
 import { ErrorApi } from './errores'
 import type { Contaminante, Estacion, ParametrosSerie, RespuestaChat, Salud, SerieBloques } from './tipos'
@@ -70,6 +72,95 @@ export async function preguntar(pregunta: string, signal?: AbortSignal): Promise
   }
 }
 
+/** Avisos de progreso del stream; el resultado final lo da la promesa de `preguntarStream`. */
+export interface ManejadoresStream {
+  /** Nueva fase del turno, ya como texto para el indicador («Consultando las fuentes»…). */
+  alCambiarFase?: (fase: string) => void
+  /** Un fragmento más de la respuesta definitiva (se concatenan en orden). */
+  alRecibirTexto?: (fragmento: string) => void
+}
+
+/**
+ * POST /chat/stream: la misma pregunta que `preguntar`, con la respuesta en SSE.
+ *
+ * Con el agente, el texto llega token a token y `done` cierra con las fuentes y
+ * la advertencia definitivas; sin él, la API manda un único `passthrough` + `done`
+ * (puede tardar hasta ~120 s sin ningún evento previo). Un evento `error` o un
+ * stream cortado sin `done` significan respuesta incompleta → ErrorApi.
+ */
+export async function preguntarStream(
+  pregunta: string,
+  sessionId: string | null,
+  manejadores: ManejadoresStream = {},
+  signal?: AbortSignal,
+): Promise<RespuestaChat> {
+  const cuerpo: { pregunta: string; session_id?: string } = { pregunta }
+  if (sessionId !== null) cuerpo.session_id = sessionId
+
+  let respuesta: Response
+  try {
+    respuesta = await fetch('/api/chat/stream', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Accept: 'text/event-stream' },
+      body: JSON.stringify(cuerpo),
+      signal: signal ?? AbortSignal.timeout(TIEMPO_MAX_CHAT_MS),
+    })
+  } catch (error) {
+    throw ErrorApi.desdeExcepcion(error)
+  }
+  if (!respuesta.ok || respuesta.body === null) {
+    // Los fallos previos al stream (422, 503…) llegan como JSON normal de FastAPI.
+    const detalle: unknown = await respuesta.json().catch(() => null)
+    throw ErrorApi.desdeRespuesta(respuesta, detalle)
+  }
+
+  const lector = respuesta.body.getReader()
+  const decodificador = new TextDecoder()
+  const alimentar = crearParserSSE()
+  let tokens = ''
+  let textoEntero: string | null = null
+  let cierre: { sessionId: string | null; fuentes: RespuestaChat['fuentes']; advertencia: string | null } | null = null
+
+  try {
+    for (;;) {
+      const { done, value } = await lector.read()
+      for (const bruto of alimentar(decodificador.decode(value, { stream: !done }))) {
+        const evento = interpretarEventoChat(bruto)
+        if (evento === null) continue
+        switch (evento.tipo) {
+          case 'status':
+            manejadores.alCambiarFase?.(textoFase(evento.fase, evento.herramienta))
+            break
+          case 'token':
+            tokens += evento.texto
+            manejadores.alRecibirTexto?.(evento.texto)
+            break
+          case 'passthrough':
+            textoEntero = evento.texto
+            break
+          case 'error':
+            // El turno falló con el stream abierto: mismo trato que un 503 de /chat.
+            throw new ErrorApi(503, evento.detalle)
+          case 'done':
+            cierre = evento
+            break
+        }
+      }
+      if (done) break
+    }
+  } catch (error) {
+    throw ErrorApi.desdeExcepcion(error)
+  }
+
+  if (cierre === null) throw new ErrorApi(0, 'La conexión se cortó antes de completarse la respuesta')
+  return {
+    respuesta: textoEntero ?? tokens,
+    fuentes: cierre.fuentes,
+    advertencia: cierre.advertencia,
+    session_id: cierre.sessionId,
+  }
+}
+
 // ---------------------------------------------------------------- hooks
 
 export function useSalud() {
@@ -127,13 +218,5 @@ export function useSeriesPorEstacion(codigos: readonly number[], params: Paramet
       queryFn: ({ signal }: { signal: AbortSignal }) => obtenerSerie(codigo, params, signal),
       retry: 1,
     })),
-  })
-}
-
-/** POST /chat. Sin reintentos: cada intento gasta una llamada al LLM. */
-export function usePreguntar() {
-  return useMutation<RespuestaChat, ErrorApi, string>({
-    mutationFn: (pregunta) => preguntar(pregunta),
-    retry: 0,
   })
 }

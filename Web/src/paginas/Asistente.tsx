@@ -7,11 +7,12 @@ import { useChat } from '../estado/hooks'
 
 /**
  * Asistente a pantalla completa. Comparte estado con el panel flotante
- * (misma lista de consultas de la sesión).
+ * (misma conversación).
  *
- * Cada pregunta es INDEPENDIENTE: el backend no guarda historial ni contexto,
- * así que las preguntas de seguimiento ("¿y ayer?") no funcionan. La lista
- * vive solo en el estado de React y desaparece al recargar.
+ * Las preguntas forman una CONVERSACIÓN: el agente recuerda los turnos
+ * anteriores (session_id del ChatProvider), así que los seguimientos
+ * ("¿y ayer?") funcionan. La lista vive solo en el estado de React y
+ * desaparece al recargar; «Nueva conversación» también borra el contexto.
  */
 export default function Asistente() {
   const { consultas, enviando, enviar, vaciar, marcarVisto } = useChat()
@@ -36,9 +37,9 @@ export default function Asistente() {
       </header>
 
       <div className="aviso-bloque" role="note">
-        <strong>Cada pregunta se responde por separado.</strong> El asistente no recuerda las anteriores: incluye en
-        cada pregunta la estación, el contaminante o la fecha que te interesen. Lo que ves aquí solo existe en esta
-        pestaña y se pierde al recargar.
+        <strong>El asistente recuerda esta conversación.</strong> Puedes hacer preguntas de seguimiento («¿y ayer?»,
+        «¿y en El Retiro?») sin repetir la estación o el contaminante. «Nueva conversación» empieza de cero; lo que
+        ves aquí solo existe en esta pestaña y se pierde al recargar.
       </div>
 
       <section aria-labelledby="sugeridas">
@@ -62,10 +63,10 @@ export default function Asistente() {
       {consultas.length > 0 && (
         <div className="fila-entre t-xs texto-apagado">
           <span>
-            {consultas.length} {consultas.length === 1 ? 'consulta' : 'consultas'} en esta sesión
+            {consultas.length} {consultas.length === 1 ? 'consulta' : 'consultas'} en esta conversación
           </span>
           <button type="button" className="boton boton-suave boton-s" onClick={vaciar} disabled={enviando}>
-            Vaciar la lista
+            Nueva conversación
           </button>
         </div>
       )}

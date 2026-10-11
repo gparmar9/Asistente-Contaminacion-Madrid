@@ -67,8 +67,8 @@ export function PanelChat() {
             {consultas.length === 0 ? (
               <div className="apilado-s">
                 <p className="t-s texto-2">
-                  Pregunta por los datos de una estación o por salud y normativa. Incluye la estación, el contaminante o la
-                  fecha en cada pregunta.
+                  Pregunta por los datos de una estación o por salud y normativa. El asistente recuerda la conversación:
+                  puedes encadenar preguntas de seguimiento.
                 </p>
                 <ChipsSugeridas deshabilitado={enviando} onElegir={(p) => enviar(p)} />
               </div>
@@ -90,7 +90,7 @@ export function PanelChat() {
                   {consultas.length} {consultas.length === 1 ? 'consulta' : 'consultas'} · se pierden al recargar
                 </span>
                 <button type="button" className="boton boton-suave boton-s" onClick={vaciar} disabled={enviando}>
-                  Vaciar
+                  Nueva conversación
                 </button>
               </div>
             )}

@@ -9,7 +9,6 @@ interface Props {
   onReintentar?: (consulta: ConsultaChat) => void
 }
 
-/** Una pregunta y su respuesta: unidad independiente (el sistema no tiene memoria). */
 export function Consulta({ consulta, onReintentar }: Props) {
   const { id, numero, pregunta, estado } = consulta
   return (
@@ -20,7 +19,16 @@ export function Consulta({ consulta, onReintentar }: Props) {
       <div className="pregunta">{pregunta}</div>
 
       <div className="respuesta">
-        {estado.tipo === 'esperando' && <Espera activo />}
+        {estado.tipo === 'esperando' && <Espera activo texto={estado.fase} />}
+
+        {estado.tipo === 'recibiendo' && (
+          <div className="tarjeta" aria-live="off">
+            <p className="respuesta-texto">
+              {estado.texto}
+              <span className="cursor-escritura" aria-hidden="true" />
+            </p>
+          </div>
+        )}
 
         {estado.tipo === 'error' && (
           <div className="aviso-bloque aviso-error" role="alert">

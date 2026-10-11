@@ -6,14 +6,15 @@
  *   criterio antes del primer pintado para evitar el destello).
  * - Aviso médico: texto del banner, tomado de `advertencia` en /chat o el fijo.
  * - Estación seleccionada: compartida entre Hoy y Estaciones, recordada en localStorage.
- * - Chat: consultas de la sesión y estado del panel flotante. Vive aquí para que
- *   la lista sobreviva al cambiar de pantalla y una petición en vuelo no se
- *   pierda al cerrar el panel.
+ * - Chat: la conversación de la sesión y el estado del panel flotante. Vive aquí
+ *   para que la lista sobreviva al cambiar de pantalla y una petición en vuelo no
+ *   se pierda al cerrar el panel. La respuesta llega por /chat/stream: fases de
+ *   progreso y, con el agente conectado, el texto token a token.
  */
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 
-import { usePreguntar } from '../api/consultas'
-import type { ConsultaChat } from '../dominio/chat'
+import { preguntarStream } from '../api/consultas'
+import type { ConsultaChat, EstadoConsulta } from '../dominio/chat'
 import { AVISO_MEDICO_POR_DEFECTO } from '../dominio/constantes'
 import { ContextoAvisoReact, ContextoChatReact, ContextoEstacionReact, ContextoTemaReact, type Tema } from './contextos'
 import { useAviso } from './hooks'
@@ -96,6 +97,7 @@ function panelAbiertoInicial(): boolean {
 
 export function ChatProvider({ children }: { children: ReactNode }) {
   const [consultas, setConsultas] = useState<ConsultaChat[]>([])
+  const [enviando, setEnviando] = useState(false)
   const [abierto, setAbierto] = useState<boolean>(panelAbiertoInicial)
   const [hayNovedades, setHayNovedades] = useState(false)
   // Espejo del estado "abierto" para leerlo desde los callbacks de la petición sin cerrar sobre un valor viejo.
@@ -103,36 +105,62 @@ export function ChatProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     abiertoRef.current = abierto
   }, [abierto])
+  // Espejo de "enviando" por la misma razón: el guard corre dentro de un callback estable.
+  const enviandoRef = useRef(false)
+  // La conversación: el agente recuerda los turnos con este id. null = la próxima pregunta estrena sesión.
+  const sesionRef = useRef<string | null>(null)
 
   const { registrarAdvertencia } = useAviso()
-  const { mutate, isPending } = usePreguntar()
 
   const enviar = useCallback(
     (pregunta: string, idExistente?: string) => {
-      if (isPending) return
+      if (enviandoRef.current) return
+      enviandoRef.current = true
+      setEnviando(true)
       const id = idExistente ?? crypto.randomUUID()
+      const actualizar = (estado: EstadoConsulta) =>
+        setConsultas((lista) => lista.map((c) => (c.id === id ? { ...c, estado } : c)))
       setConsultas((lista) => {
         if (lista.some((c) => c.id === id)) {
           return lista.map((c) => (c.id === id ? { ...c, estado: { tipo: 'esperando' } } : c))
         }
         return [...lista, { id, numero: lista.length + 1, pregunta, estado: { tipo: 'esperando' } }]
       })
-      mutate(pregunta, {
-        onSuccess: (respuesta) => {
-          registrarAdvertencia(respuesta.advertencia)
-          setConsultas((lista) => lista.map((c) => (c.id === id ? { ...c, estado: { tipo: 'ok', respuesta } } : c)))
-          if (!abiertoRef.current) setHayNovedades(true)
+
+      let texto = ''
+      preguntarStream(pregunta, sesionRef.current, {
+        // La fase solo tiene sentido mientras no hay texto: los tokens ya son la respuesta.
+        alCambiarFase: (fase) => {
+          if (texto === '') actualizar({ tipo: 'esperando', fase })
         },
-        onError: (error) => {
-          setConsultas((lista) => lista.map((c) => (c.id === id ? { ...c, estado: { tipo: 'error', error } } : c)))
-          if (!abiertoRef.current) setHayNovedades(true)
+        alRecibirTexto: (fragmento) => {
+          texto += fragmento
+          actualizar({ tipo: 'recibiendo', texto })
         },
       })
+        .then((respuesta) => {
+          sesionRef.current = respuesta.session_id ?? sesionRef.current
+          registrarAdvertencia(respuesta.advertencia)
+          actualizar({ tipo: 'ok', respuesta })
+          if (!abiertoRef.current) setHayNovedades(true)
+        })
+        .catch((error: unknown) => {
+          actualizar({ tipo: 'error', error })
+          if (!abiertoRef.current) setHayNovedades(true)
+        })
+        .finally(() => {
+          enviandoRef.current = false
+          setEnviando(false)
+        })
     },
-    [isPending, mutate, registrarAdvertencia],
+    [registrarAdvertencia],
   )
 
-  const vaciar = useCallback(() => setConsultas([]), [])
+  // Nueva conversación: se vacía la lista y el agente dejará de recordar lo anterior.
+  const vaciar = useCallback(() => {
+    setConsultas([])
+    sesionRef.current = null
+  }, [])
   const marcarVisto = useCallback(() => setHayNovedades(false), [])
   const abrir = useCallback(() => {
     setAbierto(true)
@@ -149,8 +177,8 @@ export function ChatProvider({ children }: { children: ReactNode }) {
   }, [])
 
   const valor = useMemo(
-    () => ({ consultas, enviando: isPending, enviar, vaciar, abierto, abrir, cerrar, alternar, hayNovedades, marcarVisto }),
-    [consultas, isPending, enviar, vaciar, abierto, abrir, cerrar, alternar, hayNovedades, marcarVisto],
+    () => ({ consultas, enviando, enviar, vaciar, abierto, abrir, cerrar, alternar, hayNovedades, marcarVisto }),
+    [consultas, enviando, enviar, vaciar, abierto, abrir, cerrar, alternar, hayNovedades, marcarVisto],
   )
   return <ContextoChatReact.Provider value={valor}>{children}</ContextoChatReact.Provider>
 }

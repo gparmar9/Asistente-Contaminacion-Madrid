@@ -877,6 +877,20 @@ th[aria-sort] .tabla-orden {
   line-height: 1.6;
 }
 
+/* Cursor al final del texto mientras la respuesta llega en streaming */
+.cursor-escritura::after {
+  content: '▍';
+  margin-left: 2px;
+  color: var(--acento, currentColor);
+  animation: cursor-parpadeo 1s steps(2, jump-none) infinite;
+}
+
+@keyframes cursor-parpadeo {
+  50% {
+    opacity: 0;
+  }
+}
+
 .cita {
   display: inline-block;
   padding: 0 5px;
