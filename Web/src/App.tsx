@@ -7,6 +7,7 @@ import { Pie } from './componentes/layout/Pie'
 import { Cargando } from './componentes/ui/Avisos'
 import Asistente from './paginas/Asistente'
 import Estaciones from './paginas/Estaciones'
+import Home from './paginas/Home'
 import Hoy from './paginas/Hoy'
 import Metodologia from './paginas/Metodologia'
 import NoEncontrada from './paginas/NoEncontrada'
@@ -24,7 +25,8 @@ export default function App() {
       <main id="contenido" className="contenedor pagina">
         <Suspense fallback={<Cargando texto="Cargando la pantalla…" />}>
           <Routes>
-            <Route path="/" element={<Hoy />} />
+            <Route path="/" element={<Home />} />
+            <Route path="/estadisticas" element={<Hoy />} />
             <Route path="/estaciones" element={<Estaciones />} />
             <Route path="/estaciones/:codigo" element={<DetalleEstacion />} />
             <Route path="/asistente" element={<Asistente />} />

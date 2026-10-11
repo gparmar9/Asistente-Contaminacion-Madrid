@@ -148,7 +148,7 @@ export default function Estaciones() {
             {seleccionada !== undefined && (
               <span className="leyenda-item">
                 <span className="leyenda-muestra" style={{ borderRadius: '50%', border: '2px solid var(--dato)', background: 'transparent' }} aria-hidden="true" />
-                Anillo: estación elegida en «Hoy»
+                Anillo: estación elegida en «Estadísticas»
               </span>
             )}
             <span>Mapa base © Esri</span>

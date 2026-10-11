@@ -4,7 +4,8 @@ import { useTema } from '../../estado/hooks'
 import { BannerAviso } from './BannerAviso'
 
 const SECCIONES = [
-  { ruta: '/', etiqueta: 'Hoy' },
+  { ruta: '/', etiqueta: 'Home' },
+  { ruta: '/estadisticas', etiqueta: 'Estadísticas' },
   { ruta: '/estaciones', etiqueta: 'Estaciones' },
 ] as const
 
@@ -16,23 +17,12 @@ export function Cabecera() {
   return (
     <header className="cabecera">
       <div className="contenedor cabecera-barra">
-        <Link to="/" className="marca" aria-label="Asistente de Calidad del Aire de Madrid, inicio">
-          <svg className="marca-icono" viewBox="0 0 32 32" aria-hidden="true">
-            <rect width="32" height="32" rx="7" fill="var(--dato)" />
-            <polyline
-              points="5,21 10,15 14,18 19,10 23,14 27,8"
-              fill="none"
-              stroke="var(--sobre-dato)"
-              strokeWidth="2.5"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-            />
-            <circle cx="27" cy="8" r="2.6" fill="var(--sobre-dato)" />
-          </svg>
-          <span>
-            Calidad del aire · Madrid
-            <span className="marca-sub">Anomalías por estación y asistente documental</span>
-          </span>
+        <Link to="/" className="marca" aria-label="Madrid Respira, inicio">
+          <img
+            src={esOscuro ? '/img/marca-oscuro.png' : '/img/marca.png'}
+            alt="Madrid Respira — Asistente de Calidad del Aire"
+            className="marca-img"
+          />
         </Link>
 
         <nav className="nav" aria-label="Secciones">

@@ -1,13 +1,19 @@
-# Base de datos PostgreSQL del proyecto (calidad del aire de Madrid).
+# Entorno local del proyecto (calidad del aire de Madrid): base de datos, API y web.
 #
-# Los datos se guardan en un VOLUMEN NOMBRADO (postgres_data), no dentro del
-# contenedor: así el contenedor se puede parar, actualizar o recrear sin perder
-# la base de datos. Las credenciales se leen de .env (no versionado en git).
+# Servicios:
+#   db   PostgreSQL 18 con los datos en un VOLUMEN NOMBRADO (postgres_data): el
+#        contenedor se puede parar, actualizar o recrear sin perder la base de datos.
+#   api  ApiUsuario (FastAPI). Sin puerto publicado: solo se accede a través de `web`.
+#   web  Frontend (nginx). Sirve el build en / y hace de reverse proxy de /api/* -> api:8000.
+#        Es el ÚNICO punto de entrada: http://localhost:${WEB_PORT:-8080}
+#
+# Las credenciales se leen de .env (no versionado en git; plantilla en .env.example).
 #
 # Uso:
-#   docker compose up -d      # levantar la base de datos
-#   docker compose down       # parar (los datos siguen en el volumen)
-#   docker compose down -v    # parar Y BORRAR los datos (cuidado)
+#   docker compose up -d --build   # levantar todo (construye api y web la primera vez)
+#   docker compose up -d db        # solo la base de datos (para el ETL o los notebooks)
+#   docker compose down            # parar (los datos siguen en el volumen)
+#   docker compose down -v         # parar Y BORRAR los datos (cuidado)
 
 services:
   db:
@@ -29,6 +35,37 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
+
+  api:
+    build:
+      context: ./ApiUsuario
+    container_name: jupiter_api
+    restart: unless-stopped
+    environment:
+      APP_NAME: ApiUsuario
+      APP_ENV: ${APP_ENV:-development}
+      # Dentro de la red de Docker la base de datos se llama `db`. Para apuntar a
+      # RDS u otra instancia, sobrescribe DATABASE_URL en un docker-compose.override.yml.
+      DATABASE_URL: postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@db:5432/${POSTGRES_DB:-postgres}
+      # Vacía = /chat responde con un stub que respeta el contrato (sin LLM).
+      ORCHESTRATOR_URL: ${ORCHESTRATOR_URL:-}
+      ORCHESTRATOR_TIMEOUT_S: ${ORCHESTRATOR_TIMEOUT_S:-120}
+    depends_on:
+      db:
+        condition: service_healthy
+    # Para depurar la API directamente, descomentar:
+    # ports:
+    #   - "8000:8000"
+
+  web:
+    build:
+      context: ./Web
+    container_name: jupiter_web
+    restart: unless-stopped
+    ports:
+      - "${WEB_PORT:-8080}:80"
+    depends_on:
+      - api
 
 volumes:
   postgres_data:

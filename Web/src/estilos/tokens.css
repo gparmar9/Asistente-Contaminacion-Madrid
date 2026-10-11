@@ -1,54 +1,57 @@
 /* Tokens de diseño del frontend.
  *
- * Una sola fuente de verdad para color, tipografía y espaciado. El modo oscuro
- * define sus PROPIOS valores (validados sobre #1a1a19): no es un filtro invertido.
+ * Una sola fuente de verdad para color, tipografía y espaciado. Paleta «cielo»
+ * (azul cielo + slate, alineada con la landing de AireMadrid). El modo oscuro
+ * define sus PROPIOS valores (slate nocturno): no es un filtro invertido.
  * La paleta de estado (good/warning/serious/critical) es fija en ambos modos y
  * se reserva para el ESTADO DE ANOMALÍA; nunca para bandas de calidad del aire.
  */
 :root {
   color-scheme: light;
 
-  /* Superficies y tinta */
-  --plano: #f9f9f7;
-  --superficie: #fcfcfb;
-  --superficie-2: #f1f1ee;
-  --tinta-1: #0b0b0b;
-  --tinta-2: #52514e;
-  --apagado: #898781;
-  --rejilla: #e1e0d9;
-  --linea-base: #c3c2b7;
-  --borde: rgba(11, 11, 11, 0.1);
-  --borde-fuerte: rgba(11, 11, 11, 0.22);
+  /* Superficies y tinta (slate sobre fondo azul muy pálido) */
+  --plano: #f0f9ff;
+  --superficie: #ffffff;
+  --superficie-2: #e0f2fe;
+  --tinta-1: #0f172a;
+  --tinta-2: #475569;
+  --apagado: #64748b;
+  --rejilla: #e2e8f0;
+  --linea-base: #cbd5e1;
+  --borde: rgba(15, 23, 42, 0.08);
+  --borde-fuerte: rgba(15, 23, 42, 0.2);
 
-  /* Fondo de la cabecera y la navegación */
-  --superficie-nav: var(--plano);
+  /* Fondo de la cabecera y la navegación (translúcido, con blur en el CSS) */
+  --superficie-nav: rgba(255, 255, 255, 0.82);
 
   /* Dato principal (una sola serie) */
-  --dato: #2a78d6;
-  --dato-suave: #cde2fb;
+  --dato: #2563eb;
+  --dato-suave: #dbeafe;
   --sobre-dato: #ffffff;
 
-  /* Botones y enlaces (en la paleta original coinciden con el dato) */
-  --interactivo: #2a78d6;
-  --interactivo-hover: #256abf;
+  /* Botones y enlaces */
+  --interactivo: #0284c7;
+  --interactivo-hover: #0369a1;
   --sobre-interactivo: #ffffff;
 
-  /* Acento decorativo (solo lo usa la paleta «Cielo») */
-  --acento: #9ec5f4;
+  /* Acento decorativo y degradado de marca (cielo) */
+  --acento: #38bdf8;
+  --grad-cielo: linear-gradient(135deg, #38bdf8 0%, #2563eb 100%);
+  --hero-degradado: linear-gradient(180deg, #ffffff 0%, #e0f2fe 100%);
 
   /* Categóricos: comparar estaciones (máximo 3, orden fijo) */
-  --cat-1: #2a78d6;
+  --cat-1: #2563eb;
   --cat-2: #eb6834;
   --cat-3: #1baf7a;
 
   /* Rampa secuencial: magnitud (heatmap). Orden canónico claro → oscuro */
-  --seq-1: #cde2fb;
-  --seq-2: #9ec5f4;
-  --seq-3: #5598e7;
-  --seq-4: #2a78d6;
-  --seq-5: #256abf;
-  --seq-6: #184f95;
-  --seq-7: #0d366b;
+  --seq-1: #dbeafe;
+  --seq-2: #bfdbfe;
+  --seq-3: #93c5fd;
+  --seq-4: #60a5fa;
+  --seq-5: #3b82f6;
+  --seq-6: #2563eb;
+  --seq-7: #1d4ed8;
 
   /* Pasos del heatmap según el tema: --heat-1 = "bajo" … --heat-7 = "alto".
      En claro, más = más oscuro. En oscuro se invierte el orden de los mismos
@@ -62,15 +65,15 @@
   --heat-7: var(--seq-7);
 
   /* Estado de anomalía (fijo, con icono y texto siempre) */
-  --good: #0ca30c;
-  --warning: #fab219;
+  --good: #16a34a;
+  --warning: #f59e0b;
   --serious: #ec835a;
-  --critical: #d03b3b;
+  --critical: #ef4444;
 
-  /* Forma */
-  --sombra: 0 1px 2px rgba(11, 11, 11, 0.04), 0 8px 24px rgba(11, 11, 11, 0.05);
-  --radio: 12px;
-  --radio-s: 8px;
+  /* Forma (radios y sombras suaves de la landing) */
+  --sombra: 0 1px 3px rgba(15, 23, 42, 0.08), 0 10px 30px rgba(15, 23, 42, 0.06);
+  --radio: 16px;
+  --radio-s: 10px;
   --radio-xs: 4px;
 
   /* Tipografía: sin fuente display; tabular-nums solo en tablas y ticks */
@@ -84,13 +87,13 @@
   --t-xl: 26px;
   --t-hero: 56px;
 
-  /* Espaciado */
+  /* Espaciado (un poco más de aire entre bloques que la paleta original) */
   --e-1: 4px;
   --e-2: 8px;
   --e-3: 12px;
   --e-4: 16px;
   --e-5: 24px;
-  --e-6: 32px;
+  --e-6: 36px;
   --e-7: 48px;
 
   --ancho-max: 1200px;
@@ -99,28 +102,34 @@
 :root[data-theme="dark"] {
   color-scheme: dark;
 
-  --plano: #0d0d0d;
-  --superficie: #1a1a19;
-  --superficie-2: #242423;
-  --tinta-1: #ffffff;
-  --tinta-2: #c3c2b7;
-  --apagado: #898781;
-  --rejilla: #2c2c2a;
-  --linea-base: #383835;
-  --borde: rgba(255, 255, 255, 0.1);
+  --plano: #0b1220;
+  --superficie: #131e33;
+  --superficie-2: #1d2c49;
+  --tinta-1: #f1f5f9;
+  --tinta-2: #b6c2d4;
+  --apagado: #8294ab;
+  --rejilla: #223150;
+  --linea-base: #2c3d60;
+  --borde: rgba(255, 255, 255, 0.08);
   --borde-fuerte: rgba(255, 255, 255, 0.22);
 
-  --dato: #3987e5;
-  --dato-suave: #184f95;
-  --sobre-dato: #ffffff;
-  --interactivo: #3987e5;
-  --interactivo-hover: #5598e7;
-  --sobre-interactivo: #ffffff;
-  --acento: #256abf;
+  --superficie-nav: rgba(11, 18, 32, 0.82);
 
-  --cat-1: #3987e5;
-  --cat-2: #d95926;
-  --cat-3: #199e70;
+  --dato: #60a5fa;
+  --dato-suave: #1e3a8a;
+  --sobre-dato: #0b1220;
+  --interactivo: #38bdf8;
+  --interactivo-hover: #7dd3fc;
+  --sobre-interactivo: #082f49;
+
+  --acento: #0ea5e9;
+  --grad-cielo: linear-gradient(135deg, #0ea5e9 0%, #2563eb 100%);
+  --hero-degradado: linear-gradient(180deg, #131e33 0%, #1a2a4a 100%);
+
+  /* Categóricos validados sobre #131e33 */
+  --cat-1: #60a5fa;
+  --cat-2: #fb923c;
+  --cat-3: #34d399;
 
   --heat-1: var(--seq-7);
   --heat-2: var(--seq-6);

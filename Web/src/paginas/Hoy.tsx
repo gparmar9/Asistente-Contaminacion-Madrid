@@ -5,7 +5,6 @@ import { useEstaciones, useSeriesPorContaminante } from '../api/consultas'
 import type { Contaminante, PuntoSerie } from '../api/tipos'
 import { SelectorEstacion } from '../componentes/filtros/SelectorEstacion'
 import { BloquesMarcados, type FilaBloque } from '../componentes/hoy/BloquesMarcados'
-import { InformeDia } from '../componentes/hoy/InformeDia'
 import { StatTile } from '../componentes/hoy/StatTile'
 import { DecoracionCielo } from '../componentes/layout/DecoracionCielo'
 import { Cargando, ErrorBloque, Vacio } from '../componentes/ui/Avisos'
@@ -17,8 +16,8 @@ import { pluralizar } from '../dominio/formato'
 import { useEstacionSeleccionada } from '../estado/hooks'
 
 /**
- * Pantalla Hoy: cifra protagonista (anomalías fiables del día de referencia),
- * stat tiles por contaminante, informe del día y bloques marcados.
+ * Pantalla Hoy, en tres bloques: cifra protagonista (anomalías fiables del día
+ * de referencia), stat tiles por contaminante y bloques marcados.
  *
  * El pipeline consolida el día a las 23:45, así que durante la jornada lo
  * normal es que "hoy" aún no tenga bloques. En ese caso se usa el último día
@@ -76,8 +75,8 @@ export default function Hoy() {
   return (
     <div className="apilado">
       <header className="pagina-cabecera pagina-cabecera-compacta">
-        <h1>Hoy</h1>
-        <p>Último día consolidado de la estación elegida: lecturas por contaminante, anomalías fiables e informe.</p>
+        <h1>El aire que respiras hoy</h1>
+        <p>Elige tu estación y mira de un vistazo cómo está el aire y si algo se sale de lo normal.</p>
       </header>
 
       <div className="filtros">
@@ -108,28 +107,6 @@ export default function Hoy() {
           </Link>
         </div>
       </div>
-
-      <section aria-labelledby="ultimo-valor" className="apilado-s">
-        <h2 id="ultimo-valor" className="t-m">
-          Último valor por contaminante <span className="texto-apagado t-s">· tendencia de 7 días por bloque</span>
-        </h2>
-        {contaminantes.length === 0 ? (
-          <Vacio>Esta estación no mide ninguno de los seis contaminantes objetivo.</Vacio>
-        ) : (
-          <div className="rejilla-tarjetas">
-            {contaminantes.map((c, i) => (
-              <StatTile
-                key={c}
-                contaminante={c}
-                codigoEstacion={codigo}
-                puntos={puntosPorContaminante.get(c) ?? []}
-                cargando={series[i]?.isPending}
-                error={series[i]?.error ?? undefined}
-              />
-            ))}
-          </div>
-        )}
-      </section>
 
       <Tarjeta atenuada={refrescando} className="hero-bienvenida">
         <DecoracionCielo />
@@ -168,7 +145,27 @@ export default function Hoy() {
         </div>
       </Tarjeta>
 
-      <InformeDia estacion={estacion} fecha={fechaReferencia ?? hoy} />
+      <section aria-labelledby="ultimo-valor" className="apilado-s">
+        <h2 id="ultimo-valor" className="t-m">
+          Último valor por contaminante <span className="texto-apagado t-s">· tendencia de 7 días por bloque</span>
+        </h2>
+        {contaminantes.length === 0 ? (
+          <Vacio>Esta estación no mide ninguno de los seis contaminantes objetivo.</Vacio>
+        ) : (
+          <div className="rejilla-tarjetas">
+            {contaminantes.map((c, i) => (
+              <StatTile
+                key={c}
+                contaminante={c}
+                codigoEstacion={codigo}
+                puntos={puntosPorContaminante.get(c) ?? []}
+                cargando={series[i]?.isPending}
+                error={series[i]?.error ?? undefined}
+              />
+            ))}
+          </div>
+        )}
+      </section>
 
       <Tarjeta
         titulo="Bloques marcados"

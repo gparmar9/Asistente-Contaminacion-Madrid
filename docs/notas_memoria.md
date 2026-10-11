@@ -101,6 +101,10 @@ Hilo conductor de la memoria: cómo y por qué cambió el diseño.
 | 2026-09-30 | Ruta documental del agente | Tool `search_documents` con umbral propio (0,8) y citas por confianza en el modelo → **contrato de evidencias de la Fase 2 por HTTP**: tool `buscar_evidencias` (`POST /rag/evidencias`, umbral 0,22 del servicio), respuesta del modelo en JSON `{estado, afirmaciones[Dn], limitaciones}`, validación con `POST /rag/validar` y render con `[Dn]` + bibliografía; 1 reparación | Las citas se comprueban, no se creen: la trazabilidad no depende de la conducta del LLM (argumento central de §7.2). Cierra el hueco de contrato de 2026-09-24 separando rutas (datos en texto libre; en mixtas, la cifra va dentro de la afirmación). Descartado: extender el esquema con `S1..Sn` |
 | 2026-09-30 | Arquitectura de servicios | 2 servicios con el RAG embebido en el orquestador (torch/chromadb en proceso) → **3 servicios**: `ApiUsuario` + `LLMOrchestrator` (ligero) + `rag.api` (:8010, evidencias) | El orquestador no repite trabajo que el RAG ya expone por API; sin torch/chromadb queda ligero para desplegar. El RAG (modelo ~1,1 GB) se despliega, escala y calienta por su cuenta. Se valoró en proceso el mismo día y se descartó: duplicaba responsabilidades y dependencias |
 | 2026-10-01 | Definición de la tool `buscar_evidencias` | Copia duplicada a propósito en el orquestador → **se consume `GET /rag/herramienta`** (caché por proceso), sin copia local | Una sola fuente de verdad del esquema: una copia local puede divergir del servicio en silencio. Si el GET falla, la tool no se ofrece en esa vuelta (el agente sigue con `query_sql`) y se reintenta en la siguiente. Descartada una copia local de respaldo (primera versión del mismo día): era precisamente la duplicación que se quería eliminar |
+| 2026-10-03 | Interfaz (Fase 4) | «Web con Streamlit + FastAPI» (2026-07-22) → **SPA React 19 + TypeScript (Vite) en `Web/`, servida por nginx que hace de proxy de `/api/*` a `ApiUsuario`** (un solo origen, dos contenedores). Tipos del cliente **generados del OpenAPI** del backend (`openapi-typescript` + `openapi-fetch`); el job de CI regenera el contrato y falla si difiere del versionado | Streamlit no permite controlar lo que aquí es un requisito de correctitud (huecos en vez de ceros, estados de anomalía con icono y texto, cobertura visible) ni presentar un chat sin memoria de forma honesta. Con los tipos generados, un cambio de contrato rompe `npm run build` en el PR, no la demo. Descartados: Next.js (sin SSR/SEO no aporta), librerías de componentes (CSS con *custom properties* y modo oscuro propio) y una URL de la API en el frontend (rutas relativas, sin CORS) |
+| 2026-10-03 | Lectura de anomalías en la interfaz | `is_anomaly` mostrado tal cual → **solo se presenta como anomalía con `cobertura ≥ 0,7`**; por debajo, el dato se muestra con su cobertura y la etiqueta «cobertura baja», sin juicio. Nulos = huecos; `anomaly_score` nunca como probabilidad; sin bandas tipo AQI; nunca doble eje Y | Las marcas con cobertura baja son artefactos del hueco (§6.5). Pintar bandas sanitarias sería inventar un juicio clínico que el detector no hace. La cifra de la pantalla «Hoy» usa el **último día consolidado** (el pipeline carga el día a las 23:45) y lo dice, en vez de mostrar un cero engañoso |
+
+| 2026-10-07 | Diseño del dashboard | Dos paletas (original + «Cielo» experimental con `?paleta=cielo`) y 4 pantallas navegables → **una sola paleta cielo** (azul cielo + slate, alineada con la landing de AireMadrid: degradado `#38bdf8→#2563eb`, radios 16 px, botones píldora) y navegación **Home · Estadísticas · Estaciones**: portada tipo landing en `/` (hero con foto, 3 tarjetas de rasgos, sección de mapa ilustrada), Estadísticas (antes «Hoy»: cifra de anomalías con perfil de Madrid, *stat tiles*, bloques marcados) y Estaciones (mapa). El asistente queda como burbuja flotante; «Informe del día», la página Asistente y Metodología salen de la navegación (las rutas siguen vivas) | Simplificar para la demo: una portada amable que explique el producto, menos navegación y una identidad visual única. Mantener dos paletas duplicaba validación de contraste sin aportar; el informe del día dependía del LLM aún no conectado |
 
 **Decisiones abiertas que alimentarán esta tabla:** proveedor concreto del LLM (se decidirá al
 conectar el bucle real: crear cuenta y verificar límites en consola) y dónde se despliega el
@@ -159,10 +163,10 @@ CSV histórico ─▶ notebooks 01/02/03 ─▶ modelo .joblib ─▶ PostgreSQL
 
 Corpus RAG (.md) ─▶ troceado + embeddings e5 ─▶ ChromaDB ─▶ servicio RAG (FastAPI)   (Fase 2)
 
-Usuario ─▶ ApiUsuario (FastAPI) ──▶ PostgreSQL (lecturas: estaciones, series)   (Fase 4, en curso)
-                    └─ /chat ────▶ LLMOrchestrator ─▶ LLM hospedado (OpenAI-compat)
-                                       ├─ query_sql ─────────▶ PostgreSQL       (Fase 3, implementada;
-                                       └─ buscar_evidencias ─▶ rag.api (HTTP)    proveedor pendiente)
+Usuario ─▶ Web (nginx: SPA React + proxy /api/*) ─▶ ApiUsuario (FastAPI) ──▶ PostgreSQL (estaciones, series)   (Fase 4)
+                                                          └─ /chat ────▶ LLMOrchestrator ─▶ LLM hospedado (OpenAI-compat)
+                                                                             ├─ query_sql ─────────▶ PostgreSQL       (Fase 3, implementada;
+                                                                             └─ buscar_evidencias ─▶ rag.api (HTTP)    proveedor pendiente)
 ```
 
 **Principio de diseño central:** los **datos de contaminación viven estructurados en SQL** y la
@@ -176,11 +180,12 @@ mediante *tool use*.
 | 1 | Datos, detector de anomalías, pipeline en tiempo real | Hecha en local; migración a AWS en curso |
 | 2 | Vector DB y servicio de evidencias | **Reescrita** (2026-09-23) como servicio de evidencias y mergeada en `development`; pendiente de pasar a `main` |
 | 3 | LLM con *tool use* | **Implementada** (2026-09-28; ruta documental por contrato HTTP el 2026-09-30): servicio `LLMOrchestrator` con bucle de agente, tools `query_sql` y `buscar_evidencias` (cliente de `rag.api`), y 45 tests. Falta solo conectar un proveedor real (crear cuenta + credenciales) |
-| 4 | Informes y dashboard | En curso: `ApiUsuario` con `/estaciones`, `/estaciones/{codigo}/series` y `/chat` (proxy con stub), tests propios y job de CI. Informes y dashboard pendientes |
+| 4 | Informes y dashboard | **Implementada** (2026-10-03): `ApiUsuario` (`/estaciones`, `/estaciones/{codigo}/series`, `/chat` con stub) y dashboard web en `Web/` con 4 pantallas (Hoy, Estaciones con detalle, Asistente, Metodología), aviso médico fijo y «informe del día» por prompt rotativo contra `/chat`. Dos contenedores (`web` nginx + `api`) en el compose. Pendiente: conectar el LLM real y verificar la imagen Docker |
 
 **Stack actual:** Python 3.12 · pandas · NumPy · scikit-learn · PostgreSQL 18 (RDS) · SQLAlchemy ·
 pyarrow · ChromaDB · sentence-transformers (`multilingual-e5-base`) · FastAPI · pytest ·
-GitHub Actions · AWS (Lambda, S3, RDS, EventBridge, CloudWatch).
+GitHub Actions · AWS (Lambda, S3, RDS, EventBridge, CloudWatch) · React 19 + TypeScript (Vite) ·
+TanStack Query · Recharts · nginx · Docker Compose.
 
 ---
 
@@ -630,9 +635,15 @@ La retención de los logs se baja a 14 días; por defecto no caducan nunca.
   `chromadb` y `sentence-transformers` no se instalan a propósito (descarga grande), y
   `test_buscar` y `test_indexar` se saltan solos con `importorskip`. Simulado en local sin esas
   dos librerías: 80 pasan y 2 ficheros se saltan `[por confirmar en la primera ejecución de CI]`.
-- **CI con dos jobs:** unitarios sin base de datos e **integración contra un PostgreSQL efímero**
-  como servicio. Los de integración solo corren con `RUN_DB_TESTS=1`, para no tocar nunca la base
-  local por accidente.
+- **CI con cinco jobs:** unitarios sin base de datos, `api` (ApiUsuario sobre SQLite en memoria),
+  `orquestador` (LLM falso), **integración contra un PostgreSQL efímero** como servicio (solo con
+  `RUN_DB_TESTS=1`, para no tocar nunca la base local por accidente) y `frontend`.
+- **Contrato frontend-backend comprobado en CI.** El job `frontend` exporta el OpenAPI real de
+  `ApiUsuario` (`Web/scripts/exportar_openapi.py`), regenera los tipos TypeScript y falla con
+  `git diff --exit-code` si el contrato versionado no coincide; después lint y `npm run build`
+  (`tsc -b` + Vite). Un build roto o una deriva de esquema tumban el PR. Las versiones de FastAPI y
+  pydantic del job están fijadas a las que generaron el fichero, porque el esquema que emiten puede
+  cambiar entre versiones.
 - **Reproducibilidad:** PostgreSQL en Docker con volumen nombrado, `.env.example` y parser y features
   compartidos entre notebooks y producción.
 - **Documentación viva:** planes de arquitectura v2 y v3, y README con puesta en marcha.
@@ -823,6 +834,33 @@ La retención de los logs se baja a 14 días; por defecto no caducan nunca.
 | 2026-10-01 | La definición de la tool `buscar_evidencias` deja de estar duplicada: el orquestador
   la pide a `GET /rag/herramienta` (caché por proceso); si el RAG no responde, la tool no se
   ofrece en esa vuelta y se reintenta en la siguiente. Suite del orquestador: 51 tests (Sheila) |
+| 2026-10-03 | **Dashboard web (Fase 4)** en `Web/`, rama `feature/dashboard` (Sheila): SPA React 19 +
+  TypeScript con Vite; pantallas Hoy (cifra de anomalías fiables del último día consolidado, *stat
+  tiles* con sparkline, informe del día vía `/chat`, bloques marcados), Estaciones (mapa Leaflet con
+  mapa base de Esri por defecto o tabla ordenable, y detalle con línea, heatmap días × bloques, tabla
+  alternativa, rangos 7/30/90/personalizado y comparación de hasta 3 estaciones), Asistente (preguntas independientes, contador de espera,
+  citas `[Dn]` enlazadas a fuentes separadas por tipo) y Metodología; el asistente está además en
+  todas las pantallas como burbuja flotante con panel, con el estado de las consultas en un contexto
+  global. Aviso médico fijo en la cabecera. Tipos generados del OpenAPI y comprobados en CI (quinto job). Despliegue en dos
+  contenedores: `Web/Dockerfile` (node → nginx, `proxy_read_timeout 180s` en `/api/chat`),
+  `ApiUsuario/Dockerfile` y servicios `api` + `web` en el compose. Verificado en local: `tsc`,
+  ESLint, 22 tests de dominio con Vitest (regla de cobertura ≥ 0,7, citas `[Dn]`, fechas) y build
+  limpios (app 352 kB + Recharts 372 kB; 112 + 110 kB gzip), probado de punta a punta contra
+  `ApiUsuario` real sobre una SQLite sintética, en claro y oscuro. Imagen Docker
+  `[por confirmar: sin demonio Docker en la sesión]` |
+| 2026-10-07 | **Rediseño del dashboard** (Sheila): paleta única «cielo» en `tokens.css` (la
+  experimental se retira; su fichero queda vacío para anular un `?paleta=cielo` recordado en
+  localStorage), navegación reducida a Hoy + Estaciones con CTA «Preguntar al asistente», pantalla
+  Hoy en 3 bloques (cifra + tiles + bloques marcados; se quita el informe del día). Verificado con
+  `tsc` y capturas en claro/oscuro contra `ApiUsuario` + PostgreSQL local, cuyo hueco
+  2026-09-09→2026-10-07 se rellenó con datos sintéticos **solo en la base local de demo** (12.876
+  filas derivadas de las estadísticas reales por estación/bloque, ~5 % de anomalías; estación 55
+  incluida) |
+| 2026-10-08 | **Portada Home** (Sheila): landing de marketing en `/` («Respira mejor. Elige tu
+  zona.») con foto de parque y vista ilustrada de Madrid (del prototipo WebIAGen, reescaladas a
+  375/240 KB en `Web/public/img/`), 3 tarjetas de rasgos y cifras reales (24 estaciones, 6
+  contaminantes, 4 franjas). «Hoy» pasa a llamarse **Estadísticas** (`/estadisticas`) y se quita el
+  CTA del asistente de la cabecera (queda la burbuja). Verificado: `tsc` y capturas claro/oscuro |
 
 ---
 

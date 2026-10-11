@@ -6,7 +6,7 @@ export default function NoEncontrada() {
       <h1>Página no encontrada</h1>
       <p className="texto-2">La dirección no corresponde a ninguna pantalla.</p>
       <p>
-        <Link to="/">Volver a Hoy</Link>
+        <Link to="/">Volver al inicio</Link>
       </p>
     </div>
   )

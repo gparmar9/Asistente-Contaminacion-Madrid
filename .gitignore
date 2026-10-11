@@ -38,6 +38,10 @@ __pycache__/
 #APiusuario
 /ApiUsuario/.venv/
 
+# Frontend (Web/): dependencias y build
+node_modules/
+dist/
+
 #documentación
 # Informes, revisiones y estados generados a partir del código: no son fuente, se
 # regeneran y quedan obsoletos en cuanto cambia el codigo. No se versionan.

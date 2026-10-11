@@ -164,7 +164,7 @@ export default function DetalleEstacion() {
           </p>
         </div>
         <button type="button" className="boton boton-s" onClick={() => seleccionar(codigo)}>
-          Usar esta estación en «Hoy»
+          Usar esta estación en «Estadísticas»
         </button>
       </header>
 
