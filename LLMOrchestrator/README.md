@@ -64,7 +64,7 @@ python -m rag.api          # servicio de evidencias en :8010
 
 La primera petición al RAG recién arrancado carga el modelo (~1,1 GB, se
 cachea): conviene calentarlo o dejar margen en `RAG_TIMEOUT_S`. El umbral de
-evidencia se configura en el servicio (`RAG_UMBRAL_DISTANCIA`, 0,22).
+evidencia se configura en el servicio (`RAG_UMBRAL_DISTANCIA`, 0,1754).
 
 ## Tests
 

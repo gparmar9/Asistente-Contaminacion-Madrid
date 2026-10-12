@@ -34,10 +34,10 @@ from rag.corpus import RUTA_CORPUS, Documento, leer_documento, slug
 from rag.errores import EvidenciaDesconocida
 
 # Umbral de distancia coseno por encima del cual un fragmento NO cuenta como
-# evidencia útil. Provisional (plan §7.4): con e5-base las preguntas del corpus
-# dieron 0,11–0,20 en su mejor fragmento y las ajenas 0,237–0,247. Se calibra
-# con los casos de evaluación.
-UMBRAL_DISTANCIA_POR_DEFECTO = 0.22
+# evidencia útil. Calibrado con `python -m rag.evaluar` (e5-base, 30 casos): punto
+# medio entre la peor documental (0,1750) y la mejor ajena (0,1759). Rechaza las
+# 10 ajenas a costa de una documental. Depende del modelo: cambiarlo obliga a recalibrar.
+UMBRAL_DISTANCIA_POR_DEFECTO = 0.1754
 
 ESTADOS = ("respondida", "parcial", "sin_evidencia")
 MAX_AFIRMACIONES = 8

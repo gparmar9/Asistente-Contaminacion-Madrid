@@ -93,5 +93,22 @@ services:
     ports:
       - "127.0.0.1:8000:8000"
 
+  # Phoenix: cascada de los turnos del agente (spans OpenTelemetry). Solo con el perfil
+  # "observabilidad". El agente le envía las trazas si PHOENIX_ENDPOINT apunta aquí
+  # (http://localhost:6006/v1/traces desde el equipo). UI en http://localhost:6006.
+  #
+  #   docker compose --profile observabilidad up -d phoenix
+  phoenix:
+    profiles: ["observabilidad"]
+    image: arizephoenix/phoenix:version-20.19.0
+    restart: unless-stopped
+    environment:
+      PHOENIX_WORKING_DIR: /mnt/data   # SQLite de Phoenix, en el volumen
+    volumes:
+      - phoenix_data:/mnt/data
+    ports:
+      - "127.0.0.1:6006:6006"
+
 volumes:
   postgres_data:
+  phoenix_data:

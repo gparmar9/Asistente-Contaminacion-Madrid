@@ -114,12 +114,13 @@ def cliente(engine):
     app.dependency_overrides.clear()
 
 
-def _settings_de_prueba(orchestrator_url: str = "", timeout: float = 0.2) -> Settings:
+def _settings_de_prueba(orchestrator_url: str = "", timeout: float = 0.2,
+                        agente_url: str = "") -> Settings:
     """Settings explícitos para los tests del chat (sin leer variables de entorno)."""
     return Settings(
         app_name="ApiUsuario", app_env="test", api_host="127.0.0.1", api_port=8000,
         api_version="test", database_url="", orchestrator_url=orchestrator_url,
-        orchestrator_timeout_s=timeout,
+        orchestrator_timeout_s=timeout, agente_url=agente_url, agente_timeout_s=timeout,
     )
 
 
