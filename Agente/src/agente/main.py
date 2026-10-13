@@ -28,12 +28,14 @@ from agente.business.memoria import ventana
 from agente.business.sesiones import Sesiones
 from agente.config.settings import Settings, get_settings
 from agente.business.redactor_sql import RedactorSQL
+from agente.business.selector_catalogo import SelectorCatalogo
 from agente.datos.mediciones import Mediciones, crear_motor
 from agente.datos.memoria import AlmacenConversaciones, AlmacenEnMemoria
 from agente.entities.chat import Pregunta, Respuesta
 from agente.entities.eventos import Emisor, EventoEstado, Fase
 from agente.entities.memoria import TurnoGuardado
 from agente.llm.cliente import ConfiguracionLLMInvalida, crear_llm
+from agente.tools.catalogo import HerramientaCatalogo
 from agente.tools.rag import HerramientaRag
 from agente.tools.sql_libre import HerramientaDatos
 
@@ -60,8 +62,14 @@ def construir_bucle(settings: Settings = settings) -> Bucle | None:
         logger.warning("RAG_URL vacía: el agente no tendrá la herramienta documental")
     if settings.database_url:
         mediciones = Mediciones(crear_motor(settings.database_url, settings.db_timeout_s), settings.db_max_filas)
-        herramientas.append(HerramientaDatos(mediciones, RedactorSQL(llm_sql, settings.db_max_filas),
-                                             settings.fecha_referencia, settings.db_max_filas))
+        if settings.herramienta_datos == "catalogo":
+            herramientas.append(HerramientaCatalogo(mediciones, SelectorCatalogo(llm_sql), settings.fecha_referencia,
+                                                    settings.db_max_filas))
+        else:
+            if settings.herramienta_datos != "libre":
+                logger.warning("HERRAMIENTA_DATOS=%r no existe: se usa el SQL libre", settings.herramienta_datos)
+            herramientas.append(HerramientaDatos(mediciones, RedactorSQL(llm_sql, settings.db_max_filas),
+                                                 settings.fecha_referencia, settings.db_max_filas))
     else:
         logger.warning("DATABASE_URL vacía: las preguntas de datos recibirán la frase de datos no disponibles")
     return Bucle(llm, herramientas, max_vueltas=settings.max_vueltas, llm_clasificador=llm_clasificador,
@@ -109,6 +117,7 @@ def salud() -> dict:
         "llm": {"proveedor": settings.llm_proveedor, "modelo": settings.llm_modelo or None},
         "rag_url": settings.rag_url or None,
         "datos": bool(settings.database_url),  # la URL lleva la contraseña: no se publica
+        "herramienta_datos": settings.herramienta_datos if settings.database_url else None,
     }
 
 

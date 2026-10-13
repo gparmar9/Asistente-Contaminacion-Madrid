@@ -1,7 +1,8 @@
 """`consultar_datos`: SQL libre sobre la vista `mediciones_bloques`.
 
     pregunta en lenguaje natural (la escribe el modelo de conversación) + la del usuario (la añade el bucle)
-      -> periodos calculados en Python con la pregunta del usuario (`business/periodos.py`)
+      -> periodos calculados en Python con la pregunta del usuario (`business/periodos.py`); sin
+         periodo ni mención de tiempo, todo el histórico (el validador rechaza los filtros de fecha)
       -> periodo entero fuera de la vista: estado `sin_datos` con su frase, sin redactor ni base
       -> redactor (LLM_MODELO_SQL) escribe el SQL                 span `redactar_sql`
       -> validador (sqlglot): una sentencia, solo la vista, fechas del periodo, LIMIT impuesto
@@ -12,6 +13,8 @@
          si filtra sin periodo calculado, el aviso de que no está calculado
 
 El SQL no llega nunca al modelo de conversación ni a la respuesta: va en `internos` y a la traza.
+La opción del catálogo (`tools/catalogo.py`, `HERRAMIENTA_DATOS=catalogo`) hereda de esta clase y
+solo sustituye `_consultar`: mismo nombre, mismos periodos, mismo resultado.
 `definicion()` comprueba que la base responde (`ultima_fecha()`, cacheada una hora); si no, la
 herramienta no se ofrece y una pregunta DATOS recibe la frase de datos no disponibles.
 """
@@ -54,8 +57,7 @@ DEFINICION = {
         "name": NOMBRE,
         "description": (
             "Consulta las mediciones de las estaciones de calidad del aire de Madrid de los dos "
-            "últimos años, por estación, distrito, día y bloque horario. Recibe la pregunta en "
-            "lenguaje natural y devuelve una tabla con el resultado."
+            "últimos años. Recibe la pregunta en lenguaje natural y devuelve una tabla con el resultado."
         ),
         "parameters": {
             "type": "object",
@@ -79,7 +81,7 @@ class HerramientaDatos(Herramienta):
 
     nombre = NOMBRE
 
-    def __init__(self, mediciones: Mediciones, redactor: RedactorSQL, fecha_referencia: date | None = None,
+    def __init__(self, mediciones: Mediciones, redactor: RedactorSQL | None, fecha_referencia: date | None = None,
                  max_filas: int = 60, hoy: Callable[[], date] = date.today):
         self._mediciones = mediciones
         self._redactor = redactor
@@ -109,27 +111,33 @@ class HerramientaDatos(Herramienta):
         pregunta_usuario = argumentos.get(ARG_PREGUNTA_USUARIO)
         pregunta_usuario = pregunta_usuario if isinstance(pregunta_usuario, str) and pregunta_usuario.strip() else None
         previas = argumentos.get(ARG_PREGUNTAS_PREVIAS)
-        calculados = _periodos([pregunta_usuario or pregunta, *(previas if isinstance(previas, list) else [])[::-1]],
-                               contexto)
+        textos = [pregunta_usuario or pregunta, *(previas if isinstance(previas, list) else [])[::-1]]
+        calculados = _periodos(textos, contexto)
+        sin_fechas = not calculados and not any(isinstance(t, str) and periodos.menciona_tiempo(t) for t in textos)
         if calculados and _fuera_de_la_vista(calculados, contexto):
             frase = frases.FRASE_SIN_DATOS_PERIODO.format(periodo=periodos.texto(calculados),
                                                          primera=contexto.primera_fecha.isoformat(),
                                                          ultima=contexto.ultima_fecha.isoformat())
             return _fallo(ESTADO_SIN_DATOS, frase, frase=frase, periodo=periodos.condicion_sql(calculados))
+        return await self._consultar(pregunta, contexto, pregunta_usuario, calculados, sin_fechas)
 
+    async def _consultar(self, pregunta: str, contexto: ContextoDatos, pregunta_usuario: str | None,
+                         calculados: list[Periodo], sin_fechas: bool) -> ResultadoHerramienta:
+        """SQL libre: redactor, validador, ejecución y un reintento con el error."""
         anterior: tuple[str, str] | None = None  # (sql, error) del intento que falló
         for intento in range(1, MAX_INTENTOS + 1):
             with observabilidad.span("redactar_sql", "chain", entrada=pregunta) as span:
                 span.set_attribute("agente.periodo", periodos.condicion_sql(calculados) or "sin calcular")
                 try:
-                    sql = await self._redactor.redactar(pregunta, contexto, anterior, pregunta_usuario, calculados)
+                    sql = await self._redactor.redactar(pregunta, contexto, anterior, pregunta_usuario, calculados,
+                                                        sin_fechas)
                 except Exception as exc:  # el proveedor puede lanzar de todo
                     logger.warning("Redactor SQL no disponible: %s", exc)
                     span.set_status(Status(StatusCode.ERROR, f"redactor no disponible: {exc}"))
                     return _fallo(ESTADO_NO_DISPONIBLE, ERROR_NO_DISPONIBLE, intentos=intento)
                 span.set_output(sql)
                 try:
-                    sql = validar(sql, self._max_filas, calculados)
+                    sql = validar(sql, self._max_filas, calculados, sin_fechas)
                 except SQLNoValido as exc:
                     observabilidad.sql_invalido("validador", str(exc))
                     anterior = (sql, str(exc))
@@ -144,7 +152,8 @@ class HerramientaDatos(Herramienta):
                 anterior = (sql, str(exc))
                 continue
             observabilidad.consulta_sql(sql, intento)
-            return _exito(pregunta, sql, consulta, intento, _periodo_respuesta(sql, calculados, contexto))
+            return _exito(f"Mediciones de las estaciones de Madrid: {pregunta.strip()}", sql, consulta, intento,
+                          _periodo_respuesta(sql, calculados, contexto))
 
         sql, error = anterior
         return _fallo(ESTADO_SQL_INVALIDO, f"No se pudo resolver la consulta: {error}", sql=sql,
@@ -194,14 +203,14 @@ def _periodo_respuesta(sql: str, calculados: Sequence[Periodo], contexto: Contex
     return frases.PERIODO_NO_CALCULADO
 
 
-def _exito(pregunta: str, sql: str, consulta: ResultadoConsulta, intentos: int,
-           periodo: str) -> ResultadoHerramienta:
-    filas, recortado = _recortar([[_redondear(v) for v in fila] for fila in consulta.filas])
-    descripcion = f"Mediciones de las estaciones de Madrid: {pregunta.strip()}"
-    datos = {"descripcion": descripcion, "periodo": periodo,
-             "columnas": list(consulta.columnas), "filas": filas, "truncado": consulta.truncado or recortado}
+def _exito(descripcion: str, sql: str, resultado: ResultadoConsulta, intentos: int, periodo: str,
+           nota: str | None = None, **extra: Any) -> ResultadoHerramienta:
+    """`nota`: aviso para la síntesis (catálogo: contaminante no medido, lugar desconocido)."""
+    filas, recortado = _recortar([[_redondear(v) for v in fila] for fila in resultado.filas])
+    datos = {"descripcion": descripcion, "periodo": periodo, **({"nota": nota} if nota else {}),
+             "columnas": list(resultado.columnas), "filas": filas, "truncado": resultado.truncado or recortado}
     internos = {"estado": ESTADO_OK, "sql": sql, "intentos": intentos, "filas": len(filas),
-                "periodo": periodo}
+                "periodo": periodo, **extra}
     return ResultadoHerramienta.exito(datos, fuentes=(Fuente(tipo="sql", referencia=descripcion),),
                                       internos=internos)
 
