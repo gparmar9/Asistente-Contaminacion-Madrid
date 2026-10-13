@@ -241,7 +241,7 @@ Sin `ORCHESTRATOR_URL`, `/chat` responde un *stub* y el asistente se puede proba
 Para el despliegue completo en contenedores (`db` + `api` + `web`, un solo origen en el puerto 8080):
 
 ```bash
-docker compose up -d --build   # http://localhost:8080
+docker compose --profile api up -d --build   # http://localhost:8080
 ```
 
 Reglas de la interfaz, regeneración del contrato y estructura: [Web/README.md](Web/README.md).
@@ -265,6 +265,37 @@ pytest Agente/tests/ -v
 Cada servicio instala sus dependencias de test aparte
 (`ApiUsuario/requirements-dev.txt`, `LLMOrchestrator/requirements-dev.txt`, `Agente/requirements-dev.txt`).
 En CI corren como jobs independientes. El frontend tiene los suyos: `cd Web && npm test`.
+
+### Atajos con `make` (Windows y Linux)
+
+Un [`Makefile`](Makefile) en la raíz levanta cada servicio, o todo junto, en **un solo terminal**:
+espera a que cada dependencia responda, muestra la salida de cada servicio con su prefijo y
+**Ctrl+C para todo**. En Windows hace falta GNU Make: `winget install ezwinports.make` (y
+reabrir el terminal).
+
+```bash
+make                 # lista de comandos
+make install         # la primera vez: venv de la raíz + npm ci de la web
+make frontend        # PostgreSQL + ApiUsuario + web -> http://localhost:5173
+make dev             # todo: + Phoenix, RAG y Agente (chat completo)
+make rag             # o un servicio suelto: db, phoenix, rag, agente, api-usuario, web
+make preguntar P="¿Qué efectos tiene el NO2 en la salud?"   # el chat desde la terminal
+make preguntar P="¿Y en los niños?" SESION=<id>             # seguir la conversación (CRUDO=1: SSE tal cual)
+make test            # tests de la raíz, ApiUsuario, Agente y web
+make stop            # parar PostgreSQL y Phoenix
+```
+
+- **`make dev` necesita** `make install-rag` (torch, ~1-2 GB), `make install-agente` y
+  `Agente/.env` (copia de `Agente/.env.example`). Con Bedrock, antes de arrancar comprueba que las
+  credenciales de AWS valen: las del perfil de `AWS_PROFILE` o, si no hay, las variables `AWS_*`
+  del terminal, que tienen que estar en **esa misma terminal**. Phoenix (trazas) queda en
+  http://localhost:6006.
+- **Base de datos:** con `make frontend`/`make dev`, ApiUsuario usa la `DATABASE_URL` del `.env` de
+  la raíz (la misma de la que `docker-compose` saca las credenciales). Para usar RDS, define
+  `DATABASE_URL` en el terminal antes de `make` (Opción A): tiene prioridad y no se levanta Docker.
+  El agente lee la suya de `Agente/.env`.
+- Los servicios arrancan con `--reload`: al guardar un `.py` o un `.tsx` se recargan solos.
+- Otro Python para la raíz: `make frontend PY=env-pontia-ml/bin/python`.
 
 ### Entorno de pruebas local (todo con un comando)
 

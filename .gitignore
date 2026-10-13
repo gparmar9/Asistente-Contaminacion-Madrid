@@ -42,6 +42,9 @@ __pycache__/
 node_modules/
 dist/
 
+#LLMOrchestrator
+/LLMOrchestrator/.venv/
+
 #Agente
 /Agente/.venv/
 # Trazas del agente (JSONL): llevan preguntas y respuestas
