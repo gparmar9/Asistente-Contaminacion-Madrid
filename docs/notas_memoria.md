@@ -1442,6 +1442,19 @@ la enciende a mano para trabajar o hacer una demo.
   a la respuesta.
 - **Reproducibilidad:** PostgreSQL en Docker con volumen nombrado, `.env.example` y parser y features
   compartidos entre notebooks y producción.
+- **Entorno local con un comando:** un `Makefile` en la raíz (`make frontend`, `make dev` con
+  Phoenix, RAG y Agente, un objetivo por servicio, `make test`) delega en `scripts/local.py` (solo librería estándar), que
+  arranca los servicios en orden, espera a que cada dependencia responda, prefija la salida de
+  cada uno y los para todos con Ctrl+C o si cae uno. `make frontend` levanta PostgreSQL, ApiUsuario
+  y la web y deja el dashboard en `localhost:5173` con datos de la base local (verificado el
+  2026-10-13: 24 estaciones y series por bloques). La base de datos sale del `.env` de la raíz, el
+  mismo que usa `docker-compose`; una `DATABASE_URL` en el terminal (p. ej. la de RDS) tiene
+  prioridad y entonces no se levanta Docker. Con Bedrock, `make dev` comprueba las credenciales de
+  AWS antes de arrancar: las claves temporales caducan y, sin la comprobación, el fallo aparecía
+  en la primera pregunta como «LLM no disponible». Descartados: varios `Makefile` por servicio (dos capas
+  que mantener y rutas relativas al venv y al `.env` de la raíz), recetas con comandos de shell (en
+  Windows `make` usa `cmd.exe` y el `bash` del PATH suele ser el de WSL) y ampliar
+  `entorno_local.sh`, que depende de tmux y solo funciona en Linux.
 - **Documentación viva:** planes de arquitectura v2 y v3, y README con puesta en marcha.
 
 ---
@@ -1840,6 +1853,7 @@ la enciende a mano para trabajar o hacer una demo.
 | 2026-10-12 | **Catálogo comprobado y lote nuevo para comparar** (Carlos con Claude Code): prueba de humo con Bedrock (8/8 consultas elegidas bien, cifras del gold) y lote no visto de 28 preguntas (20 de datos, 3 mixtas, 5 límites) con gold en PostgreSQL local, para comparar SQL libre y catálogo sin el sesgo de los 16 casos usados para ajustar. Comparación pendiente. |
 | 2026-10-12 | **Lote nuevo con el catálogo** (Carlos con Claude Code): 28 preguntas no vistas, tres combinaciones. Mejor resultado 12/20 en datos (11 de las 12 que caben en el catálogo y pasan el clasificador) con gpt-oss-120b como modelo y selector; 0/3 mixtas en todas. Fallan sobre todo clasificador, mixtas y la síntesis de Ministral. Coste 0,15 $. Siguiente: el mismo lote con el SQL libre. Veredictos pendientes de revisión humana. |
 | 2026-10-12 | **Lote nuevo con el SQL libre y comparación** (Carlos con Claude Code): las mismas 28 preguntas y tres combinaciones con el SQL libre. Con gpt-oss-120b gana el libre (15 y 16 de 20 en datos frente a 12 y 9 del catálogo), por las preguntas que no caben en las 7 consultas; con Ministral el catálogo acierta más en lo que cabe y en límites. Mixtas 0/3 en todas. Coste 0,15 $. Veredictos pendientes de revisión humana. |
+| 2026-10-13 | **Entorno local con `make`** (Guille con Claude Code): `Makefile` y `scripts/local.py` para levantar cada servicio o todo junto en un solo terminal, en Windows y Linux. `make frontend` probado con la base local y `make dev` con Bedrock (Ministral 14B) y el RAG; `make test` en verde (web 36, raíz 135, ApiUsuario 22, orquestador 51, agente 143 al crearlo). Después se simplifica a los servicios sueltos, se añade Phoenix y la comprobación de credenciales de AWS. |
 
 
 ---
