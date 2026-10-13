@@ -153,8 +153,8 @@ Pestaña **Actions → Desplegar → Run workflow**, eligiendo:
 - **La rama** en *Use workflow from*: se despliega el código de esa rama tal como está (lo normal
   es `main`; con otra rama el workflow avisa). No hay que indicar ninguna imagen: el workflow la
   construye. Elegir una versión anterior es cosa del rollback.
-- **El componente** en el desplegable. Hoy solo existe `lambda`; la API, el orquestador, el RAG y
-  la web se añadirán como nuevas opciones cuando se desplieguen en AWS.
+- **El componente** en el desplegable: `lambda` o uno de los servicios de la EC2 (`web`,
+  `api-usuario`, `agente`, `rag`; ver [La aplicación en la EC2](#la-aplicación-en-la-ec2-en-preparación)).
 
 Dos despliegues del **mismo** componente nunca coinciden (el segundo espera); de componentes
 distintos, sí. Para la Lambda, el workflow:
@@ -273,6 +273,101 @@ aws ssm describe-automation-executions --filters Key=DocumentNamePrefix,Values=A
 # Estado actual de la base de datos
 aws rds describe-db-instances --db-instance-identifier jupiter-postgres --query "DBInstances[0].DBInstanceStatus" --output text
 ```
+
+## La aplicación en la EC2 (en preparación)
+
+> **Estado:** los ficheros están en el repositorio; la máquina y sus recursos en AWS **aún no
+> existen**. Esta sección describe cómo funcionará.
+
+Una EC2 `t3.medium` (x86, 30 GB) con Amazon Linux 2023 ejecuta con Docker Compose los cuatro
+servicios de la aplicación, cada uno con su imagen de ECR:
+
+```
+navegador ──:80──▶ web (nginx: SPA + proxy /api/*) ──▶ api-usuario ──▶ agente ──▶ rag
+                                                          │              │  └──▶ Bedrock (rol de la EC2)
+                                                          └──── RDS ─────┘  (agente: rol agente_lectura)
+```
+
+Solo `web` publica puerto (80, abierto solo a las IP del equipo); `api-usuario`, `agente` y `rag`
+no tienen autenticación y quedan en la red interna de Docker. El `LLMOrchestrator` no se despliega:
+el equipo lo sustituyó por el `Agente` (ver `docs/notas_memoria.md` §2).
+
+| Fichero ([`ec2/`](ec2/)) | Qué hace |
+|---|---|
+| [`compose.yml`](ec2/compose.yml) | Los servicios con imágenes de ECR (`jupiter-web`, `jupiter-api-usuario`, `jupiter-agente`, `jupiter-rag`). Sin base de datos: usa RDS |
+| [`arrancar.sh`](ec2/arrancar.sh) | Lee de SSM qué versión de cada servicio está activa y la configuración, inicia sesión en ECR y levanta los contenedores. Con un argumento (`arrancar.sh rag`) actualiza solo ese servicio. Si actualiza `api-usuario`, reinicia también `web`: nginx guarda la IP del contenedor al arrancar |
+| [`jupiter.service`](ec2/jupiter.service) | Servicio de systemd: ejecuta `arrancar.sh` en cada arranque de la máquina |
+| [`user-data.sh`](ec2/user-data.sh) | Primer arranque: instala Docker y Compose y deja instalado lo anterior |
+
+De dónde sale cada cosa (todo con el rol de la máquina, `jupiter-ec2-api`, sin claves en disco):
+
+| Origen | Contenido |
+|---|---|
+| `s3://jupiter-calidad-aire-madrid/ec2/` | Los ficheros de esta carpeta, copiados desde el repositorio |
+| SSM `/jupiter/versiones/<servicio>` | Qué imagen está activa (tag = commit). La escribe el despliegue |
+| SSM `/jupiter/database_url` | La misma cadena de conexión que usa la Lambda (la usa `api-usuario`) |
+| SSM `/jupiter/agente/<variable>` | Configuración del agente: cada parámetro se convierte en una variable de entorno (`/jupiter/agente/llm_modelo` → `LLM_MODELO`). Una variable nueva del agente se da de alta creando el parámetro, sin tocar ningún script |
+
+Parámetros del agente que hacen falta (los demás, como en [`Agente/.env.example`](../Agente/.env.example), son opcionales):
+
+| Parámetro | Ejemplo | Sin él |
+|---|---|---|
+| `/jupiter/agente/llm_modelo` | `mistral.ministral-3-14b-instruct` | `/chat` responde 503 |
+| `/jupiter/agente/llm_modelo_clasificador` | `openai.gpt-oss-120b-1:0` | El clasificador usa `llm_modelo` |
+| `/jupiter/agente/database_url` (SecureString) | `postgresql://agente_lectura:…@<RDS>:5432/postgres` | Las preguntas de datos reciben la frase de datos no disponibles |
+
+El proveedor (`LLM_PROVEEDOR=bedrock`) y la región están fijos en el compose: Bedrock se usa con el
+rol de la máquina, sin claves. La `database_url` del agente usa el rol de solo lectura
+`agente_lectura` ([`sql/rol_agente_lectura.sql`](sql/rol_agente_lectura.sql)) sobre la vista
+`mediciones_bloques` ([`sql/vista_mediciones_bloques.sql`](sql/vista_mediciones_bloques.sql)),
+nunca el usuario administrador.
+
+Permisos del rol ([`permisos-ec2-api.json`](iam/permisos-ec2-api.json)): descargar **solo** esas
+cuatro imágenes, leer **solo** esos parámetros y la carpeta `ec2/` del bucket, invocar modelos de
+Bedrock en `eu-west-1`, más la política
+gestionada `AmazonSSMManagedInstanceCore` para entrar con *Session Manager* (sin SSH ni puerto 22).
+
+Los ficheros de `ec2/` llevan finales de línea LF aunque se trabaje en Windows
+([`.gitattributes`](../.gitattributes)): un script con CRLF falla en Linux.
+
+### Operarla desde GitHub Actions
+
+Todo se hace con los mismos workflows que la Lambda; nadie entra en la máquina.
+
+| Workflow | Qué hace con la EC2 |
+|---|---|
+| **Desplegar** → `web`, `api-usuario`, `agente` o `rag` | Construye la imagen del código de la rama elegida (normalmente `main`), la sube a ECR con el commit como tag, publica `ec2/` en S3 y guarda la versión en SSM con quién y desde dónde. Si la EC2 está encendida, actualiza **solo ese contenedor** y espera a que esté sano; si está apagada, la usará al encenderse |
+| **Rollback** → mismo componente | Sin versión: tabla de imágenes en ECR, la activa y el historial de cambios. Con versión (commit corto) y motivo: la vuelve a activar sin reconstruir nada |
+| **Encender entorno** | Enciende la RDS y la EC2 a la vez, espera a que los servicios estén sanos y muestra la dirección de la web (la IP cambia en cada encendido) |
+| **Apagar entorno** | Apaga la EC2 y después la RDS. Entre las 22:00 y las 00:00 solo la EC2 (la RDS hace falta para la carga) |
+
+Los workflows localizan la máquina por su etiqueta `Name=jupiter-api` y le ejecutan comandos
+con *SSM Run Command* ([`.github/scripts/ec2.sh`](../.github/scripts/ec2.sh)). Los roles solo pueden
+encender, apagar o ejecutar comandos en instancias con esa etiqueta.
+
+Antes de encender la EC2 por primera vez hay que desplegar los cuatro servicios: sin versión de
+alguno, `arrancar.sh` se detiene con un mensaje claro.
+
+### Crear los recursos en AWS (una sola vez)
+
+Con credenciales de AWS en la sesión y desde la raíz del repositorio:
+
+1. **`pwsh deploy/aws/1_recursos_ec2.ps1`**: los 4 repositorios de ECR (con limpieza: 5 imágenes
+   por servicio), el rol de la máquina, los permisos nuevos de los roles de GitHub, el grupo de
+   seguridad (80 solo para tu IP, que detecta solo o se pasa con `-MiIp`), el modelo del agente y
+   del clasificador en SSM y los ficheros de `ec2/` en S3.
+2. **Mergear a `main`** y lanzar **Desplegar** con `web`, `api-usuario`, `agente` y `rag`. Sin EC2,
+   cada despliegue solo sube la imagen y registra su versión.
+3. **Usuario de solo lectura del agente:** ejecutar en la RDS [`sql/vista_mediciones_bloques.sql`](sql/vista_mediciones_bloques.sql)
+   y [`sql/rol_agente_lectura.sql`](sql/rol_agente_lectura.sql), y guardar su conexión cifrada:
+   `aws ssm put-parameter --name /jupiter/agente/database_url --type SecureString --value "postgresql://agente_lectura:<clave>@<endpoint>:5432/postgres"`.
+   Se puede hacer también después: sin él, el chat funciona salvo las preguntas de datos.
+4. **`pwsh deploy/aws/2_crear_ec2.ps1`**: crea la EC2 (comprueba antes que estén las 4 versiones) y
+   su apagado a la 01:30 (`jupiter-ec2-apagar`, con el rol `jupiter-scheduler-ec2`). Al crearse
+   instala Docker y levanta la aplicación; el script muestra su dirección.
+
+Para cambiar de modelo: `aws ssm put-parameter --name /jupiter/agente/llm_modelo --overwrite --value <id>`
+y reiniciar el agente (Desplegar → `agente`, o apagar y encender).
 
 ## Probar en local antes de desplegar
 

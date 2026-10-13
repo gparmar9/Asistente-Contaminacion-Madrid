@@ -1,0 +1,67 @@
+# La aplicación en la EC2: los mismos servicios que el perfil "api" del docker-compose.yml de la
+# raíz, pero con las imágenes de ECR (no se construye nada en la máquina), sin base de datos propia
+# (usa RDS) y con el Agente en lugar del orquestador. Lo lanza arrancar.sh, que genera antes los
+# ficheros que se leen aquí:
+#   versiones.env       REGISTRO y VERSION_* (qué imagen de cada servicio está activa, desde SSM)
+#   secretos-bd.env     DATABASE_URL de la API (desde SSM, cifrado)
+#   config-agente.env   un VAR=valor por cada parámetro de /jupiter/agente/ en SSM (puede estar vacío)
+#
+# Solo web publica puerto (80): sirve la SPA y hace de proxy de /api/* hacia api-usuario. El resto
+# no tiene autenticación y queda en la red interna de Docker; se encuentran por su nombre
+# (http://rag:8010).
+name: jupiter
+
+x-logs: &logs
+  # Sin límite, los logs de Docker crecen hasta llenar el disco.
+  logging:
+    driver: json-file
+    options:
+      max-size: "10m"
+      max-file: "3"
+
+services:
+  rag:
+    image: ${REGISTRO}/jupiter-rag:${VERSION_RAG}
+    restart: unless-stopped
+    <<: *logs
+
+  # Bedrock con el rol de la máquina: sin claves. El modelo y el resto de su configuración
+  # (LLM_MODELO, DATABASE_URL con el rol agente_lectura...) salen de config-agente.env. Sin
+  # LLM_MODELO arranca igual y /responder devuelve 503.
+  agente:
+    image: ${REGISTRO}/jupiter-agente:${VERSION_AGENTE}
+    restart: unless-stopped
+    env_file:
+      - config-agente.env
+    environment:
+      APP_ENV: produccion
+      LLM_PROVEEDOR: bedrock
+      AWS_REGION: eu-west-1
+      RAG_URL: http://rag:8010
+    depends_on:
+      rag:
+        condition: service_healthy
+    <<: *logs
+
+  api-usuario:
+    image: ${REGISTRO}/jupiter-api-usuario:${VERSION_API_USUARIO}
+    restart: unless-stopped
+    env_file:
+      - secretos-bd.env
+    environment:
+      APP_ENV: produccion
+      AGENTE_URL: http://agente:8200
+    depends_on:
+      agente:
+        condition: service_healthy
+    <<: *logs
+
+  web:
+    image: ${REGISTRO}/jupiter-web:${VERSION_WEB}
+    restart: unless-stopped
+    depends_on:
+      api-usuario:
+        condition: service_healthy
+    ports:
+      - "80:80"
+    <<: *logs

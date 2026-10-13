@@ -6,10 +6,13 @@
 # Para volver a una versión anterior: rollback.yml.
 #
 # Componentes:
-#   lambda  tests → build de la imagen → push a ECR (tag = SHA del commit) → update-function-code
-#           → versión publicada con descripción → verificación del digest.
-# Para añadir uno nuevo: sumarlo a `options` y crear su job con `if: inputs.componente == '<nombre>'`
-# (y el suyo equivalente en rollback.yml).
+#   lambda       tests → build → push a ECR (tag = SHA del commit) → update-function-code
+#                → versión publicada con descripción → verificación del digest.
+#   web          tests → build → push a ECR (tag = SHA del commit) → ficheros de arranque a S3
+#   api-usuario  → versión activa en SSM (/jupiter/versiones/<componente>) → si la EC2 está
+#   agente       encendida, actualiza solo ese contenedor por SSM Run Command y espera a que
+#   rag          esté sano. Si está apagada, usará esta versión al encenderse.
+# Para añadir uno nuevo: sumarlo a `options` y a un job con `if:` (y lo mismo en rollback.yml).
 #
 # Autenticación por OIDC: GitHub entrega un token firmado y AWS lo cambia por credenciales
 # temporales del rol jupiter-github-actions-deploy (deploy/iam/*-github-actions.json). No hay
@@ -28,6 +31,10 @@ on:
         default: lambda
         options:
           - lambda
+          - web
+          - api-usuario
+          - agente
+          - rag
 
 permissions:
   contents: read
@@ -134,5 +141,119 @@ jobs:
             echo "| Tag en ECR | \`$TAG\` |"
             echo "| Digest | \`$DIGEST\` |"
             echo "| Versión de la función | $VERSION |"
+            echo "| Lanzado por | @$GITHUB_ACTOR |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  # Servicios de la API que corren en la EC2 (deploy/ec2/compose.yml).
+  contenedor:
+    name: ${{ inputs.componente }} · build, push y despliegue en la EC2
+    needs: tests
+    if: inputs.componente != 'lambda'
+    runs-on: ubuntu-latest
+    env:
+      COMPONENTE: ${{ inputs.componente }}
+      BUCKET: jupiter-calidad-aire-madrid
+    steps:
+      - name: Checkout repositorio
+        uses: actions/checkout@v4
+
+      - name: Avisar si no se despliega desde main
+        if: github.ref_name != 'main'
+        run: echo "::warning::Se está desplegando la rama '${GITHUB_REF_NAME}', no main. La EC2 ejecutará este código."
+
+      # Dónde está el Dockerfile de cada servicio y a qué repositorio de ECR va.
+      - name: Datos del componente
+        run: |
+          case "$COMPONENTE" in
+            web)         CONTEXTO=Web        DOCKERFILE=Web/Dockerfile        ;;
+            api-usuario) CONTEXTO=ApiUsuario DOCKERFILE=ApiUsuario/Dockerfile ;;
+            agente)      CONTEXTO=Agente     DOCKERFILE=Agente/Dockerfile     ;;
+            rag)         CONTEXTO=.          DOCKERFILE=deploy/Dockerfile.rag ;;
+            *) echo "::error::Componente desconocido: $COMPONENTE"; exit 1 ;;
+          esac
+          {
+            echo "CONTEXTO=$CONTEXTO"
+            echo "DOCKERFILE=$DOCKERFILE"
+            echo "ECR_REPOSITORY=jupiter-$COMPONENTE"
+            echo "TAG=${GITHUB_SHA::7}"
+          } >> "$GITHUB_ENV"
+
+      # La imagen del RAG (torch + modelo) ocupa ~3 GB y el build necesita varias veces eso: se
+      # borran del runner herramientas preinstaladas que no se usan (.NET, Android, Haskell).
+      - name: Liberar disco del runner
+        if: inputs.componente == 'rag'
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+          df -h /
+
+      - name: Credenciales de AWS (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::${{ secrets.AWS_ACCOUNT_ID }}:role/jupiter-github-actions-deploy
+          role-session-name: despliegue-${{ github.run_id }}
+          aws-region: ${{ env.AWS_REGION }}
+          mask-aws-account-id: true
+
+      - name: Login en ECR
+        id: ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      # Solo la imagen del RAG usa COMMIT: queda en los metadatos de su índice (GET /salud).
+      - name: Build de la imagen
+        env:
+          IMAGEN: ${{ steps.ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}
+        run: |
+          echo "IMAGEN=$IMAGEN" >> "$GITHUB_ENV"
+          ARGS=()
+          [ "$COMPONENTE" = rag ] && ARGS=(--build-arg "COMMIT=$TAG")
+          docker build --provenance=false --sbom=false --platform linux/amd64 "${ARGS[@]}" \
+            -f "$DOCKERFILE" -t "$IMAGEN:$TAG" "$CONTEXTO"
+
+      - name: Push a ECR
+        run: |
+          docker push "$IMAGEN:$TAG"
+          DIGEST=$(docker inspect --format '{{index .RepoDigests 0}}' "$IMAGEN:$TAG" | cut -d@ -f2)
+          echo "DIGEST=$DIGEST" >> "$GITHUB_ENV"
+
+      # compose.yml, arrancar.sh... salen del mismo commit que la imagen: la EC2 los descarga de S3.
+      - name: Publicar los ficheros de arranque en S3
+        run: aws s3 cp deploy/ec2/ "s3://$BUCKET/ec2/" --recursive --only-show-errors
+
+      # El historial del parámetro guarda cada cambio con su descripción: quién, qué y desde dónde.
+      - name: Registrar la versión activa en SSM
+        run: |
+          PARAM="/jupiter/versiones/$COMPONENTE"
+          ANTERIOR=$(aws ssm get-parameter --name "$PARAM" --query Parameter.Value --output text 2> /dev/null || echo "—")
+          echo "ANTERIOR=$ANTERIOR" >> "$GITHUB_ENV"
+          aws ssm put-parameter --name "$PARAM" --type String --overwrite --value "$TAG" \
+            --description "deploy $TAG desde $GITHUB_REF_NAME (@$GITHUB_ACTOR)" --query Version --output text
+
+      # Con la EC2 apagada no hay nada más que hacer: arrancar.sh leerá esta versión al encenderla.
+      - name: Actualizar el contenedor en la EC2
+        run: |
+          EC2=$(bash .github/scripts/ec2.sh instancia)   # si la consulta falla, el paso falla
+          read -r INSTANCIA ESTADO <<< "$EC2"
+          if [ "${ESTADO:-}" != "running" ]; then
+            echo "EC2_RESULTADO=EC2 ${ESTADO:-inexistente}: usará esta versión al encenderse" >> "$GITHUB_ENV"
+            echo "La EC2 no está encendida (${ESTADO:-no existe}): no se actualiza ahora."
+            exit 0
+          fi
+          bash .github/scripts/ec2.sh ejecutar \
+            "aws s3 cp s3://$BUCKET/ec2/arrancar.sh /opt/jupiter/arrancar.sh --region $AWS_REGION --only-show-errors && chmod 700 /opt/jupiter/arrancar.sh && /opt/jupiter/arrancar.sh $COMPONENTE"
+          echo "EC2_RESULTADO=actualizado y sano en $INSTANCIA" >> "$GITHUB_ENV"
+
+      - name: Resumen
+        run: |
+          {
+            echo "### \`$COMPONENTE\` desplegado"
+            echo
+            echo "| | |"
+            echo "|---|---|"
+            echo "| Rama | \`$GITHUB_REF_NAME\` |"
+            echo "| Commit | \`$GITHUB_SHA\` |"
+            echo "| Imagen | \`$ECR_REPOSITORY:$TAG\` |"
+            echo "| Digest | \`$DIGEST\` |"
+            echo "| Versión anterior | \`$ANTERIOR\` |"
+            echo "| EC2 | $EC2_RESULTADO |"
             echo "| Lanzado por | @$GITHUB_ACTOR |"
           } >> "$GITHUB_STEP_SUMMARY"

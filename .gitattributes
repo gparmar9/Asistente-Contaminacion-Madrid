@@ -1,2 +1,7 @@
-# Los scripts de shell siempre con LF: con CRLF (core.autocrlf en Windows) bash no los ejecuta.
-*.sh text eol=lf
+# Ficheros que se ejecutan en Linux (EC2, contenedores, runners de GitHub): siempre con
+# finales de línea LF, también en una copia de trabajo de Windows con core.autocrlf=true.
+# Un script con CRLF falla en Linux con errores como "/bin/bash^M: bad interpreter".
+*.sh            text eol=lf
+*.service       text eol=lf
+Dockerfile*     text eol=lf
+deploy/ec2/**   text eol=lf

@@ -121,10 +121,10 @@ Hilo conductor de la memoria: cómo y por qué cambió el diseño.
 | 2026-10-09 | Modelo de referencia para SQL | Claude Haiku 5.5 → **MiniMax M2.5** | Haiku no estaba disponible en la cuenta del máster. MiniMax fue elegido por su menor precio entre las alternativas disponibles; GLM 5.3 y Kimi K3 eran más caros |
 | 2026-10-09 | Fechas de las preguntas de datos | Fechas elegidas por el LLM → **periodos calculados en Python a partir de la pregunta original** | Los modelos alteraban los periodos. Un calendario en el prompt o parámetros elegidos por el LLM no eliminaban ese riesgo; `dateparser` y Duckling no daban los rangos definidos por el proyecto, y un único par de fechas no cubría periodos separados |
 | 2026-10-09 | Modelo de referencia para SQL | MiniMax M2.5 → **sin modelo de referencia en los siguientes lotes** | Logró 2/11 aciertos en datos frente a 4/11 del mejor modelo barato, con mayor coste por lote: 0,085 $ frente a 0,023–0,043 $. Se prioriza corregir el diseño |
+| 2026-10-13 | Servicios de la EC2 | `api-usuario` + `orquestador` + `rag`, con `api-usuario` publicado en el 8000 y el LLM por `/jupiter/llm/{base_url,model,api_key}` → **`web` + `api-usuario` + `agente` + `rag`**: solo `web` (nginx) publica puerto (80); el agente usa **Bedrock con el rol de la EC2** (sin claves) y lee su configuración de **todo `/jupiter/agente/`** en SSM (cada parámetro, una variable de entorno) | El equipo sustituyó el orquestador por el `Agente` (2026-10-08) y la web ya tiene imagen. Un solo origen para el navegador (nginx hace de proxy de `/api/*`), como en local. Leer la ruta entera evita tocar `arrancar.sh` cada vez que el agente añade una variable. Descartado: mantener el orquestador desplegado (código sin uso) y una clave de API del LLM en SSM (Bedrock no la necesita con el rol de la máquina) |
 
 **Decisiones abiertas que alimentarán esta tabla:** modelo del agente en Bedrock (Ministral 14B o
-gpt-oss-120b; aplazado hasta poder evaluar las herramientas SQL y de ML, §13) y dónde se despliega
-el servicio RAG en producción (§13). La opción de red en AWS ya está decidida y aplicada (opción A, §8.4).
+gpt-oss-120b; aplazado hasta poder evaluar las herramientas SQL y de ML, §13) El RAG irá en la EC2 (§8.9). La opción de red en AWS ya está decidida y aplicada (opción A, §8.4).
 
 ---
 
@@ -1408,6 +1408,50 @@ la enciende a mano para trabajar o hacer una demo.
   coincidir con la Lambda (22:45 UTC) y hacerla fallar esa noche. Lo detecta la alarma de errores y
   la carga es idempotente, así que basta con relanzarla. Ocurre pocas veces al año.
 
+### 8.9 La aplicación en una EC2 — diseño (recursos de AWS pendientes de crear)
+
+- **Máquina:** EC2 `t3.medium` (2 vCPU, 4 GB, x86) con Amazon Linux 2023 y 30 GB de disco. x86
+  y no Graviton (`t4g`, algo más barata) para construir las imágenes en los runners de GitHub, que
+  son x86, sin emular ARM para compilar torch. Encendida solo para trabajar o hacer demos y apagada
+  cada noche, como la RDS: ~2,5 $/mes de disco más ~0,045 $ por hora encendida `[estimación]`.
+- **Un contenedor por servicio** (`web`, `api-usuario`, `agente`, `rag`), con las imágenes de ECR
+  y la versión activa de cada uno en SSM (`/jupiter/versiones/<servicio>`): se despliega o se
+  vuelve atrás una pieza sin tocar las demás. La máquina no construye nada. El `LLMOrchestrator`
+  no se despliega (descartado, §2).
+- **Arranque autónomo:** un servicio de systemd ejecuta `arrancar.sh` en cada encendido, que lee
+  versiones y configuración de SSM con el rol de la máquina y levanta los contenedores. Encender la
+  EC2 basta para tener la aplicación.
+- **Creación en dos pasos** (`deploy/aws/`): primero ECR, roles, grupo de seguridad y parámetros;
+  la EC2 solo cuando las 4 imágenes están desplegadas, para que su primer arranque no falle. Metadatos
+  con IMDSv2 y 2 saltos: el contenedor del agente necesita llegar a las credenciales del rol.
+  Apagado a la 01:30 con el destino universal de EventBridge Scheduler (`ec2:StopInstances`).
+- **Ficheros de arranque por S3** (`s3://…/ec2/`): lo que corre en la máquina sale del repositorio
+  y el despliegue lo puede actualizar, sin acceder a la máquina.
+- **Seguridad:** solo `web` (nginx: SPA y proxy de `/api/*`) publica puerto, el 80, abierto solo a
+  las IP del equipo (la API no tiene autenticación y cada pregunta al chat cuesta dinero). Sin SSH:
+  acceso con *Session Manager*. Secretos en ficheros de solo root y repartidos: `api-usuario`
+  recibe la conexión a RDS de la Lambda; el `agente`, la del rol de solo lectura `agente_lectura`.
+- **LLM sin claves:** el agente usa Bedrock con el rol de la máquina (`bedrock:InvokeModel` y
+  `InvokeModelWithResponseStream` en `eu-west-1`). Su configuración sale de todos los parámetros de
+  `/jupiter/agente/` (`llm_modelo` → `LLM_MODELO`): una variable nueva se da de alta en SSM, sin
+  tocar scripts. Sin `llm_modelo`, todo funciona salvo `/chat`, que responde 503.
+- **CI/CD solo por GitHub Actions:** «Desplegar» y «Rollback» suman `web`, `api-usuario`, `agente`
+  y `rag`; si la EC2 está encendida actualizan solo ese contenedor por *SSM Run Command* y esperan
+  a que pase su healthcheck (`docker compose up --wait`), así un despliegue roto falla en GitHub. La
+  versión activa se guarda en SSM con descripción (quién, qué y desde qué rama) y su historial sirve
+  de registro de despliegues y rollbacks. «Encender/Apagar entorno» gestionan también la EC2. Los
+  roles solo actúan sobre instancias con la etiqueta `Name=jupiter-api`. Cada despliegue construye
+  la imagen con el código del momento: los cambios futuros del agente se publican con un clic.
+- **Detalle de nginx:** resuelve el nombre `api-usuario` al arrancar y guarda la IP. Si se
+  redespliega `api-usuario`, el contenedor puede cambiar de IP y el proxy quedaría roto, así que
+  `arrancar.sh` reinicia también `web` en ese caso.
+- **Probado sin AWS:** `arrancar.sh` se ejecutó en local con `aws` y `docker` simulados (todo, un
+  solo servicio, `api-usuario` con reinicio de `web`, sin configuración del agente, servicio
+  inválido y versión ausente) y `docker compose config` valida el compose de producción. En la
+  primera versión (05-10), la prueba destapó que el mensaje de error de una versión ausente se
+  escribía dentro de `versiones.env` en vez de en la terminal; corregido enviando los mensajes a
+  stderr.
+
 ---
 
 ## 9. Metodología y calidad del software
@@ -1798,6 +1842,14 @@ la enciende a mano para trabajar o hacer una demo.
   y `orquestador` (51), cada uno con su `requirements-dev.txt`. Hasta ahora solo corrían en local
   aunque el README decía lo contrario. Reproducidos antes en entornos virtuales limpios. Como
   `desplegar.yml` reutiliza `tests.yml`, ningún despliegue sale ya sin que pasen también estos |
+| 2026-10-05 | **Infraestructura de la EC2, parte del repositorio** (Guillermo, rama
+  `feature/infraestructura-ec2`): compose de producción, `arrancar.sh`, servicio de systemd,
+  `user-data.sh`, rol `jupiter-ec2-api` y `.gitattributes` para forzar LF en los ficheros que se
+  ejecutan en Linux. `arrancar.sh` probado con comandos simulados (§8.9). Mismo día: workflows
+  ampliados (Desplegar, Rollback, Encender y Apagar entorno) con la EC2 y el script `ec2.sh`,
+  también probado con `aws` simulado; la prueba llevó a separar la consulta de la instancia en dos
+  pasos para que un fallo de permisos no se confundiera con «la EC2 no existe». Pendiente: crear
+  los recursos en AWS y la primera ejecución real |
 | 2026-10-04 | **Agente LLM, fase 1 de 7** (Carlos, rama `feature/Agente`): nuevo servicio `Agente/` independiente de `LLMOrchestrator`: FastAPI (`/salud`, `/responder`, puerto 8200), fábrica de LLM con LlamaIndex (`OpenAILike` | `BedrockConverse`), contrato de herramienta y `buscar_evidencias` como cliente HTTP de `rag.api`, bucle a mano con 3 vueltas y síntesis forzada, LLM falso con guion. 8 tests sin red (política mínima: solo los casos del plan), Dockerfile, `.env.example` y quinto job de CI «Tests del agente». Diseño completo (7 fases) anotado en §7.3.1 y §2. Sin proveedor real probado todavía |
 | 2026-10-04 | **Agente LLM, fase 2 de 7** (Carlos, rama `feature/Agente`): ruta documental determinista. Síntesis JSON sin herramientas, validación con `POST /rag/validar`, una reparación y frase de insuficiencia; passthrough del texto del RAG; `fuentes` solo citadas y advertencia sanitaria solo con afirmaciones de salud; `sin_evidencia` cierra el turno sin modelo; renumeración de evidencias entre búsquedas. 11 tests. Probada contra el `rag.api` real con el LLM falso |
 | 2026-10-04 | **Agente LLM, fase 3 de 7** (Carlos, rama `feature/Agente`): clasificador de intención (temperatura 0, tiempo límite propio, parser estricto, valor seguro `DESCONOCIDA`) y tabla de decisión en código: frase fija para datos, predicción y fuera de alcance; charla sin herramientas; búsqueda documental obligatoria que lanza el código si el modelo no la pide; frase fija si el RAG está caído; herramientas vetadas rechazadas. Guion de 20 preguntas etiquetadas para medir el clasificador (sin ejecutar: falta proveedor). 20 tests |
@@ -1854,6 +1906,7 @@ la enciende a mano para trabajar o hacer una demo.
 | 2026-10-12 | **Lote nuevo con el catálogo** (Carlos con Claude Code): 28 preguntas no vistas, tres combinaciones. Mejor resultado 12/20 en datos (11 de las 12 que caben en el catálogo y pasan el clasificador) con gpt-oss-120b como modelo y selector; 0/3 mixtas en todas. Fallan sobre todo clasificador, mixtas y la síntesis de Ministral. Coste 0,15 $. Siguiente: el mismo lote con el SQL libre. Veredictos pendientes de revisión humana. |
 | 2026-10-12 | **Lote nuevo con el SQL libre y comparación** (Carlos con Claude Code): las mismas 28 preguntas y tres combinaciones con el SQL libre. Con gpt-oss-120b gana el libre (15 y 16 de 20 en datos frente a 12 y 9 del catálogo), por las preguntas que no caben en las 7 consultas; con Ministral el catálogo acierta más en lo que cabe y en límites. Mixtas 0/3 en todas. Coste 0,15 $. Veredictos pendientes de revisión humana. |
 | 2026-10-13 | **Entorno local con `make`** (Guille con Claude Code): `Makefile` y `scripts/local.py` para levantar cada servicio o todo junto en un solo terminal, en Windows y Linux. `make frontend` probado con la base local y `make dev` con Bedrock (Ministral 14B) y el RAG; `make test` en verde (web 36, raíz 135, ApiUsuario 22, orquestador 51, agente 143 al crearlo). Después se simplifica a los servicios sueltos, se añade Phoenix y la comprobación de credenciales de AWS. |
+| 2026-10-13 | **EC2 adaptada al `Agente` y a la web** (Guille con Claude Code, rama `feature/infraestructura-ec2`): el compose de producción, `arrancar.sh`, los workflows Desplegar/Rollback y los permisos pasan de `orquestador` a `agente` (Bedrock con el rol de la máquina, configuración desde `/jupiter/agente/` en SSM) y suman `web` como único puerto abierto (80). Probado con `aws` y `docker` simulados en seis escenarios. Scripts de creación en dos pasos (`deploy/aws/`): primero los recursos sin máquina (ECR con limpieza a 5 imágenes, roles, grupo de seguridad, modelos en SSM: Ministral 14B para el agente y gpt-oss-120b para el clasificador) y la EC2 solo cuando las 4 imágenes están desplegadas, para que su primer arranque no falle; apagado nocturno con el destino universal de Scheduler (`ec2:StopInstances`), sin runbook. Pendiente: crear los recursos en AWS y la primera ejecución real |
 
 
 ---
@@ -1893,7 +1946,8 @@ la enciende a mano para trabajar o hacer una demo.
 - [ ] Reindexar `data/chroma/` con e5 en cada entorno de trabajo (`python -m rag.indexar`): el
   índice construido antes de la reescritura no tiene metadatos de modelo y la búsqueda lo rechaza.
   Comprobado en el entorno de Carlos el 2026-10-01 (e5-base, 50 fragmentos); falta el resto.
-- [ ] ¿Dónde se despliega el servicio RAG en producción? (§7.2: modelo de ~1,1 GB)
+- [x] ¿Dónde se despliega el servicio RAG en producción? → decidido: contenedor propio en la EC2,
+  con el modelo y el índice dentro de la imagen (§8.9). Pendiente de crear los recursos en AWS.
 - [ ] ¿Se valoró Azure Functions para la ingesta programada? La rama `feature/azure-functions`
   existe en el repositorio (ingesta a CSV), así que se llegó a probar algo, pero no queda anotado
   por qué se optó por GitHub Actions en su lugar `[por confirmar con quien la creó]` (§2).

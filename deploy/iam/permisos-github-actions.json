@@ -8,7 +8,7 @@
       "Resource": "*"
     },
     {
-      "Sid": "SubirImagenSoloAlRepositorioDelPipeline",
+      "Sid": "SubirImagenesSoloALosRepositoriosDelProyecto",
       "Effect": "Allow",
       "Action": [
         "ecr:BatchCheckLayerAvailability",
@@ -17,9 +17,16 @@
         "ecr:UploadLayerPart",
         "ecr:CompleteLayerUpload",
         "ecr:PutImage",
-        "ecr:BatchGetImage"
+        "ecr:BatchGetImage",
+        "ecr:DescribeImages"
       ],
-      "Resource": "arn:aws:ecr:eu-west-1:*:repository/jupiter-pipeline"
+      "Resource": [
+        "arn:aws:ecr:eu-west-1:*:repository/jupiter-pipeline",
+        "arn:aws:ecr:eu-west-1:*:repository/jupiter-web",
+        "arn:aws:ecr:eu-west-1:*:repository/jupiter-api-usuario",
+        "arn:aws:ecr:eu-west-1:*:repository/jupiter-agente",
+        "arn:aws:ecr:eu-west-1:*:repository/jupiter-rag"
+      ]
     },
     {
       "Sid": "DesplegarYVolverAtrasSoloLaLambdaDelPipeline",
@@ -32,6 +39,49 @@
         "lambda:GetFunctionConfiguration"
       ],
       "Resource": "arn:aws:lambda:eu-west-1:*:function:jupiter-pipeline"
+    },
+    {
+      "Sid": "LeerYCambiarSoloLaVersionActivaDeCadaServicio",
+      "Effect": "Allow",
+      "Action": [
+        "ssm:GetParameter",
+        "ssm:PutParameter",
+        "ssm:GetParameterHistory"
+      ],
+      "Resource": "arn:aws:ssm:eu-west-1:*:parameter/jupiter/versiones/*"
+    },
+    {
+      "Sid": "PublicarLosFicherosDeArranqueDeLaEC2",
+      "Effect": "Allow",
+      "Action": "s3:PutObject",
+      "Resource": "arn:aws:s3:::jupiter-calidad-aire-madrid/ec2/*"
+    },
+    {
+      "Sid": "LocalizarLaEC2",
+      "Effect": "Allow",
+      "Action": "ec2:DescribeInstances",
+      "Resource": "*"
+    },
+    {
+      "Sid": "EjecutarComandosSoloConElDocumentoDeShell",
+      "Effect": "Allow",
+      "Action": "ssm:SendCommand",
+      "Resource": "arn:aws:ssm:eu-west-1::document/AWS-RunShellScript"
+    },
+    {
+      "Sid": "EjecutarComandosSoloEnLaEC2DeLaApi",
+      "Effect": "Allow",
+      "Action": "ssm:SendCommand",
+      "Resource": "arn:aws:ec2:eu-west-1:*:instance/*",
+      "Condition": {
+        "StringEquals": { "ssm:resourceTag/Name": "jupiter-api" }
+      }
+    },
+    {
+      "Sid": "LeerElResultadoDeLosComandos",
+      "Effect": "Allow",
+      "Action": "ssm:GetCommandInvocation",
+      "Resource": "*"
     }
   ]
 }
