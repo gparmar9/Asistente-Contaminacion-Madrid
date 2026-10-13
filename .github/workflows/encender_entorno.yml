@@ -114,7 +114,7 @@ jobs:
         if: env.INSTANCIA != ''
         run: |
           bash .github/scripts/ec2.sh ejecutar \
-            "timeout 900 bash -c 'until systemctl is-active -q jupiter.service || systemctl is-failed -q jupiter.service; do sleep 5; done'; systemctl is-active jupiter.service && docker compose --env-file /opt/jupiter/versiones.env -f /opt/jupiter/compose.yml ps"
+            "timeout 900 bash -c 'until systemctl is-active -q jupiter.service || systemctl is-failed -q jupiter.service; do sleep 5; done'; if systemctl is-active -q jupiter.service; then docker compose --env-file /opt/jupiter/versiones.env -f /opt/jupiter/compose.yml ps; else echo 'jupiter.service no arrancó. Últimas líneas de su log:'; journalctl -u jupiter.service -n 40 --no-pager; exit 1; fi"
 
       - name: Resumen
         run: |
