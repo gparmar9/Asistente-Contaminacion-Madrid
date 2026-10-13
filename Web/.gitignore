@@ -1,0 +1,27 @@
+# Dependencias y build
+node_modules/
+dist/
+dist-ssr/
+*.local
+
+# Caches de herramientas
+.vite/
+.eslintcache
+coverage/
+
+# Logs
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Editores
+.idea/
+.vscode/*
+!.vscode/extensions.json
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+.DS_Store

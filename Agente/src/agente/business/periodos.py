@@ -93,6 +93,16 @@ def calendario(hoy: date, primera: date, ultima: date,
     return "\n".join(f"- {formato(resolver(e, hoy, primera, ultima))}" for e in EXPRESIONES_CALENDARIO)
 
 
+def menciona_tiempo(texto: str) -> bool:
+    """El texto parece pedir un periodo, aunque `resolver` no lo reconozca («el invierno pasado»).
+
+    Sin periodo calculado ni mención de tiempo, la pregunta va contra todo el histórico y el validador
+    rechaza los filtros de fecha. Con mención no reconocida, el redactor toma las fechas del calendario.
+    Ante la duda, mención: el fallo es no comprobar, como antes. «Días laborables» y «fines de semana»
+    no cuentan: no piden un periodo."""
+    return _RE_TIEMPO.search(_normalizar(texto)) is not None
+
+
 # ---------------------------------------------------------------------- reglas
 
 def _normalizar(texto: str) -> str:
@@ -254,3 +264,11 @@ _REGLAS = [(re.compile(p), r) for p, r in (
     (rf"\b{_MES}\b", _mes_sin_ano),
     (r"\bveranos?\b", _veranos),
 )]
+
+# Para `menciona_tiempo`: palabras de periodo, un determinante con unidad de tiempo, años y meses.
+_RE_TIEMPO = re.compile(
+    r"\b(?:invierno|primavera|otono|veranos?|trimestre|semestre|navidad|ayer|anteayer|anoche|hoy|ahora|"
+    r"actualmente|ultim[oa]s?|pasad[oa]s?|anterior(?:es)?|recientes?|recientemente|desde|hasta|durante|hace)\b"
+    r"|\b(?:este|esta|estos|estas|ese|esa|aquel|aquella|el|la|los|las|cada) "
+    r"(?:dias?(?! (?:laborables?|festivos?))|semanas?|mes|meses|anos?)\b"
+    r"|\b(?:19|20)\d{2}\b|\b\d{1,2}/\d{1,2}\b|\b(?:" + "|".join(MESES) + r")\b")

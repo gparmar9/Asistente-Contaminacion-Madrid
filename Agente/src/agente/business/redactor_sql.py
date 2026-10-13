@@ -34,10 +34,12 @@ class RedactorSQL:
         self._max_filas = max_filas
 
     async def redactar(self, pregunta: str, contexto: ContextoDatos, anterior: tuple[str, str] | None = None,
-                       pregunta_usuario: str | None = None, periodos: Sequence[Periodo] = ()) -> str:
+                       pregunta_usuario: str | None = None, periodos: Sequence[Periodo] = (),
+                       sin_fechas: bool = False) -> str:
         """SQL para `pregunta` (la del modelo). `anterior`: (sql, error) del intento fallido, si lo hay.
-        `pregunta_usuario`: la que escribió el usuario; sin ella, manda `pregunta`."""
-        usuario = _mensaje(pregunta, pregunta_usuario, periodos)
+        `pregunta_usuario`: la que escribió el usuario; sin ella, manda `pregunta`.
+        `sin_fechas`: la pregunta no pide periodo; el mensaje dice que se use todo el histórico."""
+        usuario = _mensaje(pregunta, pregunta_usuario, periodos, sin_fechas)
         if anterior is not None:  # en el mismo mensaje: Bedrock Converse exige alternar los roles
             sql, error = anterior
             usuario += "\n\n" + frases.REINTENTO_SQL.format(sql=sql, error=error)
@@ -57,8 +59,11 @@ class RedactorSQL:
             calendario=calendario(contexto.hoy, contexto.primera_fecha, contexto.ultima_fecha, condicion_sql))
 
 
-def _mensaje(pregunta: str, pregunta_usuario: str | None, periodos: Sequence[Periodo]) -> str:
+def _mensaje(pregunta: str, pregunta_usuario: str | None, periodos: Sequence[Periodo], sin_fechas: bool) -> str:
     usuario = pregunta_usuario.strip() if pregunta_usuario and pregunta_usuario.strip() else pregunta.strip()
     reescrita = "" if usuario == pregunta.strip() else frases.PREGUNTA_REESCRITA_SQL.format(pregunta=pregunta.strip())
-    periodo = condicion_sql(periodos) if periodos else frases.PERIODO_SIN_CALCULAR
+    if periodos:
+        periodo = condicion_sql(periodos)
+    else:
+        periodo = frases.PERIODO_TODO_EL_HISTORICO if sin_fechas else frases.PERIODO_SIN_CALCULAR
     return frases.MENSAJE_REDACTOR_SQL.format(usuario=usuario, reescrita=reescrita, periodo=periodo)

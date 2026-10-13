@@ -75,3 +75,20 @@ def test_el_rol_solo_lee_la_vista_y_respeta_el_tiempo_limite(mediciones):
         conn.execute(text("UPDATE resumen_datos_ml SET media = media WHERE false"))
     crudo.dispose()
     assert _sqlstate(escritura.value) == "42501"
+
+
+@pytest.mark.parametrize("consulta", ("ranking", "serie", "patron_horario", "fin_de_semana", "dias_superados",
+                                      "anomalias", "estaciones"))
+def test_consultas_del_catalogo_corren_en_postgres(mediciones, consulta):
+    from datetime import timedelta
+
+    from agente.business.catalogo_sql import construir
+    from agente.entities.datos import ContextoDatos, Periodo
+
+    ultima = mediciones.ultima_fecha()
+    contexto = ContextoDatos(ultima + timedelta(days=1), ultima - timedelta(days=730), ultima,
+                             mediciones.estaciones())
+    semana = Periodo("esta semana", ((ultima - timedelta(days=6), ultima),))
+    c = construir({"consulta": consulta, "umbral": 20}, contexto, [semana])
+
+    assert mediciones.ejecutar(c.sql, c.params, 60).columnas

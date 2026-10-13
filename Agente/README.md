@@ -135,12 +135,22 @@ y sus 2 previas) y dentro:
    lleva la pregunta del usuario, la del modelo (para lugares) y el periodo calculado. Devuelve solo el SQL.
 2. **Validador** (`business/validar_sql.py`, `sqlglot`): una sentencia `SELECT`, solo la vista, sin
    DML ni funciones de sistema, sin `CURRENT_DATE`/`NOW()`, fechas literales dentro del periodo
-   calculado (un día de margen), `LIMIT` impuesto (tope + 1, para detectar el truncado; un `LIMIT` menor del modelo se respeta).
+   calculado (un día de margen), `LIMIT` impuesto (siempre tope + 1, para detectar el truncado).
 3. **Ejecución** en el DAL. Si el validador o PostgreSQL rechazan el SQL, **un reintento** con el
    error; si la base está caída, sin reintento.
 4. Al modelo vuelven `{descripcion, periodo, columnas, filas, truncado}` con las cifras a 1 decimal y un
    tope de tamaño. El SQL va a la traza (span `redactar_sql` por intento, evento `sql_invalido`,
    atributo `agente.sql`), nunca a la respuesta.
+
+**Catálogo cerrado** (`HERRAMIENTA_DATOS=catalogo`; por defecto `libre`). Misma herramienta para el
+bucle (mismo nombre, periodos y resultado); solo cambian los pasos 1 y 2. El **selector**
+(`business/selector_catalogo.py`, mismo `LLM_MODELO_SQL`) devuelve un JSON con una de 7 consultas
+(`ranking`, `serie`, `patron_horario`, `fin_de_semana`, `dias_superados`, `anomalias`, `estaciones`)
+y sus parámetros (contaminantes, estaciones, distritos, agrupación, orden, bloque, granularidad,
+umbral); `business/catalogo_sql.py` valida la elección y construye el SQL con la media ponderada,
+las fechas del periodo calculado y los valores como parámetros. Una elección no válida se reintenta
+una vez con el error; un contaminante no medido (SO2) o un lugar inexistente devuelve un resultado
+vacío con una `nota`, sin consultar. Span `elegir_consulta` por intento.
 
 La vista tiene una fila por estación, contaminante, fecha y bloque (bloques de 7, 6, 7 y 4 horas)
 y solo los 2 últimos años, contados desde el último día cargado. La media de un día, una estación

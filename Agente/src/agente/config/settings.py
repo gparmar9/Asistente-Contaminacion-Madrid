@@ -56,7 +56,10 @@ class Settings:
     database_url: str = ""
     db_timeout_s: float = 5     # statement_timeout de cada sentencia
     db_max_filas: int = 60      # filas que devuelve como mucho una consulta
-    # Modelo del redactor SQL (mismo proveedor). Vacío = el mismo modelo del agente.
+    # Cómo se obtiene el SQL de `consultar_datos`: 'libre' (el modelo lo escribe) o 'catalogo' (el
+    # modelo elige una consulta cerrada y sus parámetros). Mismo nombre y contrato para el bucle.
+    herramienta_datos: str = "libre"
+    # Modelo del redactor SQL o del selector del catálogo (mismo proveedor). Vacío = el del agente.
     llm_modelo_sql: str = ""
     # Modelo del clasificador de intención (mismo proveedor). Vacío = el mismo modelo del agente.
     llm_modelo_clasificador: str = ""
@@ -100,6 +103,7 @@ def get_settings() -> Settings:
         database_url=os.getenv("DATABASE_URL", ""),
         db_timeout_s=float(os.getenv("DB_TIMEOUT_S", "5")),
         db_max_filas=int(os.getenv("DB_MAX_FILAS", "60")),
+        herramienta_datos=os.getenv("HERRAMIENTA_DATOS", "libre").strip().lower() or "libre",
         llm_modelo_sql=os.getenv("LLM_MODELO_SQL", ""),
         llm_modelo_clasificador=os.getenv("LLM_MODELO_CLASIFICADOR", ""),
         fecha_referencia=_fecha(os.getenv("FECHA_REFERENCIA", "")),

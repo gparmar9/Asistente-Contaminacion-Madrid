@@ -32,8 +32,26 @@ def test_media_que_mezcla_contaminantes_se_rechaza():
             f"SELECT distrito, {media} FROM b GROUP BY distrito", 60)
 
 
-# Si falta o llega al tope: tope + 1, para que el DAL detecte el truncado
-@pytest.mark.parametrize("limite, impuesto", [("", 61), (" LIMIT 500", 61), (" LIMIT 60", 61), (" LIMIT 5", 5)])
+# Los bloques duran 7, 6, 7 y 4 horas: AVG(media) sobre la vista no da la media del periodo
+def test_media_sin_ponderar_se_rechaza():
+    with pytest.raises(SQLNoValido, match="media ponderada"):
+        validar("SELECT contaminante, AVG(media) FROM mediciones_bloques GROUP BY contaminante", 60)
+    # La media de las medias diarias, sobre una CTE, es válida
+    validar("WITH d AS (SELECT fecha, SUM(media * n_horas) / SUM(n_horas) AS media FROM mediciones_bloques "
+            "WHERE contaminante = 'NO2' GROUP BY fecha) SELECT AVG(media) FROM d", 60)
+
+
+# Sin periodo en la pregunta, todo el histórico: Ministral se inventaba «el mes pasado»
+def test_filtro_de_fecha_sin_periodo_en_la_pregunta_se_rechaza():
+    sql = "SELECT media FROM mediciones_bloques WHERE contaminante = 'NO2' AND {}"
+    for condicion in ("fecha >= '2026-04-01'", "mes = 4"):
+        with pytest.raises(SQLNoValido, match="no pide un periodo"):
+            validar(sql.format(condicion), 60, sin_fechas=True)
+    validar(sql.format("es_fin_semana"), 60, sin_fechas=True)
+
+
+# Siempre tope + 1, para que el DAL detecte el truncado; un LIMIT 1 dejaba fuera el segundo contaminante
+@pytest.mark.parametrize("limite, impuesto", [("", 61), (" LIMIT 500", 61), (" LIMIT 60", 61), (" LIMIT 1", 61)])
 def test_limit_se_impone(limite, impuesto):
     assert validar(f"SELECT media FROM mediciones_bloques{limite}", 60).endswith(f"LIMIT {impuesto}")
 
