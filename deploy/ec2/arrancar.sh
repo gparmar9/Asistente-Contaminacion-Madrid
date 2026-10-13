@@ -80,8 +80,10 @@ linea_env DATABASE_URL "$DATABASE_URL" > secretos-bd.env
 # Todo /jupiter/agente/ a variables de entorno: una variable nueva del agente se da de alta
 # creando el parámetro, sin tocar este script. Salida en texto: nombre<TAB>valor por línea.
 : > config-agente.env
-aws ssm get-parameters-by-path --path /jupiter/agente/ --with-decryption     --query "Parameters[].[Name,Value]" --output text > parametros-agente.tmp
-while IFS=$'	' read -r NOMBRE VALOR; do
+# Ruta sin barra final: es la que autoriza el rol (parameter/jupiter/agente).
+aws ssm get-parameters-by-path --path /jupiter/agente --with-decryption \
+    --query "Parameters[].[Name,Value]" --output text > parametros-agente.tmp
+while IFS=$'\t' read -r NOMBRE VALOR; do
     [ -n "$NOMBRE" ] || continue
     linea_env "$(basename "$NOMBRE" | tr 'a-z' 'A-Z')" "$VALOR" >> config-agente.env
 done < parametros-agente.tmp
