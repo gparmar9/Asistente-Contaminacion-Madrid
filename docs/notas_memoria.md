@@ -98,9 +98,15 @@ Hilo conductor de la memoria: cómo y por qué cambió el diseño.
 | 2026-09-27 | Arquitectura de la API (Fase 4) | Esqueleto único sin diseño cerrado → **2 servicios**: `ApiUsuario` (ligero: lecturas SQL + proxy de chat) y `LLMOrchestrator` (agente + tools + deps pesadas de RAG; pendiente). **Sin estado**: ni usuarios ni historial (se descarta el scaffold usuario/conversación). El dashboard consumirá solo la API | Separar las dependencias pesadas (torch/chromadb) del servicio de usuario, permitir el trabajo en paralelo del equipo y dejar la costura lista para un futuro LLM autoalojado. API primero, agente después: 3 de los 4 grupos de endpoints solo necesitan SQL |
 | 2026-09-28 | Despliegue | Build + push + `update-function-code` a mano desde un PC con credenciales SSO → **workflow de GitHub Actions (`workflow_dispatch`) con OIDC** | Cualquiera del equipo puede desplegar sin credenciales de AWS; no se despliega si fallan los tests; el tag por SHA dice qué commit corre en producción y permite volver atrás; la verificación del digest elimina el fallo silencioso de subir la imagen sin actualizar la función. Descartado: claves de acceso en GitHub Secrets (permanentes y compartidas) y despliegue en cada push a `main` (se optó por lanzarlo a mano para decidir cuándo se toca producción) |
 | 2026-09-28 | Vuelta atrás | `update-function-code` a mano con la imagen buena → **workflow de rollback** con modo consulta, vuelta por digest a una versión publicada y verificación | Deshacer un despliegue fallido en segundos, sin credenciales ni reconstruir la imagen, y dejando rastro (cada rollback publica una versión con su motivo). Descartado: "volver a la versión anterior" automático, porque tras un rollback la anterior es justo la versión que se deshizo; primero se consulta la tabla y luego se elige |
+| 2026-09-28 | Tool de datos del asistente | SQL libre generado por el LLM con validación *read-only* (opción grande de D3) → **5 consultas predefinidas parametrizadas**: el LLM rellena enums/fechas validados y el módulo construye el único SELECT posible con parámetros ligados | Inyección SQL imposible por construcción, resultados deterministas y defendibles; los modelos de los tiers gratuitos fallan más generando SQL correcto que rellenando 5 parámetros. Resuelve la decisión D3 del roadmap |
+| 2026-09-30 | Ruta documental del agente | Tool `search_documents` con umbral propio (0,8) y citas por confianza en el modelo → **contrato de evidencias de la Fase 2 por HTTP**: tool `buscar_evidencias` (`POST /rag/evidencias`, umbral 0,22 del servicio), respuesta del modelo en JSON `{estado, afirmaciones[Dn], limitaciones}`, validación con `POST /rag/validar` y render con `[Dn]` + bibliografía; 1 reparación | Las citas se comprueban, no se creen: la trazabilidad no depende de la conducta del LLM (argumento central de §7.2). Cierra el hueco de contrato de 2026-09-24 separando rutas (datos en texto libre; en mixtas, la cifra va dentro de la afirmación). Descartado: extender el esquema con `S1..Sn` |
+| 2026-09-30 | Arquitectura de servicios | 2 servicios con el RAG embebido en el orquestador (torch/chromadb en proceso) → **3 servicios**: `ApiUsuario` + `LLMOrchestrator` (ligero) + `rag.api` (:8010, evidencias) | El orquestador no repite trabajo que el RAG ya expone por API; sin torch/chromadb queda ligero para desplegar. El RAG (modelo ~1,1 GB) se despliega, escala y calienta por su cuenta. Se valoró en proceso el mismo día y se descartó: duplicaba responsabilidades y dependencias |
+| 2026-10-01 | Definición de la tool `buscar_evidencias` | Copia duplicada a propósito en el orquestador → **se consume `GET /rag/herramienta`** (caché por proceso), sin copia local | Una sola fuente de verdad del esquema: una copia local puede divergir del servicio en silencio. Si el GET falla, la tool no se ofrece en esa vuelta (el agente sigue con `query_sql`) y se reintenta en la siguiente. Descartada una copia local de respaldo (primera versión del mismo día): era precisamente la duplicación que se quería eliminar |
 | 2026-10-01 | Disponibilidad de la base de datos | RDS encendida 24 h → **encendida solo de 22:00 a 01:30 (hora de Madrid) y a demanda** con un workflow de GitHub (§8.8) | La carga es una vez al día y la API aún no está desplegada: pagar la instancia 24 h no aporta nada. Ahorro estimado de ~15,5 a ~4–5 $/mes. Descartado: DynamoDB (el acceso es analítico: rangos, agregaciones y `JOIN`, justo lo que no hace bien una base clave-valor), Aurora Serverless v2 con pausa automática (ahorro parecido pero exige migrar; queda como alternativa), programarlo con `schedule` de GitHub Actions (puede retrasarse y se desactiva tras 60 días sin actividad) y que el programador llame directamente a `StartDBInstance` (da error si la base ya está encendida) |
 | 2026-10-01 | Workflows de despliegue | «Desplegar Lambda» y «Rollback Lambda» → **«Desplegar» y «Rollback» con un desplegable de componente** (hoy solo `lambda`) | Preparar el despliegue de la API, el orquestador, el RAG y la web sin multiplicar workflows: cada pieza será una opción del desplegable y un job propio. Bloqueo por componente: piezas distintas pueden desplegarse a la vez, la misma no. Descartado: un workflow por pieza (duplica pasos y botones) y pedir la imagen a desplegar (el despliegue siempre construye el código de la rama elegida; volver a una versión concreta es tarea del rollback) |
 | 2026-10-02 | Empaquetado de la API | Servicios arrancados a mano con `uvicorn` y `python -m rag.api` → **una imagen Docker por servicio** (`api-usuario`, `orquestador`, `rag`), levantadas juntas con el perfil `api` de `docker-compose` | Es como irán en la EC2 y permite desplegar cada pieza por separado. La imagen del RAG lleva **dentro el modelo y el índice** construido en el propio build, con el commit del corpus en sus metadatos: arranca sin descargar nada y cada imagen corresponde a un corpus concreto. Descartado: una sola imagen con todo (obliga a redesplegar el RAG, de ~3 GB, por cualquier cambio en la API) y construir el índice al arrancar el contenedor (arranque lento y sin garantía de que todas las réplicas usen el mismo índice) |
+| 2026-10-03 | Interfaz (Fase 4) | «Web con Streamlit + FastAPI» (2026-07-22) → **SPA React 19 + TypeScript (Vite) en `Web/`, servida por nginx que hace de proxy de `/api/*` a `ApiUsuario`** (un solo origen, dos contenedores). Tipos del cliente **generados del OpenAPI** del backend (`openapi-typescript` + `openapi-fetch`); el job de CI regenera el contrato y falla si difiere del versionado | Streamlit no permite controlar lo que aquí es un requisito de correctitud (huecos en vez de ceros, estados de anomalía con icono y texto, cobertura visible) ni presentar un chat sin memoria de forma honesta. Con los tipos generados, un cambio de contrato rompe `npm run build` en el PR, no la demo. Descartados: Next.js (sin SSR/SEO no aporta), librerías de componentes (CSS con *custom properties* y modo oscuro propio) y una URL de la API en el frontend (rutas relativas, sin CORS) |
+| 2026-10-03 | Lectura de anomalías en la interfaz | `is_anomaly` mostrado tal cual → **solo se presenta como anomalía con `cobertura ≥ 0,7`**; por debajo, el dato se muestra con su cobertura y la etiqueta «cobertura baja», sin juicio. Nulos = huecos; `anomaly_score` nunca como probabilidad; sin bandas tipo AQI; nunca doble eje Y | Las marcas con cobertura baja son artefactos del hueco (§6.5). Pintar bandas sanitarias sería inventar un juicio clínico que el detector no hace. La cifra de la pantalla «Hoy» usa el **último día consolidado** (el pipeline carga el día a las 23:45) y lo dice, en vez de mostrar un cero engañoso |
 | 2026-10-04 | Umbral de evidencia del RAG | 0,22 fijado a ojo con preguntas lejanas al dominio → **0,1754**, punto medio entre la peor documental (0,1750) y la mejor ajena (0,1759) en 30 casos de evaluación (§7.2) | Con 0,22 las 7 ajenas cercanas al dominio (tiempo, tráfico, transporte) recibían evidencias y llegaban al LLM (3/10 rechazadas). Con 0,1754 se rechazan 10/10 a costa de una documental (13/15 en vez de 14/15): se prefiere que el asistente se abstenga de más a que responda fuera del dominio. Descartado: mantener 0,22, que era lo que dictaba la regla fijada antes de medir (no cambiar con un hueco menor de 0,01; aquí es de 0,001) y cambiar a `multilingual-e5-small` (mejor MRR, pero solapa documentales y ajenas y no hay punto medio) |
 | 2026-10-04 | Agente LLM | `LLMOrchestrator` como único agente → **nuevo servicio `Agente`** (puerto 8200), diseñado desde cero con un **bucle de herramientas escrito a mano**; **LlamaIndex solo como cliente del LLM** (`OpenAILike` para APIs OpenAI-compatibles y `BedrockConverse` para Amazon Bedrock, elegibles por variable de entorno) y, más adelante, como almacén del chat. Ambos servicios conviven sin código ni dependencias compartidas; `ApiUsuario` elegirá uno por configuración | Principios tomados de las clases del máster y de un diseño de agente empresarial: pocas piezas, el modelo clasifica y el código decide, fases pequeñas con salida tipada y valor seguro, síntesis final sin herramientas, lo determinista lo entrega el código. **Descartado un framework de agentes completo** (ReAct/`AgentWorkflow` de LlamaIndex, LangGraph): esconde el bucle que precisamente se quiere controlar (vetar u obligar herramientas, cerrar el turno sin modelo, validar la salida con el RAG) y arrastra abstracciones que no se usan. Descartado también ampliar `LLMOrchestrator`: su bucle no tiene puntos de intervención en código y rehacerlo dentro equivalía a reescribirlo. Bedrock entra como proveedor de producción porque la cuenta del máster da acceso; el modelo concreto en `eu-west-1` con *tool use* y *streaming* queda `[por confirmar]` |
 | 2026-10-06 | Sesión en el agente | Servicios sin estado (2026-09-27) → **`session_id` opaco** en `/responder` (se genera si no llega) y **un turno a la vez por sesión** | El streaming y la memoria de la conversación (fases 4 y 5) necesitan agrupar los turnos. Sin usuarios ni datos personales: el id no identifica a nadie y el agente aún no guarda nada con él |
@@ -108,6 +114,7 @@ Hilo conductor de la memoria: cómo y por qué cambió el diseño.
 | 2026-10-06 | Memoria de la conversación del agente | Diseño previsto (2026-10-04): `PostgresChatStore` de LlamaIndex sobre la base del proyecto, estado tipado entre turnos (`turn_state`) e intención `REPETIR` → **almacén propio en memoria del proceso** (1 semana sin actividad, 20 turnos por sesión) y ventana por presupuesto de tokens; **LlamaIndex queda solo como cliente del LLM**. Sin `REPETIR` y con `turn_state` aplazado | Un TFM no necesita que las conversaciones sobrevivan a un reinicio, y el bloqueo por sesión ya exige un solo proceso: Postgres añadiría tablas, migraciones y una dependencia más en cada turno. El almacén vive detrás de una interfaz: pasar a una base de datos cambiaría una clase. `SimpleChatStore` solo guarda listas de mensajes, sin caducidad ni metadatos del turno. `REPETIR` desde cifras sueltas pierde a qué contaminante, unidad o fuente pertenece cada una; un «¿cuál era ese límite?» se trata como pregunta normal con contexto. El estado semántico se definirá cuando lo pida una necesidad concreta (comprobaciones de cifras, herramienta SQL) |
 | 2026-10-06 | Alcance del clasificador del agente | Alcance por tema («calidad del aire») → **alcance por lo que el sistema puede responder**: contaminación del aire, con los contaminantes que mide la red citados en el prompt; polen, ruido y tiempo fuera; alergia y asma dentro; los límites legales son documentación, no mediciones | En el lote del 2026-10-06 los dos modelos fallaron la pregunta del polen de forma distinta (uno `DATOS`, otro `FUERA_DE_ALCANCE`). Medido antes y después: 27/28 → 29/29 con los dos modelos (§7.3.1) |
 | 2026-10-06 | Comprobaciones posteriores del agente | Un modo global `COMPROBACIONES_MODO` (observar o bloquear todas) → **activación por regla** (`COMPROBACIONES_BLOQUEAN`, vacía por defecto) | Cada regla pasa a bloquear solo con evidencia propia (0 falsos positivos en las trazas reales y en un lote adversario, y al menos un acierto). Con un modo global, una regla ruidosa impediría bloquear con las fiables. Descartado también pedir una reparación al modelo («la cifra X no está en D2») en vez de la frase fija: sería mejor respuesta, pero añade una llamada y mezcla la validación del RAG con la del agente; queda como trabajo futuro |
+| 2026-10-07 | Diseño del dashboard | Dos paletas (original + «Cielo» experimental con `?paleta=cielo`) y 4 pantallas navegables → **una sola paleta cielo** (azul cielo + slate, alineada con la landing de AireMadrid: degradado `#38bdf8→#2563eb`, radios 16 px, botones píldora) y navegación **Home · Estadísticas · Estaciones**: portada tipo landing en `/` (hero con foto, 3 tarjetas de rasgos, sección de mapa ilustrada), Estadísticas (antes «Hoy»: cifra de anomalías con perfil de Madrid, *stat tiles*, bloques marcados) y Estaciones (mapa). El asistente queda como burbuja flotante; «Informe del día», la página Asistente y Metodología salen de la navegación (las rutas siguen vivas) | Simplificar para la demo: una portada amable que explique el producto, menos navegación y una identidad visual única. Mantener dos paletas duplicaba validación de contraste sin aportar; el informe del día dependía del LLM aún no conectado |
 | 2026-10-08 | Agente del asistente | `LLMOrchestrator` y `Agente` conviviendo, elegidos por `AGENTE_URL` → **`Agente` como único agente**; `LLMOrchestrator` descartado: su código se conserva en el repositorio, sin previsión de uso | Decisión del equipo. El orquestador nunca llegó a conectarse a un proveedor; el `Agente` ya tiene clasificador, ruta documental validada, sesión, *streaming*, memoria, observabilidad y comprobaciones, y está probado con Bedrock. Consecuencia: la consulta de mediciones (`query_sql` del orquestador) no existe aún en el agente y pasa a ser su herramienta SQL pendiente |
 | 2026-10-08 | Preguntas de datos del agente | Frase fija («todavía no consulto mediciones») → **herramienta `consultar_datos` con SQL libre**: un LLM redacta el SQL sobre la vista `mediciones_bloques`, un validador (`sqlglot`) lo limita, PostgreSQL lo ejecuta con un rol de solo lectura y una síntesis sin herramientas redacta la respuesta | Las preguntas de datos eran la mitad de las preguntas objetivo del asistente. Se empieza por SQL libre porque 5 de las 11 preguntas de datos del lote no caben en un catálogo cerrado razonable; el catálogo solo se construye si el libre no alcanza el criterio de la evaluación |
 | 2026-10-09 | Preguntas mixtas del agente | Una intención y cifras dentro de afirmaciones documentales → **hasta dos intenciones y respuesta en dos bloques: datos y documentación** | Las cifras SQL no tienen citas documentales `[Dn]`. Separar los bloques conserva la validación del RAG; añadir una fuente SQL `S1` habría cambiado su contrato |
@@ -172,11 +179,11 @@ CSV histórico ─▶ notebooks 01/02/03 ─▶ modelo .joblib ─▶ PostgreSQL
 
 Corpus RAG (.md) ─▶ troceado + embeddings e5 ─▶ ChromaDB ─▶ servicio RAG (FastAPI)   (Fase 2)
 
-Usuario ─▶ ApiUsuario (FastAPI) ──▶ PostgreSQL (lecturas: estaciones, series)   (Fase 4, en curso)
-        /chat, /chat/stream ──▶ Agente ─▶ LLM vía LlamaIndex (Bedrock | OpenAI-compat)
-                                   ├─ buscar_evidencias ─▶ rag.api (HTTP)   (Fase 3, en construcción)
-                                   └─ consultar_datos ─▶ redactor SQL (LLM) ─▶ validador
-                                                       ─▶ PostgreSQL: vista mediciones_bloques (solo lectura)
+Usuario ─▶ Web (nginx: SPA React + proxy /api/*) ─▶ ApiUsuario (FastAPI) ──▶ PostgreSQL (lecturas: estaciones, series)   (Fase 4)
+                            └─ /chat, /chat/stream ──▶ Agente ─▶ LLM vía LlamaIndex (Bedrock | OpenAI-compat)
+                                                         ├─ buscar_evidencias ─▶ rag.api (HTTP)   (Fase 3, en construcción)
+                                                         └─ consultar_datos ─▶ redactor SQL (LLM) ─▶ validador
+                                                                             ─▶ PostgreSQL: vista mediciones_bloques (solo lectura)
 ```
 
 `LLMOrchestrator` (primer agente, con `query_sql`) sigue en el repositorio pero está descartado
@@ -193,11 +200,12 @@ mediante *tool use*.
 | 1 | Datos, detector de anomalías, pipeline en tiempo real | Hecha en local; migración a AWS en curso |
 | 2 | Vector DB y servicio de evidencias | **Reescrita** (2026-09-23) como servicio de evidencias y mergeada en `development`; pendiente de pasar a `main` |
 | 3 | LLM con *tool use* | `Agente` con documentación validada, memoria, streaming y preguntas mixtas. SQL evaluado en dos lotes con Bedrock: aún no cumple el criterio (§7.3.1). 126 tests. Pendiente decidir qué comprobaciones bloquean respuestas. Otro miembro se encarga del despliegue. `LLMOrchestrator` descartado (§7.3.2) |
-| 4 | Informes y dashboard | En curso: `ApiUsuario` con `/estaciones`, `/estaciones/{codigo}/series`, `/chat` y `/chat/stream` (proxy al agente, con stub), tests propios y job de CI. Informes y dashboard pendientes |
+| 4 | Informes y dashboard | **Implementada** (2026-10-03; rediseño 2026-10-07/08): `ApiUsuario` con `/estaciones`, `/estaciones/{codigo}/series`, `/chat` y `/chat/stream` (proxy al agente, con stub), tests propios y job de CI; dashboard web en `Web/` (portada Home, Estadísticas, Estaciones con detalle, asistente como burbuja flotante) servido por el contenedor `web` (nginx) junto al perfil `api` del compose. Pendiente: definir `AGENTE_URL` para conectar el chat al agente y verificar la pila completa |
 
 **Stack actual:** Python 3.12 · pandas · NumPy · scikit-learn · PostgreSQL 18 (RDS) · SQLAlchemy ·
 pyarrow · ChromaDB · sentence-transformers (`multilingual-e5-base`) · FastAPI · pytest ·
-GitHub Actions · AWS (Lambda, S3, RDS, EventBridge, CloudWatch).
+GitHub Actions · AWS (Lambda, S3, RDS, EventBridge, CloudWatch) · React 19 + TypeScript (Vite) ·
+TanStack Query · Recharts · nginx · Docker Compose.
 
 ---
 
@@ -1418,9 +1426,16 @@ la enciende a mano para trabajar o hacer una demo.
   `chromadb` y `sentence-transformers` no se instalan a propósito (descarga grande), y
   `test_buscar` y `test_indexar` se saltan solos con `importorskip`. Simulado en local sin esas
   dos librerías: 80 pasan y 2 ficheros se saltan `[por confirmar en la primera ejecución de CI]`.
-- **CI con dos jobs:** unitarios sin base de datos e **integración contra un PostgreSQL efímero**
-  como servicio. Los de integración solo corren con `RUN_DB_TESTS=1`, para no tocar nunca la base
-  local por accidente.
+- **CI con seis jobs:** unitarios sin base de datos, **integración contra un PostgreSQL efímero**
+  como servicio (solo con `RUN_DB_TESTS=1`, para no tocar nunca la base local por accidente),
+  `api-usuario` (SQLite en memoria), `orquestador` (LLM falso), `agente` (dobles del LLM y del RAG)
+  y `frontend`.
+- **Contrato frontend-backend comprobado en CI.** El job `frontend` exporta el OpenAPI real de
+  `ApiUsuario` (`Web/scripts/exportar_openapi.py`), regenera los tipos TypeScript y falla con
+  `git diff --exit-code` si el contrato versionado no coincide; después lint y `npm run build`
+  (`tsc -b` + Vite). Un build roto o una deriva de esquema tumban el PR. Las versiones de FastAPI y
+  pydantic del job están fijadas a las que generaron el fichero, porque el esquema que emiten puede
+  cambiar entre versiones.
 - **Observabilidad del agente:** spans OpenTelemetry por turno, visibles en Phoenix y guardados en
   JSONL (§7.3.1). Los tests de trazas usan el exportador en memoria del SDK: comprueban el árbol de
   spans de un turno, que dos turnos concurrentes no se mezclen y que un exportador caído no afecte
@@ -1689,6 +1704,20 @@ la enciende a mano para trabajar o hacer una demo.
   pasa a publicar versiones con descripción (`deploy <commit> desde <rama>`). Rol ampliado con
   `PublishVersion` y `ListVersionsByFunction`. Lógica de la tabla probada en local con los datos
   reales de la función (v1 y v2); **pendiente de la primera ejecución real** |
+| 2026-09-28 | `LLMOrchestrator` implementado (Fase 3): bucle de agente sobre LLM OpenAI-compatible, tool `query_sql` con 5 consultas predefinidas parametrizadas (resuelve D3: sin SQL libre), tool `search_documents` reutilizando el RAG de la Fase 2, prompt de sistema con aviso médico, 34 tests sin red (LLM falso con guion + SQLite en memoria) y cuarto job de CI. Revisión adversarial multiagente con 7 arreglos aplicados (ver §7.3) (Sheila) |
+| 2026-09-30 | Merge de `development` en `feature/api-usuario` (Sheila): incorpora la Fase 2
+  reescrita (servicio de evidencias) y el CI/CD de la Lambda. Detectado que `LLMOrchestrator`
+  importa `buscar_documentos()`, renombrado a `buscar()` en la reescritura del RAG: integración
+  pendiente de reconciliar (§7.3) |
+| 2026-09-30 | `LLMOrchestrator` adopta el contrato de evidencias de la Fase 2 **por HTTP**
+  (Sheila): tool `buscar_evidencias` contra `rag.api` + validación de citas y render en el
+  cierre, con una reparación y cierre por la ruta de datos si `sin_evidencia` con SQL. Resuelve
+  el hueco de contrato de 2026-09-24 separando rutas y deja al orquestador sin torch/chromadb
+  (3 servicios, §2 y §7.3). Suite del orquestador: 45 tests; verificado de punta a punta contra
+  `rag.api` real (validación correcta, reparación y 503 tipado con índice desfasado) |
+| 2026-10-01 | La definición de la tool `buscar_evidencias` deja de estar duplicada: el orquestador
+  la pide a `GET /rag/herramienta` (caché por proceso); si el RAG no responde, la tool no se
+  ofrece en esa vuelta y se reintenta en la siguiente. Suite del orquestador: 51 tests (Sheila) |
 | 2026-10-01 | **Encendido programado de la RDS** (Guillermo, cuenta AWS del máster): rol
   `jupiter-automation-rds`, permisos del programador ampliados a los runbooks
   `AWS-Start/StopRdsInstance`, programaciones `jupiter-rds-encender` (22:00) y `jupiter-rds-apagar`
@@ -1718,13 +1747,6 @@ la enciende a mano para trabajar o hacer una demo.
   Pendiente de la primera ejecución real tras el merge a `main` |
 | 2026-10-02 | Notas del modelo de embeddings puestas al día (e5-base, presupuesto de tokens, índice
   local comprobado) y distancias reales medidas frente al umbral 0,22 (Carlos Fernández) |
-| 2026-10-04 | **Evaluación de la recuperación del RAG** (Carlos Fernández, `feature/rag-metricas`): 30 casos
-  fijos y `python -m rag.evaluar`. Con e5-base: hit@4 14/15, MRR@10 0,740. **Umbral 0,22 → 0,1754**
-  (ajenas rechazadas 3/10 → 10/10, documentales bajo el umbral 14/15 → 13/15), por decisión de
-  priorizar la abstención pese a un hueco de 0,001. Medido también `multilingual-e5-small`
-  (MRR 0,796, pero solape documental/ajena de 0,023): se mantiene e5-base. Índice reconstruido
-  antes de medir (el anterior era de una copia sin commit, mismas cifras) |
-  Primera ejecución tras el merge a `main` (04-10): «Rollback» en modo consulta, correcto |
 | 2026-10-02 | **API en contenedores** (Guillermo, rama `feature/contenedores-api`): Dockerfile por
   servicio (`ApiUsuario/`, `LLMOrchestrator/`, `deploy/Dockerfile.rag`), perfil `api` en
   `docker-compose.yml` y `RAG_COMMIT` en `rag.indexar` para conservar el commit del corpus sin git
@@ -1738,6 +1760,27 @@ la enciende a mano para trabajar o hacer una demo.
   Corregido fijando `SQLAlchemy==2.0.49` y `psycopg2-binary==2.9.12`; después `/estaciones` y
   `/series` responden con datos reales. `/chat` devuelve 503 controlado: aún no hay proveedor de
   LLM elegido. Prueba de principio a fin con LLM: `[por confirmar]` |
+| 2026-10-03 | **Dashboard web (Fase 4)** en `Web/`, rama `feature/dashboard` (Sheila): SPA React 19 +
+  TypeScript con Vite; pantallas Hoy (cifra de anomalías fiables del último día consolidado, *stat
+  tiles* con sparkline, informe del día vía `/chat`, bloques marcados), Estaciones (mapa Leaflet con
+  mapa base de Esri por defecto o tabla ordenable, y detalle con línea, heatmap días × bloques, tabla
+  alternativa, rangos 7/30/90/personalizado y comparación de hasta 3 estaciones), Asistente (preguntas independientes, contador de espera,
+  citas `[Dn]` enlazadas a fuentes separadas por tipo) y Metodología; el asistente está además en
+  todas las pantallas como burbuja flotante con panel, con el estado de las consultas en un contexto
+  global. Aviso médico fijo en la cabecera. Tipos generados del OpenAPI y comprobados en CI (quinto job). Despliegue en dos
+  contenedores: `Web/Dockerfile` (node → nginx, `proxy_read_timeout 180s` en `/api/chat`),
+  `ApiUsuario/Dockerfile` y servicios `api` + `web` en el compose. Verificado en local: `tsc`,
+  ESLint, 22 tests de dominio con Vitest (regla de cobertura ≥ 0,7, citas `[Dn]`, fechas) y build
+  limpios (app 352 kB + Recharts 372 kB; 112 + 110 kB gzip), probado de punta a punta contra
+  `ApiUsuario` real sobre una SQLite sintética, en claro y oscuro. Imagen Docker
+  `[por confirmar: sin demonio Docker en la sesión]` |
+| 2026-10-04 | **Evaluación de la recuperación del RAG** (Carlos Fernández, `feature/rag-metricas`): 30 casos
+  fijos y `python -m rag.evaluar`. Con e5-base: hit@4 14/15, MRR@10 0,740. **Umbral 0,22 → 0,1754**
+  (ajenas rechazadas 3/10 → 10/10, documentales bajo el umbral 14/15 → 13/15), por decisión de
+  priorizar la abstención pese a un hueco de 0,001. Medido también `multilingual-e5-small`
+  (MRR 0,796, pero solape documental/ajena de 0,023): se mantiene e5-base. Índice reconstruido
+  antes de medir (el anterior era de una copia sin commit, mismas cifras) |
+  Primera ejecución tras el merge a `main` (04-10): «Rollback» en modo consulta, correcto |
 | 2026-10-04 | **Tests de la API en CI** (Guillermo): `tests.yml` suma los jobs `api-usuario` (18 tests)
   y `orquestador` (51), cada uno con su `requirements-dev.txt`. Hasta ahora solo corrían en local
   aunque el README decía lo contrario. Reproducidos antes en entornos virtuales limpios. Como
@@ -1764,6 +1807,19 @@ la enciende a mano para trabajar o hacer una demo.
 | 2026-10-06 | **Agente LLM: clasificador revisado y evaluación con conversaciones** (Carlos): prompt con el alcance definido por lo que el sistema puede responder (polen, ruido y tiempo fuera; alergias dentro; límites legales como documentación). Guion de 29 preguntas y 5 conversaciones (11 turnos). En Bedrock, antes → después: clasificador 27/28 → 29/29 con los dos modelos; conversaciones 9/11 → 11/11 (Ministral) y 11/11 (gpt-oss). La búsqueda concatenada no llegó a ejecutarse: los modelos reformulan solos. Unas 600 llamadas, ~0,12 $ `[estimación]`. 51 tests |
 | 2026-10-06 | **Agente LLM, fase 6: comprobaciones posteriores, pasos 1 y 2** (Carlos, rama `feature/Agente`): reglas de cifras sin respaldo, fuga del prompt e internos sobre lo que escribió el modelo, en modo observación (evento en la traza y campo en el log); `COMPROBACIONES_BLOQUEAN` para que una regla sustituya la respuesta por una frase fija (sin tokens en el stream si alguna bloquea). Excluidas de la fuga las frases de presentación que el modelo repite. 62 tests (11 nuevos); sin llamadas a Bedrock. Pendiente: medir sobre las 128 trazas y un lote adversario y decidir qué reglas bloquean |
 | 2026-10-06 | **Agente LLM, fase 6: medición de las comprobaciones** (Carlos, rama `feature/Agente`): script que aplica las reglas a las trazas guardadas (128 turnos) y lote adversario + sonda de síntesis forzada en Bedrock (26 turnos, 63 llamadas, 0,011 $). Cifras: 10 hallazgos, 3 falsos positivos (el «2.5 micras» de PM2.5) y una cita mal puesta. Fuga: Ministral repite el prompt de charla cada vez que la pregunta llega a la charla (4 de 4) y la regla solo detecta la copia literal (1 de 4). Internos: 0. Conteo por regla en el informe de trazas y en la evaluación de turnos. 63 tests |
+| 2026-10-07 | **Rediseño del dashboard** (Sheila): paleta única «cielo» en `tokens.css` (la
+  experimental se retira; su fichero queda vacío para anular un `?paleta=cielo` recordado en
+  localStorage), navegación reducida a Hoy + Estaciones con CTA «Preguntar al asistente», pantalla
+  Hoy en 3 bloques (cifra + tiles + bloques marcados; se quita el informe del día). Verificado con
+  `tsc` y capturas en claro/oscuro contra `ApiUsuario` + PostgreSQL local, cuyo hueco
+  2026-09-09→2026-10-07 se rellenó con datos sintéticos **solo en la base local de demo** (12.876
+  filas derivadas de las estadísticas reales por estación/bloque, ~5 % de anomalías; estación 55
+  incluida) |
+| 2026-10-08 | **Portada Home** (Sheila): landing de marketing en `/` («Respira mejor. Elige tu
+  zona.») con foto de parque y vista ilustrada de Madrid (del prototipo WebIAGen, reescaladas a
+  375/240 KB en `Web/public/img/`), 3 tarjetas de rasgos y cifras reales (24 estaciones, 6
+  contaminantes, 4 franjas). «Hoy» pasa a llamarse **Estadísticas** (`/estadisticas`) y se quita el
+  CTA del asistente de la cabecera (queda la burbuja). Verificado: `tsc` y capturas claro/oscuro |
 | 2026-10-08 | **`LLMOrchestrator` descartado y reparto de la fase 7** (Carlos): `Agente` queda como único agente; el código del orquestador se conserva sin previsión de uso (§2). El despliegue del agente con Bedrock y su dockerización pasan a otro miembro del equipo. El informe de trazas cuenta aparte los turnos cancelados por el cliente (antes salían como ruta `error`). 64 tests |
 | 2026-10-08 | **Agente LLM, herramienta SQL, fase 1: datos y entorno local** (Carlos con Claude Code, rama `feature/Agente`): vista `mediciones_bloques` e índice por fecha, rol `agente_lectura` (scripts en `deploy/sql/`), DAL de solo lectura con tiempo límite y tope de filas, `--desde` y recarga con `TRUNCATE` en el cargador. 68 tests (4 nuevos) y 3 de integración con PostgreSQL, 3/3 en local; consultas típicas ~20 ms |
 | 2026-10-08 | **Agente LLM, herramienta SQL, fase 2: SQL libre y ruta de datos** (Carlos con Claude Code, rama `feature/Agente`): `consultar_datos` con redactor (`LLM_MODELO_SQL`), validador `sqlglot`, un reintento y cifras a 1 decimal; DATOS deja la frase fija y obliga la consulta; síntesis de datos con fechas y fuentes `sql`; lote `casos_datos.json` (16 casos). 82 tests (14 nuevos); probado en el Postgres local con el rol de lectura (85 ms), sin evaluar aún con Bedrock |

@@ -2,7 +2,8 @@
 
 Sistema basado en Machine Learning que analiza los datos de calidad del aire de Madrid, **detecta
 anomalías automáticamente** y permite consultarlos en lenguaje natural mediante un asistente
-conversacional con LLM y *tool use*. Los informes y el dashboard quedan pendientes.
+conversacional con LLM y *tool use*, todo ello desde un dashboard web con aviso médico visible.
+El «informe del día» lo redacta el asistente; el proveedor de LLM real está pendiente de conectar.
 
 > **Diseño completo y decisiones**: [`docs/plan_arquitectura_v3.html`](docs/plan_arquitectura_v3.html)
 > (ábrelo en el navegador). Es la referencia viva de la arquitectura.
@@ -23,11 +24,11 @@ mediciones con conocimiento de salud y normativa.
 | Detección de anomalías: Isolation Forest + baseline z-score | Distingue lo inusual de lo normal, tanto episodios ambientales como fallos de sensor |
 | Vector DB con documentos de salud y normativa | Aporta el conocimiento que las mediciones por sí solas no contienen |
 | Chatbot con *tool use*: `query_sql` y `buscar_evidencias` (citas verificables) | Traduce una pregunta en lenguaje natural a consultas sobre ambas fuentes |
-| Interfaz mínima para chatear, con aviso médico visible | Hace el sistema usable por alguien que no escribe SQL |
+| Dashboard web con aviso médico visible: anomalías por estación, series por bloques y asistente | Hace el sistema usable por alguien que no escribe SQL |
 
-**Qué queda fuera**: informes automáticos rotativos, dashboard completo con visualizaciones y
-detectores de anomalías adicionales (LSTM Autoencoder). Son mejoras posteriores: el sistema tiene
-sentido sin ellas.
+**Qué queda fuera**: informes automáticos programados (el «informe del día» del dashboard se genera
+bajo demanda) y detectores de anomalías adicionales (LSTM Autoencoder). Son mejoras posteriores: el
+sistema tiene sentido sin ellas.
 
 El criterio para aceptar o descartar una pieza es sencillo: si el usuario puede llegar a una
 respuesta útil sin ella, no es parte del MVP.
@@ -49,12 +50,10 @@ CSV histórico 2018-2026 ──▶ Notebooks 01/02/03 (en local) ──▶ model
 
 data/rag/*.md ──▶ rag.indexar (embeddings e5) ──▶ ChromaDB: corpus_rag ──▶ rag.api: evidencias D1..Dn   (Fase 2)
 
-Usuario ──▶ ApiUsuario (FastAPI) ──▶ RDS: /estaciones, /series          (Fase 4, en curso)
-                 └── /chat ──▶ LLMOrchestrator ──▶ LLM hospedado (OpenAI-compatible)
-                                     ├── query_sql ─────────▶ RDS PostgreSQL   (Fase 3)
-                                     └── buscar_evidencias ─▶ servicio RAG (rag.api, HTTP)
-
-Dashboard e informes ──▶ pendientes (consumirán solo la API)
+Usuario ──▶ Web (nginx: SPA React + proxy /api/*) ──▶ ApiUsuario (FastAPI) ──▶ RDS: /estaciones, /series   (Fase 4)
+                                                          └── /chat ──▶ LLMOrchestrator ──▶ LLM hospedado (OpenAI-compatible)
+                                                                              ├── query_sql ─────────▶ RDS PostgreSQL   (Fase 3)
+                                                                              └── buscar_evidencias ─▶ servicio RAG (rag.api, HTTP)
 ```
 
 Los **datos de contaminación viven estructurados en PostgreSQL**. La Vector DB solo contiene
@@ -228,6 +227,25 @@ El índice se reconstruye entero en cada ejecución, así que reindexar tras toc
 forma normal de actualizarlo. Detalles, variables de entorno y contrato HTTP en
 [`src/rag/README.md`](src/rag/README.md).
 
+### Dashboard web (`Web/`)
+
+Con la API levantada (opción A o B), el frontend arranca con Node ≥ 20.19:
+
+```bash
+cd Web
+npm ci
+npm run dev          # http://localhost:5173 (proxy /api → localhost:8000)
+```
+
+Sin `ORCHESTRATOR_URL`, `/chat` responde un *stub* y el asistente se puede probar entero sin LLM.
+Para el despliegue completo en contenedores (`db` + `api` + `web`, un solo origen en el puerto 8080):
+
+```bash
+docker compose up -d --build   # http://localhost:8080
+```
+
+Reglas de la interfaz, regeneración del contrato y estructura: [Web/README.md](Web/README.md).
+
 ### Comprobar los tests
 
 ```bash
@@ -246,7 +264,7 @@ pytest Agente/tests/ -v
 
 Cada servicio instala sus dependencias de test aparte
 (`ApiUsuario/requirements-dev.txt`, `LLMOrchestrator/requirements-dev.txt`, `Agente/requirements-dev.txt`).
-En CI los tres corren como jobs independientes.
+En CI corren como jobs independientes. El frontend tiene los suyos: `cd Web && npm test`.
 
 ### Entorno de pruebas local (todo con un comando)
 
@@ -385,7 +403,13 @@ aws logs tail /aws/lambda/jupiter-pipeline --since 1d --format short
 ├── ApiUsuario/                              # servicio FastAPI de usuario (Fase 4)
 │   ├── Dockerfile                           # imagen del servicio
 │   ├── src/api_usuario/                     # routers / entities / data_access / shared
-│   └── tests/                               # tests con SQLite en memoria (sin BBDD externa)
+│   ├── tests/                               # tests con SQLite en memoria (sin BBDD externa)
+│   └── Dockerfile                           # imagen del servicio `api` del compose
+├── Web/                                     # dashboard web (Fase 4) — ver Web/README.md
+│   ├── src/                                 # api (cliente tipado) / dominio / componentes / paginas
+│   ├── openapi.json                         # contrato de ApiUsuario (generado y comprobado en CI)
+│   ├── Dockerfile · nginx.conf              # imagen node → nginx con proxy /api/* → api:8000
+│   └── scripts/exportar_openapi.py          # exporta el OpenAPI desde ApiUsuario
 ├── LLMOrchestrator/                         # servicio del agente LLM (Fase 3)
 │   ├── Dockerfile                           # imagen del servicio (sin torch: el RAG va aparte)
 │   ├── src/llm_orchestrator/
@@ -396,7 +420,7 @@ aws logs tail /aws/lambda/jupiter-pipeline --since 1d --format short
 │   └── tests/                               # LLM falso con guion, sin red ni torch
 ├── deploy/                                  # infraestructura AWS (imágenes Lambda y RAG + roles IAM)
 ├── tests/                                   # tests unitarios y de integración
-├── docker-compose.yml                       # PostgreSQL 18; con --profile api, la API completa
+├── docker-compose.yml                       # PostgreSQL 18; con --profile api, la API completa + web (nginx)
 ├── entorno_local.sh                         # RAG + Phoenix + Agente + ApiUsuario en tmux, para pruebas
 ├── .env.example                             # plantilla de variables de entorno
 ├── requirements.txt
@@ -529,8 +553,11 @@ comparables entre estaciones, más el **baseline z-score** como referencia. Un d
 
 ## CI/CD y ramas
 
-- **`tests.yml`**: dos jobs — *unit* (lógica pura, sin DB) e *integración* (Postgres de servicio efímero).
-  Los tests de integración solo corren con `RUN_DB_TESTS=1` (lo pone el CI), nunca contra tu DB local por accidente.
+- **`tests.yml`**: cinco jobs — *unit* (lógica pura, sin DB), *api* (ApiUsuario sobre SQLite en
+  memoria), *orquestador* (LLM falso), *integración* (Postgres de servicio efímero; solo corre con
+  `RUN_DB_TESTS=1`, que lo pone el CI, nunca contra tu DB local por accidente) y *frontend*
+  (exporta el OpenAPI real de ApiUsuario, regenera los tipos y falla si el contrato versionado no
+  coincide; después lint, tests y `npm run build`).
 - **`ingesta_diaria.yml`**: **desactivado**. Guardaba un CSV diario en el repositorio como backup
   gratuito; con los datos en RDS (y sus backups automáticos) dejó de tener sentido, inflaba el
   historial de git y provocaba conflictos de merge en todas las ramas. Se conserva el disparo manual.
@@ -566,4 +593,5 @@ Python · pandas / NumPy · scikit-learn · PostgreSQL 18 (RDS en AWS, Docker en
 SQLAlchemy + psycopg2 · pyarrow · pytest · GitHub Actions · ChromaDB + sentence-transformers + FastAPI (RAG) ·
 FastAPI (`ApiUsuario`: estaciones, series y chat — ver [ApiUsuario/README.md](ApiUsuario/README.md);
 `LLMOrchestrator`: agente LLM con tool use — ver [LLMOrchestrator/README.md](LLMOrchestrator/README.md)) ·
-**AWS**: Lambda, ECR, S3, RDS, EventBridge Scheduler, SSM Parameter Store, CloudWatch y SNS
+**AWS**: Lambda, ECR, S3, RDS, EventBridge Scheduler, SSM Parameter Store, CloudWatch y SNS ·
+**Web**: React 19 + TypeScript (Vite), TanStack Query, Recharts, `openapi-typescript`, nginx — ver [Web/README.md](Web/README.md)
