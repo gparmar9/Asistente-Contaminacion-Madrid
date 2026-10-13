@@ -1,0 +1,14 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "ApagarSoloLaEC2DeLaAplicacion",
+      "Effect": "Allow",
+      "Action": "ec2:StopInstances",
+      "Resource": "arn:aws:ec2:eu-west-1:*:instance/*",
+      "Condition": {
+        "StringEquals": { "aws:ResourceTag/Name": "jupiter-api" }
+      }
+    }
+  ]
+}

@@ -1,9 +1,9 @@
 """Lectura y troceado del corpus RAG (`data/rag/*.md`).
 
-Es lógica pura: no importa torch ni ChromaDB. El recuento de tokens se recibe como
+El recuento de tokens se recibe como
 función (`contar_tokens`) para poder probar el troceado sin cargar el modelo.
 
-Formato de documento (ver docsLocal/plan_rag_simplificado_3_fases.md, §2.3):
+Formato de documento:
 
     ---
     titulo: Ozono troposférico (O3) y salud

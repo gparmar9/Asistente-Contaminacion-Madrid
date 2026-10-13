@@ -9,8 +9,9 @@
 #   docker compose down       # parar (los datos siguen en el volumen)
 #   docker compose down -v    # parar Y BORRAR los datos (cuidado)
 #
-# Con el perfil "api" levanta además la API completa, cada servicio en su contenedor, igual
-# que irá en la EC2 (ver la sección "La API en contenedores" del README):
+# Con el perfil "api" levanta además la API completa y la web, cada servicio en su
+# contenedor, igual que irá en la EC2 (ver la sección "La API en contenedores" del README).
+# La web es el único punto de entrada pensado para personas: http://localhost:${WEB_PORT:-8080}
 #
 #   docker compose --profile api up -d --build
 #   docker compose --profile api down
@@ -93,5 +94,35 @@ services:
     ports:
       - "127.0.0.1:8000:8000"
 
+  # Frontend (nginx): sirve el build de la SPA en / y hace de reverse proxy de
+  # /api/* -> api-usuario:8000. Punto de entrada: http://localhost:${WEB_PORT:-8080}
+  web:
+    profiles: ["api"]
+    build: ./Web
+    image: jupiter-web:local
+    container_name: jupiter_web
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:${WEB_PORT:-8080}:80"
+    depends_on:
+      - api-usuario
+
+  # Phoenix: cascada de los turnos del agente (spans OpenTelemetry). Solo con el perfil
+  # "observabilidad". El agente le envía las trazas si PHOENIX_ENDPOINT apunta aquí
+  # (http://localhost:6006/v1/traces desde el equipo). UI en http://localhost:6006.
+  #
+  #   docker compose --profile observabilidad up -d phoenix
+  phoenix:
+    profiles: ["observabilidad"]
+    image: arizephoenix/phoenix:version-20.19.0
+    restart: unless-stopped
+    environment:
+      PHOENIX_WORKING_DIR: /mnt/data   # SQLite de Phoenix, en el volumen
+    volumes:
+      - phoenix_data:/mnt/data
+    ports:
+      - "127.0.0.1:6006:6006"
+
 volumes:
   postgres_data:
+  phoenix_data:

@@ -2,7 +2,8 @@
 
 Sistema basado en Machine Learning que analiza los datos de calidad del aire de Madrid, **detecta
 anomalías automáticamente** y permite consultarlos en lenguaje natural mediante un asistente
-conversacional con LLM y *tool use*. Los informes y el dashboard quedan pendientes.
+conversacional con LLM y *tool use*, todo ello desde un dashboard web con aviso médico visible.
+El «informe del día» lo redacta el asistente; el proveedor de LLM real está pendiente de conectar.
 
 > **Diseño completo y decisiones**: [`docs/plan_arquitectura_v3.html`](docs/plan_arquitectura_v3.html)
 > (ábrelo en el navegador). Es la referencia viva de la arquitectura.
@@ -23,11 +24,11 @@ mediciones con conocimiento de salud y normativa.
 | Detección de anomalías: Isolation Forest + baseline z-score | Distingue lo inusual de lo normal, tanto episodios ambientales como fallos de sensor |
 | Vector DB con documentos de salud y normativa | Aporta el conocimiento que las mediciones por sí solas no contienen |
 | Chatbot con *tool use*: `query_sql` y `buscar_evidencias` (citas verificables) | Traduce una pregunta en lenguaje natural a consultas sobre ambas fuentes |
-| Interfaz mínima para chatear, con aviso médico visible | Hace el sistema usable por alguien que no escribe SQL |
+| Dashboard web con aviso médico visible: anomalías por estación, series por bloques y asistente | Hace el sistema usable por alguien que no escribe SQL |
 
-**Qué queda fuera**: informes automáticos rotativos, dashboard completo con visualizaciones y
-detectores de anomalías adicionales (LSTM Autoencoder). Son mejoras posteriores: el sistema tiene
-sentido sin ellas.
+**Qué queda fuera**: informes automáticos programados (el «informe del día» del dashboard se genera
+bajo demanda) y detectores de anomalías adicionales (LSTM Autoencoder). Son mejoras posteriores: el
+sistema tiene sentido sin ellas.
 
 El criterio para aceptar o descartar una pieza es sencillo: si el usuario puede llegar a una
 respuesta útil sin ella, no es parte del MVP.
@@ -49,12 +50,10 @@ CSV histórico 2018-2026 ──▶ Notebooks 01/02/03 (en local) ──▶ model
 
 data/rag/*.md ──▶ rag.indexar (embeddings e5) ──▶ ChromaDB: corpus_rag ──▶ rag.api: evidencias D1..Dn   (Fase 2)
 
-Usuario ──▶ ApiUsuario (FastAPI) ──▶ RDS: /estaciones, /series          (Fase 4, en curso)
-                 └── /chat ──▶ LLMOrchestrator ──▶ LLM hospedado (OpenAI-compatible)
-                                     ├── query_sql ─────────▶ RDS PostgreSQL   (Fase 3)
-                                     └── buscar_evidencias ─▶ servicio RAG (rag.api, HTTP)
-
-Dashboard e informes ──▶ pendientes (consumirán solo la API)
+Usuario ──▶ Web (nginx: SPA React + proxy /api/*) ──▶ ApiUsuario (FastAPI) ──▶ RDS: /estaciones, /series   (Fase 4)
+                                                          └── /chat ──▶ LLMOrchestrator ──▶ LLM hospedado (OpenAI-compatible)
+                                                                              ├── query_sql ─────────▶ RDS PostgreSQL   (Fase 3)
+                                                                              └── buscar_evidencias ─▶ servicio RAG (rag.api, HTTP)
 ```
 
 Los **datos de contaminación viven estructurados en PostgreSQL**. La Vector DB solo contiene
@@ -187,6 +186,7 @@ aws s3 cp s3://jupiter-calidad-aire-madrid/data/processed/ data/processed/ --rec
 
 ```bash
 python src/etl/cargar_resumen_ml.py     # ~1,27 M filas vía COPY
+# python src/etl/cargar_resumen_ml.py --desde 2024-01-01   # solo desde esa fecha
 python src/etl/cargar_estaciones.py     # catálogo de las 24 estaciones
 ```
 
@@ -227,6 +227,25 @@ El índice se reconstruye entero en cada ejecución, así que reindexar tras toc
 forma normal de actualizarlo. Detalles, variables de entorno y contrato HTTP en
 [`src/rag/README.md`](src/rag/README.md).
 
+### Dashboard web (`Web/`)
+
+Con la API levantada (opción A o B), el frontend arranca con Node ≥ 20.19:
+
+```bash
+cd Web
+npm ci
+npm run dev          # http://localhost:5173 (proxy /api → localhost:8000)
+```
+
+Sin `ORCHESTRATOR_URL`, `/chat` responde un *stub* y el asistente se puede probar entero sin LLM.
+Para el despliegue completo en contenedores (`db` + `api` + `web`, un solo origen en el puerto 8080):
+
+```bash
+docker compose --profile api up -d --build   # http://localhost:8080
+```
+
+Reglas de la interfaz, regeneración del contrato y estructura: [Web/README.md](Web/README.md).
+
 ### Comprobar los tests
 
 ```bash
@@ -238,11 +257,81 @@ pytest ApiUsuario/tests/ -v
 
 # Tests del orquestador LLM (LLM falso con guion, sin red ni torch):
 pytest LLMOrchestrator/tests/ -v
+
+# Tests del agente nuevo (LLM falso con guion y RAG fingido, sin red):
+pytest Agente/tests/ -v
 ```
 
 Cada servicio instala sus dependencias de test aparte
-(`ApiUsuario/requirements-dev.txt`, `LLMOrchestrator/requirements-dev.txt`).
-En CI los tres corren como jobs independientes.
+(`ApiUsuario/requirements-dev.txt`, `LLMOrchestrator/requirements-dev.txt`, `Agente/requirements-dev.txt`).
+En CI corren como jobs independientes. El frontend tiene los suyos: `cd Web && npm test`.
+
+### Atajos con `make` (Windows y Linux)
+
+Un [`Makefile`](Makefile) en la raíz levanta cada servicio, o todo junto, en **un solo terminal**:
+espera a que cada dependencia responda, muestra la salida de cada servicio con su prefijo y
+**Ctrl+C para todo**. En Windows hace falta GNU Make: `winget install ezwinports.make` (y
+reabrir el terminal).
+
+```bash
+make                 # lista de comandos
+make install         # la primera vez: venv de la raíz + npm ci de la web
+make frontend        # PostgreSQL + ApiUsuario + web -> http://localhost:5173
+make dev             # todo: + Phoenix, RAG y Agente (chat completo)
+make rag             # o un servicio suelto: db, phoenix, rag, agente, api-usuario, web
+make preguntar P="¿Qué efectos tiene el NO2 en la salud?"   # el chat desde la terminal
+make preguntar P="¿Y en los niños?" SESION=<id>             # seguir la conversación (CRUDO=1: SSE tal cual)
+make test            # tests de la raíz, ApiUsuario, Agente y web
+make stop            # parar PostgreSQL y Phoenix
+```
+
+- **`make dev` necesita** `make install-rag` (torch, ~1-2 GB), `make install-agente` y
+  `Agente/.env` (copia de `Agente/.env.example`). Con Bedrock, antes de arrancar comprueba que las
+  credenciales de AWS valen: las del perfil de `AWS_PROFILE` o, si no hay, las variables `AWS_*`
+  del terminal, que tienen que estar en **esa misma terminal**. Phoenix (trazas) queda en
+  http://localhost:6006.
+- **Base de datos:** con `make frontend`/`make dev`, ApiUsuario usa la `DATABASE_URL` del `.env` de
+  la raíz (la misma de la que `docker-compose` saca las credenciales). Para usar RDS, define
+  `DATABASE_URL` en el terminal antes de `make` (Opción A): tiene prioridad y no se levanta Docker.
+  El agente lee la suya de `Agente/.env`.
+- Los servicios arrancan con `--reload`: al guardar un `.py` o un `.tsx` se recargan solos.
+- Otro Python para la raíz: `make frontend PY=env-pontia-ml/bin/python`.
+
+### Entorno de pruebas local (todo con un comando)
+
+[`entorno_local.sh`](entorno_local.sh) levanta el RAG, Phoenix, el agente y `ApiUsuario` sin
+construir imágenes, cada uno en un panel de una sesión de **tmux**, más un panel libre para las
+consultas. El modelo y la configuración del agente salen siempre de `Agente/.env`.
+
+Requisitos: `tmux`, el entorno `env-pontia-ml`, `Agente/.venv` y `Agente/.env` rellenado. Docker
+Desktop es opcional (sin él no hay Phoenix y las trazas solo van al JSONL). Con Bedrock, las
+credenciales del perfil de `Agente/.env` vivas: el script lo comprueba antes de arrancar.
+
+```bash
+./entorno_local.sh            # levantar todo y entrar en la sesión (el RAG tarda ~1 min)
+./entorno_local.sh estado     # qué responde
+./entorno_local.sh preguntar "¿Qué efectos tiene el NO2 en la salud?"
+./entorno_local.sh preguntar "¿Y en los niños?" <session_id>   # seguir la conversación
+./entorno_local.sh preguntar "Hola" --crudo                    # el SSE tal cual
+./entorno_local.sh parar      # parar todo (también Phoenix)
+```
+
+| Panel | Qué corre | Puerto |
+|-|-|-|
+| arriba izquierda | RAG (`rag.api`, umbral 0,1754) | 8010 |
+| arriba derecha | Agente (espera a que el RAG responda) | 8200 |
+| abajo izquierda | `ApiUsuario` con `AGENTE_URL` (espera al agente) | 8000 |
+| abajo derecha | consultas: al estar todo listo muestra `estado` | |
+
+Tmux en tres atajos: **clic** en un panel para moverse (o `Ctrl+b` y una flecha); `Ctrl+b` y `z`
+amplía o recupera el panel actual; `Ctrl+b` y `d` sale **sin parar nada** (`./entorno_local.sh`
+vuelve a entrar). Para desplazarse por el log, la rueda del ratón (`q` para volver).
+Si un servicio se cae o quieres reiniciarlo tras cambiar código: en su panel, `Ctrl+C`, flecha
+arriba y Enter.
+
+- `ApiUsuario` arranca sin base de datos (`/estaciones` fallará). Para darle una:
+  `DATABASE_URL=postgresql://... ./entorno_local.sh`.
+- Si dice «puertos ocupados», queda un servicio de otra sesión: `ss -ltnp` dice cuál.
 
 ### La API en contenedores (como irá en la EC2)
 
@@ -345,7 +434,13 @@ aws logs tail /aws/lambda/jupiter-pipeline --since 1d --format short
 ├── ApiUsuario/                              # servicio FastAPI de usuario (Fase 4)
 │   ├── Dockerfile                           # imagen del servicio
 │   ├── src/api_usuario/                     # routers / entities / data_access / shared
-│   └── tests/                               # tests con SQLite en memoria (sin BBDD externa)
+│   ├── tests/                               # tests con SQLite en memoria (sin BBDD externa)
+│   └── Dockerfile                           # imagen del servicio `api` del compose
+├── Web/                                     # dashboard web (Fase 4) — ver Web/README.md
+│   ├── src/                                 # api (cliente tipado) / dominio / componentes / paginas
+│   ├── openapi.json                         # contrato de ApiUsuario (generado y comprobado en CI)
+│   ├── Dockerfile · nginx.conf              # imagen node → nginx con proxy /api/* → api:8000
+│   └── scripts/exportar_openapi.py          # exporta el OpenAPI desde ApiUsuario
 ├── LLMOrchestrator/                         # servicio del agente LLM (Fase 3)
 │   ├── Dockerfile                           # imagen del servicio (sin torch: el RAG va aparte)
 │   ├── src/llm_orchestrator/
@@ -356,7 +451,8 @@ aws logs tail /aws/lambda/jupiter-pipeline --since 1d --format short
 │   └── tests/                               # LLM falso con guion, sin red ni torch
 ├── deploy/                                  # infraestructura AWS (imágenes Lambda y RAG + roles IAM)
 ├── tests/                                   # tests unitarios y de integración
-├── docker-compose.yml                       # PostgreSQL 18; con --profile api, la API completa
+├── docker-compose.yml                       # PostgreSQL 18; con --profile api, la API completa + web (nginx)
+├── entorno_local.sh                         # RAG + Phoenix + Agente + ApiUsuario en tmux, para pruebas
 ├── .env.example                             # plantilla de variables de entorno
 ├── requirements.txt
 ├── requirements-rag.txt                     # dependencias extra de la Fase 2 (RAG), versiones fijadas
@@ -436,7 +532,7 @@ data/rag/*.md ──▶ rag.corpus ──▶ rag.embeddings ──▶ ChromaDB (
 | [`embeddings.py`](src/rag/embeddings.py) | Modelo `intfloat/multilingual-e5-base` (512 tokens), recuento con el tokenizer real y colección Chroma con métrica **coseno**. |
 | [`indexar.py`](src/rag/indexar.py) | `python -m rag.indexar`: reconstruye el índice entero (**idempotente**). Calcula los embeddings antes de borrar el índice anterior y guarda modelo, commit del corpus y fecha. |
 | [`buscar.py`](src/rag/buscar.py) | `buscar(consulta, k, tema)`: los *k* fragmentos más cercanos. Rechaza un índice construido con otro modelo. |
-| [`evidencias.py`](src/rag/evidencias.py) | Filtra por umbral de distancia (0,22, provisional), numera `D1..Dn`, valida que cada afirmación del modelo cite IDs existentes y añade avisos y bibliografía. |
+| [`evidencias.py`](src/rag/evidencias.py) | Filtra por umbral de distancia (0,1754, calibrado con `rag.evaluar`), numera `D1..Dn`, valida que cada afirmación del modelo cite IDs existentes y añade avisos y bibliografía. |
 | [`api.py`](src/rag/api.py) | Servicio FastAPI: `/rag/evidencias`, `/rag/validar`, `/rag/herramienta` y `/salud`. Es lo que consume `LLMOrchestrator` por HTTP (tool `buscar_evidencias` de la Fase 3). |
 
 El contrato completo para la API de chat (flujo en tres pasos, esquema de salida del modelo,
@@ -488,8 +584,11 @@ comparables entre estaciones, más el **baseline z-score** como referencia. Un d
 
 ## CI/CD y ramas
 
-- **`tests.yml`**: dos jobs — *unit* (lógica pura, sin DB) e *integración* (Postgres de servicio efímero).
-  Los tests de integración solo corren con `RUN_DB_TESTS=1` (lo pone el CI), nunca contra tu DB local por accidente.
+- **`tests.yml`**: cinco jobs — *unit* (lógica pura, sin DB), *api* (ApiUsuario sobre SQLite en
+  memoria), *orquestador* (LLM falso), *integración* (Postgres de servicio efímero; solo corre con
+  `RUN_DB_TESTS=1`, que lo pone el CI, nunca contra tu DB local por accidente) y *frontend*
+  (exporta el OpenAPI real de ApiUsuario, regenera los tipos y falla si el contrato versionado no
+  coincide; después lint, tests y `npm run build`).
 - **`ingesta_diaria.yml`**: **desactivado**. Guardaba un CSV diario en el repositorio como backup
   gratuito; con los datos en RDS (y sus backups automáticos) dejó de tener sentido, inflaba el
   historial de git y provocaba conflictos de merge en todas las ramas. Se conserva el disparo manual.
@@ -525,4 +624,5 @@ Python · pandas / NumPy · scikit-learn · PostgreSQL 18 (RDS en AWS, Docker en
 SQLAlchemy + psycopg2 · pyarrow · pytest · GitHub Actions · ChromaDB + sentence-transformers + FastAPI (RAG) ·
 FastAPI (`ApiUsuario`: estaciones, series y chat — ver [ApiUsuario/README.md](ApiUsuario/README.md);
 `LLMOrchestrator`: agente LLM con tool use — ver [LLMOrchestrator/README.md](LLMOrchestrator/README.md)) ·
-**AWS**: Lambda, ECR, S3, RDS, EventBridge Scheduler, SSM Parameter Store, CloudWatch y SNS
+**AWS**: Lambda, ECR, S3, RDS, EventBridge Scheduler, SSM Parameter Store, CloudWatch y SNS ·
+**Web**: React 19 + TypeScript (Vite), TanStack Query, Recharts, `openapi-typescript`, nginx — ver [Web/README.md](Web/README.md)
