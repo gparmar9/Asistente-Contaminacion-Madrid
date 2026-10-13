@@ -3,7 +3,7 @@ from datetime import date
 
 import pytest
 
-from agente.business.periodos import resolver
+from agente.business.periodos import menciona_tiempo, resolver
 
 HOY, PRIMERA, ULTIMA = date(2026, 5, 1), date(2024, 4, 30), date(2026, 4, 30)
 
@@ -49,3 +49,15 @@ def test_expresion_se_resuelve_con_las_definiciones_del_proyecto(pregunta, rango
         return
     assert len(periodos) == 1
     assert periodos[0].rangos == tuple((_d(i), _d(f)) for i, f in rangos) and periodos[0].bloque == bloque
+
+
+# Sin periodo reconocido: ¿pide alguno? Si no, el validador rechaza los filtros de fecha (todo el histórico)
+@pytest.mark.parametrize("pregunta, menciona", [
+    ("¿Cuánto cambian los niveles entre días laborables y fines de semana según el distrito?", False),
+    ("¿Qué estaciones muestran el patrón más fuerte de NO2 en hora punta?", False),
+    ("¿Qué zona de Madrid me recomendarías para vivir si tengo alergias?", False),
+    ("¿Cómo estuvo el NO2 el invierno pasado?", True),
+    ("¿Y durante la primavera?", True),
+])
+def test_mencion_de_tiempo_sin_periodo_reconocido(pregunta, menciona):
+    assert menciona_tiempo(pregunta) is menciona

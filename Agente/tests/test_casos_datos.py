@@ -99,6 +99,7 @@ async def test_periodo_fuera_de_las_mediciones_cierra_con_frase_sin_redactor(bd_
 SQL_ULTIMO_DIA = ("SELECT contaminante, nombre_estacion, SUM(media * n_horas) / SUM(n_horas) AS media "
                   "FROM mediciones_bloques WHERE fecha = '2026-04-30' AND contaminante IN ('NO2', 'PM10') "
                   "GROUP BY contaminante, nombre_estacion ORDER BY contaminante, media DESC")
+SQL_HISTORICO = SQL_ULTIMO_DIA.replace("fecha = '2026-04-30' AND ", "")  # mix-02 no pide periodo
 SINTESIS_MIXTA = ("Son datos del 30 de abril de 2026, el último día disponible, no de esta tarde: el NO2 más "
                   "alto fue el de Plaza Elíptica (45,0 µg/m³) y el PM10, el de Plaza de España (30,0 µg/m³).")
 JSON_NO2 = json.dumps(SALIDA_NO2, ensure_ascii=False)
@@ -112,12 +113,13 @@ def _bucle_mixto(bd, guion_sql, guion):
     return llm, Bucle(llm, [documentos, datos], llm_clasificador=clasificador)
 
 
-@pytest.mark.parametrize("id_caso, llama_el_modelo", [("mix-01", True), ("mix-02", False)])
-async def test_caso_mixto_con_respuesta_compuesta(bd_mediciones, id_caso, llama_el_modelo):
+@pytest.mark.parametrize("id_caso, llama_el_modelo, sql", [("mix-01", True, SQL_ULTIMO_DIA),
+                                                           ("mix-02", False, SQL_HISTORICO)])
+async def test_caso_mixto_con_respuesta_compuesta(bd_mediciones, id_caso, llama_el_modelo, sql):
     caso, esperado = CASOS[id_caso], CASOS[id_caso]["esperado"]
     pedidas = [llamada(rag.NOMBRE, {"pregunta": caso["pregunta"], "tema": "salud"}, "c1",
                        (sql_libre.NOMBRE, {"pregunta": caso["pregunta"]}, "c2"))] if llama_el_modelo else []
-    llm, bucle = _bucle_mixto(bd_mediciones, [texto(SQL_ULTIMO_DIA)],
+    llm, bucle = _bucle_mixto(bd_mediciones, [texto(sql)],
                               [*pedidas, texto("Texto libre que se descarta."), texto(SINTESIS_MIXTA), texto(JSON_NO2)])
     r = await bucle.responder(caso["pregunta"])
 

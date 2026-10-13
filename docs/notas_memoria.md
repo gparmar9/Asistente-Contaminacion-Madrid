@@ -1042,47 +1042,150 @@ sube de 4 a 6/11 en datos; Ministral · Qwen3 Coder es la primera con 3/3 en lí
 | gpt-oss-120b · Qwen3 Coder | 3 (+4 parciales) | 1/2 | 2/3 | 8/11 | 8,1 s | 0,039 $ |
 | Ministral · Qwen3 Coder | 5 (+1 parcial) | 0/2 | 3/3 | 8/10 | 5,4 s | 0,030 $ |
 
-**Hallazgos y estado actual (2026-10-09).** Los fallos aparecen tanto al preparar la consulta como
-al redactar la respuesta. En la mejor combinación quedan cinco casos de datos sin acertar: un
-`LIMIT 1` que recorta el ranking, la definición de hora punta, un agregado de toda la ciudad, la
-regla de contaminantes por defecto aplicada a anomalías y el clasificador en dat-10.
+**Arreglos deterministas y cuarto lote (2026-10-12).** Antes de comparar con el catálogo se dejó el
+SQL libre en su mejor versión con reglas de código, no de prompt: el validador sustituye cualquier
+`LIMIT` del modelo por el tope de filas (el orden lo da el `ORDER BY`), rechaza `AVG(media)` sobre la
+vista y, si la pregunta no pide periodo (ni reconocido ni mencionado), rechaza todo filtro de fecha y
+se consulta el histórico completo. Además, la descripción de la herramienta ya no dice «por día y
+bloque» y el «NO2 y PM10 por defecto» no se aplica a anomalías ni a qué estaciones miden. 133 tests.
+Mismas tres combinaciones; coste 0,09 $. Ninguna cumple el criterio. Veredictos **[por confirmar en
+la revisión humana]**. Detalle: `resultados/revision_featuresql4_20261012.md`.
+
+| Conversación · redactor | Datos (/11) | Mixtas | Límites | SQL a la 1.ª | Turno (mediana) | Coste lote |
+|-|-|-|-|-|-|-|
+| gpt-oss-120b · mismo | 8 (+1 parcial) | 1/2 | 2/3 | 10/10 | 10,6 s | 0,033 $ |
+| gpt-oss-120b · Qwen3 Coder | 7 | 1/2 | 2/3 | 7/10 | 6,0 s | 0,030 $ |
+| Ministral · Qwen3 Coder | 6 (+2 parciales) | 1/2 | 2/3 | 8/10 | 5,6 s | 0,028 $ |
+
+**Hallazgos y estado actual (2026-10-12).** La mejor combinación sube de 6 a 8/11 (lo estimado tras
+el tercer lote) y ya no tiene ningún SQL inválido ni recortado. Los casos que quedan no son de forma
+del SQL: la definición de hora punta (mañana − resto), una diferencia que la síntesis no puede
+calcular, el clasificador en dat-10, la mixta que no dice «ayer» y lim-02, que no dice que el SO2 no
+se mide. Con Ministral, los fallos vienen de la pregunta reescrita y de la síntesis, que inventan
+contaminantes y periodos.
 
 | Problema | Corrección o pendiente |
 |---|---|
 | El límite de 60 filas impedía detectar el recorte | Corregido antes del segundo lote: se permite leer una fila adicional |
 | El modelo cambiaba los periodos al reformular la pregunta | Periodos calculados en Python antes del segundo lote |
 | Agrupaciones incorrectas, estaciones copiadas y errores de SQL | Prompt mejorado; quedó un error de PostgreSQL en el segundo lote |
-| La descripción de la herramienta inducía filtros de anomalías y contaminantes no pedidos | Descripción simplificada: el filtro de anomalías desaparece en el tercer lote; gpt-oss sigue copiando «por estación, distrito, día y bloque horario» y pide filas sin agregar. Pendiente |
-| Una media mezclaba varios contaminantes | El validador la rechaza; resuelto en el tercer lote. Queda la media sin ponderar (`AVG(media)`), que el validador no para. Pendiente |
+| La descripción de la herramienta inducía filtros de anomalías y contaminantes no pedidos | Descripción simplificada en dos pasos; resuelto en el cuarto lote con gpt-oss. Qwen3 Coder aún devuelve filas sin agregar |
+| Una media mezclaba varios contaminantes o no estaba ponderada | El validador rechaza las dos; resuelto en el cuarto lote |
 | La síntesis inventaba el periodo o decía «0 días» fuera del histórico | Periodo explícito y frase fija para fechas sin cobertura; resuelto en el tercer lote |
-| Ministral inventa estaciones o periodos al reformular | Pendiente |
-| `LIMIT 1` pierde parte del ranking; se interpreta mal la comparación mañana − resto | Pendiente; el `LIMIT 1` falla dat-01 en las tres combinaciones del tercer lote |
-| «NO2 y PM10 por defecto» aplicado a preguntas de anomalías: pierde una anomalía de O3 | Pendiente (tercer lote) |
+| Ministral inventa estaciones o periodos al reformular | Sin periodo en la pregunta, el validador rechaza las fechas inventadas (cuarto lote). Sigue inventando contaminantes y, en la síntesis, el periodo. Pendiente |
+| `LIMIT 1` pierde parte del ranking | El validador impone siempre el tope; resuelto en el cuarto lote |
+| Se interpreta mal la comparación mañana − resto (dat-05) | Pendiente en los cuatro lotes |
+| «NO2 y PM10 por defecto» aplicado a preguntas de anomalías: pierde una anomalía de O3 | Regla con excepciones; resuelto en el cuarto lote |
 | La síntesis inventa mediciones cuando no hay filas | lim-02 sin cifras inventadas en el tercer lote; Ministral inventa con filas que no responden a la pregunta (mismo valor para dos años). Pendiente |
 | Las respuestas mixtas confunden datos recientes con actuales y contienen avisos contradictorios | Pendiente |
-| El clasificador varía en preguntas fuera de las 29 originales | Pendiente |
+| El clasificador varía en preguntas fuera de las 29 originales | Pendiente: dat-10 sale documental en 3 de 3 en el cuarto lote |
+| Dos SQL rechazados acaban en la frase de «no puedo consultar las mediciones», la de base caída | Pendiente (cuarto lote) |
 
 **Validación de los últimos cambios.** 126 tests del agente y la integración con PostgreSQL en
 verde; las 15 consultas de referencia pasan el validador. El tercer lote confirma la mejora con
 Bedrock (de 4 a 6/11 en la mejor combinación), insuficiente para el criterio.
 
-**Límites.** El control temporal solo comprueba fechas literales, no filtros por `ano`/`mes` ni
-aritmética de fechas. Si no reconoce el periodo, el modelo aún puede elegirlo; la respuesta indica
+**Límites.** Con periodo calculado, el control temporal solo comprueba fechas literales, no filtros
+por `ano`/`mes` ni aritmética de fechas. Sin periodo, una heurística decide si la pregunta menciona
+tiempo («el invierno pasado»); si no, se rechaza cualquier filtro de fecha. Si menciona un periodo que
+no reconoce, el modelo aún puede elegirlo; la respuesta indica
 «no calculado» cuando filtra fechas, o «todo el histórico» cuando no las filtra. La comprobación
 `cifras` tampoco garantiza fidelidad: dejó pasar «21 días» cuando las filas decían 22.
 
 **Alternativa: catálogo de consultas fijas.** Evitaría algunos errores del SQL, pero seguiría
 necesitando interpretar la pregunta y redactar la respuesta. Se corrigen primero esas partes
 compartidas; el catálogo se reconsiderará si la siguiente evaluación no alcanza el criterio.
-Tras el tercer lote, cuatro de los cinco fallos de la mejor combinación son de forma del SQL, que el
-catálogo sí resolvería; el clasificador y la síntesis seguirían igual. Decisión pendiente.
+Tras el tercer lote, cuatro de los cinco fallos de la mejor combinación eran de forma del SQL; los
+arreglos deterministas resolvieron tres (dat-01, dat-07 y dat-09). Decidido el 2026-10-12: construir el
+catálogo y comparar las dos opciones con el mismo lote para la memoria. El catálogo puede resolver
+dat-05 y dat-06 si sus consultas calculan la diferencia; el clasificador y la síntesis siguen igual.
+
+**Catálogo cerrado (2026-10-12; sin evaluar aún con Bedrock).** Segunda forma de obtener el SQL,
+seleccionable con `HERRAMIENTA_DATOS=libre|catalogo`. Bucle, periodos calculados en Python, síntesis
+y comprobaciones no cambian: solo el paso que produce el SQL, para que la comparación mida eso. Un
+LLM (el mismo de `LLM_MODELO_SQL`) devuelve en JSON una de 7 consultas y sus parámetros, y el código
+construye el SQL: ranking, serie (día, mes o año), patrón horario (un bloque frente al resto, con la
+diferencia), laborables frente a fin de semana (con la diferencia), días por encima de un umbral,
+anomalías y estaciones. Reglas que en el libre dependían del prompt pasan a código: media ponderada,
+NO2 y PM10 por defecto solo en las consultas de niveles, días con dato, diferencias ya calculadas y
+lugares resueltos contra la lista de estaciones. Un contaminante que no se mide (SO2) o un lugar
+inexistente da un resultado vacío con una nota, no un fallo. Verificado sin LLM: con la elección
+correcta, las consultas del lote reproducen el gold en el Postgres local (dat-05 +8,1; dat-06 6,8;
+dat-07 83,5 → 85,3; dat-08 22 días; mix-01 11,0 y 19,0). 143 tests; las 7 consultas corren en SQLite
+y en PostgreSQL.
+
+| Alternativa | Por qué no |
+|-|-|
+| Catálogo como herramienta con parámetros para el modelo de conversación (diseño de `LLMOrchestrator` y del plan inicial) | Ahorra una llamada, pero el modelo volvería a pasar fechas (justo lo que resolvieron los periodos en Python), la consulta que lanza el código cuando el modelo no consulta no sabría rellenar los parámetros y la comparación mezclaría dos cambios |
+| Selector con llamada a herramienta en vez de JSON en texto | Exige que el modelo de Bedrock admita forzar la herramienta; el JSON sirve para todos y se valida igual |
+
+Prueba de humo con Bedrock (2026-10-12, gpt-oss-120b como selector): 8 de 8 preguntas eligen la
+consulta esperada a la primera, en 1 a 2 s, con las cifras del gold; dos turnos completos (hora punta y
+SO2) responden bien por 0,003 $. No sustituye a la evaluación.
+
+**Lote nuevo, no visto (2026-10-12).** Las 7 consultas y cuatro rondas de arreglos salieron de los
+mismos 16 casos: compararlas solo con ese lote favorecería al catálogo y mediría arreglos hechos a
+medida. Se preparó un segundo lote de 28 casos que no se usó para ajustar nada: 20 de datos (12 caben
+en el catálogo con otros parámetros, 4 en parte, 2 no: máximo horario y porcentaje de anomalías, y 2
+de robustez: periodo no reconocido y lugar ambiguo), 3 mixtas y 5 límites. Cada caso dice si cabe en el
+catálogo, para separar el resultado. Gold calculado en PostgreSQL local con media ponderada `[pendiente
+de revisión humana]`. Incluye respuestas que no son una cifra: dos estaciones prácticamente empatadas
+(21,3 frente a 21,2) y un recuento cuyo resultado correcto es «ninguna» (media anual de NO2 > 40 en 2025).
+
+**Catálogo en el lote nuevo (2026-10-12; veredictos en borrador, pendientes de revisión humana).**
+Tres combinaciones (modelo de conversación · selector), 28 casos cada una, 0,146 $ en total:
+
+| Combinación | Datos sí / parcial / no (20) | Datos que caben en el catálogo (14) | Mixtas | Límites | Turno mediana |
+|-|-|-|-|-|-|
+| gpt-oss-120b · mismo | 12 / 4 / 4 | 11 / 1 / 2 | 0/3 (3 parciales) | 2/5 | 7,2 s |
+| gpt-oss-120b · Qwen3 Coder | 9 / 6 / 5 | 9 / 2 / 3 | 0/3 (3 parciales) | 4/5 | 6,4 s |
+| Ministral · Qwen3 Coder | 9 / 1 / 10 | 9 / 1 / 4 | 0/3 (3 parciales) | 4/5 | 4,2 s |
+
+Las 77 selecciones fueron JSON válido con una consulta existente a la primera. Las preguntas de cifras
+simples (8 de 20) aciertan en las tres combinaciones, también con Ministral, que en el SQL libre
+inventaba contaminantes y periodos: la selección no los admite. Con gpt-oss como selector, 11 de las 12
+preguntas que caben y pasan el clasificador aciertan. Los fallos que quedan casi no son del catálogo: el
+clasificador saca de la ruta de datos cuatro preguntas nuevas («¿cuántas anomalías detectó el modelo…?»
+→ fuera de alcance; «¿qué contaminantes mide la estación…?» → documental), en las mixtas la parte
+documental contradice a la de datos (0/3 en todas) y, cuando la consulta no responde exactamente,
+Ministral inventa en la síntesis («18 estaciones superaron el límite anual»; porcentajes del 120 %)
+mientras gpt-oss dice que no puede. Del catálogo: Qwen3 Coder como selector confunde lugares (Vallecas →
+Villaverde) y periodos; una estación que no mide un contaminante da «sin datos» en vez de «no se mide»;
+las series de más de 60 filas se truncan.
+
+**SQL libre en el lote nuevo y comparación (2026-10-12; veredictos en borrador, pendientes de revisión
+humana).** Mismas tres combinaciones y mismo lote, con el SQL libre del cuarto lote sin cambios, 0,147 $:
+
+| Combinación | Libre: datos sí / parcial / no (20) | Catálogo (20) | Libre en lo que cabe (14) | Catálogo en lo que cabe (14) | Límites libre / catálogo |
+|-|-|-|-|-|-|
+| gpt-oss-120b · mismo | **15** / 3 / 2 | 12 / 4 / 4 | 10 / 3 / 1 | 11 / 1 / 2 | 2/5 · 2/5 |
+| gpt-oss-120b · Qwen3 Coder | **16** / 2 / 2 | 9 / 6 / 5 | 10 / 2 / 2 | 9 / 2 / 3 | 2/5 · 4/5 |
+| Ministral · Qwen3 Coder | 10 / 1 / 9 | 9 / 1 / 10 | 7 / 1 / 6 | **9** / 1 / 4 | 2/5 · 4/5 |
+
+Mixtas 0/3 en los seis lotes. Coste y latencia equivalentes (el selector tarda lo que el redactor).
+Lectura: **en preguntas no vistas, el SQL libre con gpt-oss responde más**; la diferencia sale de las 6
+preguntas que no caben en las 7 formas del catálogo (máximo horario, porcentaje de anomalías, media por
+franja, diferencia entre dos veranos), que el libre resuelve y el catálogo no. En lo que cabe, empatan.
+**El catálogo protege con modelos débiles**: con Ministral acierta más en lo que cabe y sus notas en código
+(«no se mide», «no hay estación») resuelven límites que el libre responde como «no hay datos». Fallos
+propios del libre en este lote: la síntesis lee el código `dia_semana` (0 = lunes) como 0 = domingo; el
+periodo que elige el SQL cuando Python no lo reconoce no vuelve a la síntesis; Qwen3 Coder omite una regla
+del prompt (anomalías sin cobertura mínima). Lo que no depende del SQL (clasificador, mixtas, lugares
+ambiguos) falla igual en las dos. Cautela: una pasada por combinación; diferencias de 1 o 2 casos están
+dentro de la variación del clasificador.
+
+Límites: el selector sigue siendo un LLM y puede elegir la consulta equivocada; una pregunta que no
+encaja en las 7 formas se responde con la más parecida. No cambia el clasificador (dat-10), las
+mixtas ni la síntesis.
 
 **Lecciones.** Comparar respuestas con resultados de referencia descubrió fallos que no aparecían
 en tests con pocas filas. El modelo más caro no mejoró los resultados: cambiar de modelo no bastó.
 Además, el LLM puede copiar la descripción de una herramienta como si fuera una instrucción.
-Tres rondas de arreglos guiadas por los mismos 16 casos arriesgan sobreajustar el sistema al guion.
+Cuatro rondas de arreglos guiadas por los mismos 16 casos arriesgan sobreajustar el sistema al guion:
+el 8/11 mide menos de lo que parece. Las reglas en código (tope de filas, media ponderada, sin periodo
+= histórico) funcionaron mejor que las del prompt: el modelo las puede ignorar y el validador no.
 
-**Pendiente:** decidir entre otra ronda de arreglos o el catálogo, elegir qué
+**Pendiente:** decidir entre SQL libre, catálogo o híbrido (catálogo como paso previo de comprobación de lugar y contaminante) con la comparación de arriba, elegir qué
 comprobaciones bloquean respuestas e incorporar las herramientas de ML. Otro miembro del equipo
 se encarga del contenedor y el despliegue en EC2 con Bedrock.
 
@@ -1675,6 +1778,12 @@ la enciende a mano para trabajar o hacer una demo.
 | 2026-10-09 | **Segunda evaluación SQL** (Carlos con Claude Code): Tres combinaciones: todas logran 4/11 en datos. Mejoran periodos, aviso de recorte y SQL; persisten errores al reformular y redactar. Coste estimado: 0,10 $. Veredictos pendientes de revisión humana. |
 | 2026-10-09 | **Correcciones tras la segunda evaluación** (Carlos con Claude Code): Descripción de herramienta simplificada, periodo explícito, respuesta fija fuera del histórico y rechazo de medias que mezclan contaminantes. 126 tests e integración con PostgreSQL en verde; falta otro lote con Bedrock. |
 | 2026-10-09 | **Tercera evaluación SQL** (Carlos con Claude Code): Tres combinaciones; ninguna cumple. Mejor resultado 6/11 en datos (gpt-oss-120b · mismo); límites 3/3 con Ministral · Qwen3 Coder. Resueltos el caso fuera del histórico, el filtro de anomalías y las medias mezcladas; quedan rankings recortados, filas sin agregar y medias sin ponderar. Coste 0,10 $. Veredictos pendientes de revisión humana. |
+| 2026-10-12 | **Arreglos deterministas del SQL libre** (Carlos con Claude Code): el validador impone siempre el tope de filas, rechaza `AVG(media)` y, sin periodo en la pregunta, cualquier filtro de fecha; descripción de la herramienta y regla de contaminantes por defecto ajustadas. 133 tests. |
+| 2026-10-12 | **Cuarta evaluación SQL** (Carlos con Claude Code): tres combinaciones; ninguna cumple. Mejor resultado 8/11 en datos y 1/2 mixtas (gpt-oss-120b · mismo), con todo el SQL válido a la primera. Quedan definición de hora punta, clasificador, mixta y síntesis. Coste 0,09 $. Siguiente: catálogo para comparar. Veredictos pendientes de revisión humana. |
+| 2026-10-12 | **Catálogo de consultas SQL** (Carlos con Claude Code): siete consultas cerradas que elige un LLM en JSON; el código construye el SQL con media ponderada, periodo calculado y parámetros. Se activa con `HERRAMIENTA_DATOS=catalogo`, sin cambiar el bucle. Con la elección correcta reproduce el gold del lote en PostgreSQL local. 143 tests. Pendiente: lote con Bedrock para compararlo con el SQL libre. |
+| 2026-10-12 | **Catálogo comprobado y lote nuevo para comparar** (Carlos con Claude Code): prueba de humo con Bedrock (8/8 consultas elegidas bien, cifras del gold) y lote no visto de 28 preguntas (20 de datos, 3 mixtas, 5 límites) con gold en PostgreSQL local, para comparar SQL libre y catálogo sin el sesgo de los 16 casos usados para ajustar. Comparación pendiente. |
+| 2026-10-12 | **Lote nuevo con el catálogo** (Carlos con Claude Code): 28 preguntas no vistas, tres combinaciones. Mejor resultado 12/20 en datos (11 de las 12 que caben en el catálogo y pasan el clasificador) con gpt-oss-120b como modelo y selector; 0/3 mixtas en todas. Fallan sobre todo clasificador, mixtas y la síntesis de Ministral. Coste 0,15 $. Siguiente: el mismo lote con el SQL libre. Veredictos pendientes de revisión humana. |
+| 2026-10-12 | **Lote nuevo con el SQL libre y comparación** (Carlos con Claude Code): las mismas 28 preguntas y tres combinaciones con el SQL libre. Con gpt-oss-120b gana el libre (15 y 16 de 20 en datos frente a 12 y 9 del catálogo), por las preguntas que no caben en las 7 consultas; con Ministral el catálogo acierta más en lo que cabe y en límites. Mixtas 0/3 en todas. Coste 0,15 $. Veredictos pendientes de revisión humana. |
 
 
 ---

@@ -1,4 +1,5 @@
-"""Datos de la herramienta SQL: resultado de una consulta, contexto del redactor y periodos. Solo datos.
+"""Datos de la herramienta SQL: resultado de una consulta, contexto del redactor, periodos y consultas
+del catálogo. Solo datos.
 
 Los valores de `ResultadoConsulta` ya son serializables en JSON (None, bool, int, float, str): las
 fechas van como texto ISO y los `numeric` de PostgreSQL como float.
@@ -33,3 +34,16 @@ class Periodo:
     expresion: str                            # tal como aparece en la pregunta, en minúsculas y sin tildes
     rangos: tuple[tuple[date, date], ...]
     bloque: str | None = None                 # «esta tarde» → 'tarde'
+
+
+@dataclass(frozen=True)
+class ConsultaCatalogo:
+    """Consulta del catálogo ya construida (`business/catalogo_sql.py`). `vacia`: no hace falta
+    ejecutarla (contaminante no medido o lugar desconocido); la respuesta es la `nota`."""
+    nombre: str
+    sql: str
+    params: dict[str, Any]
+    descripcion: str                          # legible: fuente de la respuesta y contexto de la síntesis
+    periodo: str                              # el periodo consultado, para decirlo en la respuesta
+    nota: str | None = None                   # aviso para la síntesis («el SO2 no se mide»...)
+    vacia: bool = False

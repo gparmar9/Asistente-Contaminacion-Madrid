@@ -244,7 +244,8 @@ async def ejecutar(args: argparse.Namespace) -> None:
 
     cabecera = (f"# Evaluación de turnos: `{etiqueta}`\n\n"
                 f"Fecha: {inicio:%Y-%m-%d %H:%M} · proveedor {settings.llm_proveedor} · modelo "
-                f"{settings.llm_modelo} · LLM_MAX_TOKENS {settings.llm_max_tokens} · casos: "
+                f"{settings.llm_modelo} · LLM_MAX_TOKENS {settings.llm_max_tokens} · datos: "
+                f"{settings.herramienta_datos} (modelo SQL: {settings.llm_modelo_sql or 'el mismo'}) · casos: "
                 f"`{args.casos.name}` ({len(casos)}; {len(resultados)} turnos) · trazas: `{fichero.name if fichero else '—'}`")
     RESULTADOS.mkdir(exist_ok=True)
     salida = RESULTADOS / f"turnos_{etiqueta}_{inicio:%Y%m%d_%H%M%S}.md"

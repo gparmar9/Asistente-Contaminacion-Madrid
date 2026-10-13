@@ -8,12 +8,17 @@ Reglas (dialecto PostgreSQL):
 - sin la fecha actual de PostgreSQL (`CURRENT_DATE`, `NOW()`...): no es la de `FECHA_REFERENCIA`;
 - con periodo calculado (`business/periodos.py`), toda fecha literal cae dentro de sus rangos (con
   un día de margen por los extremos abiertos: `fecha < '2026-04-27'` para acabar el 26);
+- sin periodo calculado ni mención de tiempo en la pregunta (`sin_fechas`), todo el histórico: no
+  filtra por `fecha`, `ano` ni `mes` (Ministral se inventaba «el mes pasado» en la pregunta reescrita);
+- media ponderada: nada de `AVG(media)` sobre la vista (los bloques duran 7, 6, 7 y 4 horas); sobre
+  una CTE sí (la media de las medias diarias);
 - una media (o un máximo o mínimo) no mezcla contaminantes: si agrega `media`, `maximo` o `minimo`,
   esa consulta filtra un solo contaminante o agrupa por `contaminante` (en el segundo lote salía
   «Hortaleza 12,1», la media de NO2, NOx, O3... juntos);
-- `LIMIT` impuesto: un `LIMIT` menor que el tope es del modelo («los 5 primeros») y se respeta;
-  si falta o llega al tope, se pone `tope + 1` para que el DAL lea la fila de más y sepa que
-  hay truncado (con `LIMIT tope` el corte pasaba por datos completos).
+- `LIMIT` impuesto, siempre `tope + 1`, para que el DAL lea la fila de más y sepa que hay truncado
+  (con `LIMIT tope` el corte pasaba por datos completos). El del modelo se sustituye aunque sea menor:
+  `LIMIT 1` en un ranking dejaba fuera el segundo contaminante y la síntesis hablaba de «la única
+  medición». El orden lo da el `ORDER BY`; la respuesta elige las primeras filas si se piden.
 
 Es la primera barrera, no la única: detrás están la sesión de solo lectura y el rol
 `agente_lectura`, que solo puede leer la vista (`datos/mediciones.py`).
@@ -51,11 +56,12 @@ class SQLNoValido(ValueError):
     """El SQL no cumple las reglas. El mensaje se entrega al redactor para que lo corrija."""
 
 
-def validar(sql: str, max_filas: int, periodos: Sequence[Periodo] = ()) -> str:
+def validar(sql: str, max_filas: int, periodos: Sequence[Periodo] = (), sin_fechas: bool = False) -> str:
     """Devuelve el SQL normalizado (PostgreSQL) con el `LIMIT` impuesto, o lanza `SQLNoValido`.
 
-    `max_filas`: filas que se entregan; el `LIMIT` puede ser `max_filas + 1` (ver arriba).
-    `periodos`: los calculados para la pregunta; vacío = sin comprobar las fechas literales."""
+    `max_filas`: filas que se entregan; el `LIMIT` es `max_filas + 1` (ver arriba).
+    `periodos`: los calculados para la pregunta; vacío = sin comprobar las fechas literales.
+    `sin_fechas`: la pregunta no pide periodo; se rechaza cualquier filtro de fecha."""
     try:
         sentencias = [s for s in sqlglot.parse(sql, read="postgres") if s is not None]
     except SqlglotError as exc:
@@ -70,6 +76,10 @@ def validar(sql: str, max_filas: int, periodos: Sequence[Periodo] = ()) -> str:
     _comprobar_relaciones(consulta)
     _comprobar_funciones(consulta)
     _comprobar_fechas(consulta, periodos)
+    if sin_fechas and _filtra_por_fecha(consulta):
+        raise SQLNoValido("La pregunta no pide un periodo: consulta todo el histórico, sin filtrar por "
+                          "fecha, ano ni mes")
+    _comprobar_media_ponderada(consulta)
     _comprobar_contaminantes(consulta)
     return _imponer_limite(consulta, max_filas).sql(dialect="postgres")
 
@@ -77,7 +87,10 @@ def validar(sql: str, max_filas: int, periodos: Sequence[Periodo] = ()) -> str:
 def filtra_por_fecha(sql: str) -> bool:
     """El SQL (ya validado) acota el periodo: una fecha literal o `fecha`, `ano` o `mes` en un WHERE o
     un HAVING. Si no, consulta todo el histórico."""
-    consulta = sqlglot.parse_one(sql, read="postgres")
+    return _filtra_por_fecha(sqlglot.parse_one(sql, read="postgres"))
+
+
+def _filtra_por_fecha(consulta: exp.Expression) -> bool:
     if any(l.is_string and _RE_FECHA.match(l.this) for l in consulta.find_all(exp.Literal)):
         return True
     return any(c.name.lower() in _COLUMNAS_FECHA and c.find_ancestor(exp.Where, exp.Having)
@@ -123,6 +136,18 @@ def _comprobar_fechas(consulta: exp.Expression, periodos: Sequence[Periodo]) -> 
             continue
         if not any(inicio - _MARGEN <= dia <= fin + _MARGEN for inicio, fin in rangos):
             raise SQLNoValido(f"La fecha '{dia}' está fuera del periodo de la pregunta. {usar}")
+
+
+def _comprobar_media_ponderada(consulta: exp.Expression) -> None:
+    for media in consulta.find_all(exp.Avg):
+        select = media.find_ancestor(exp.Select)
+        origen = select.args.get("from_") if select else None
+        tablas = [origen.this] if origen else []
+        tablas += [union.this for union in (select.args.get("joins") or [])] if select else []
+        lee_la_vista = any(isinstance(t, exp.Table) and t.name.lower() == VISTA for t in tablas)
+        if lee_la_vista and any(c.name.lower() == "media" for c in media.find_all(exp.Column)):
+            raise SQLNoValido("AVG(media) no da la media del periodo: los bloques duran 7, 6, 7 y 4 horas. "
+                              "Usa la media ponderada SUM(media * n_horas) / SUM(n_horas)")
 
 
 def _comprobar_contaminantes(consulta: exp.Expression) -> None:
@@ -171,8 +196,4 @@ def _un_contaminante(select: exp.Select, ctes: dict[str, exp.Expression], vistos
 
 
 def _imponer_limite(consulta: exp.Query, max_filas: int) -> exp.Query:
-    limite = consulta.args.get("limit")
-    valor = limite.expression if isinstance(limite, exp.Limit) else None
-    if isinstance(valor, exp.Literal) and valor.is_int and int(valor.this) < max_filas:
-        return consulta
     return consulta.limit(max_filas + 1, copy=False)
