@@ -348,6 +348,27 @@ encender, apagar o ejecutar comandos en instancias con esa etiqueta.
 Antes de encender la EC2 por primera vez hay que desplegar los cuatro servicios: sin versión de
 alguno, `arrancar.sh` se detiene con un mensaje claro.
 
+### Crear los recursos en AWS (una sola vez)
+
+Con credenciales de AWS en la sesión y desde la raíz del repositorio:
+
+1. **`pwsh deploy/aws/1_recursos_ec2.ps1`**: los 4 repositorios de ECR (con limpieza: 5 imágenes
+   por servicio), el rol de la máquina, los permisos nuevos de los roles de GitHub, el grupo de
+   seguridad (80 solo para tu IP, que detecta solo o se pasa con `-MiIp`), el modelo del agente y
+   del clasificador en SSM y los ficheros de `ec2/` en S3.
+2. **Mergear a `main`** y lanzar **Desplegar** con `web`, `api-usuario`, `agente` y `rag`. Sin EC2,
+   cada despliegue solo sube la imagen y registra su versión.
+3. **Usuario de solo lectura del agente:** ejecutar en la RDS [`sql/vista_mediciones_bloques.sql`](sql/vista_mediciones_bloques.sql)
+   y [`sql/rol_agente_lectura.sql`](sql/rol_agente_lectura.sql), y guardar su conexión cifrada:
+   `aws ssm put-parameter --name /jupiter/agente/database_url --type SecureString --value "postgresql://agente_lectura:<clave>@<endpoint>:5432/postgres"`.
+   Se puede hacer también después: sin él, el chat funciona salvo las preguntas de datos.
+4. **`pwsh deploy/aws/2_crear_ec2.ps1`**: crea la EC2 (comprueba antes que estén las 4 versiones) y
+   su apagado a la 01:30 (`jupiter-ec2-apagar`, con el rol `jupiter-scheduler-ec2`). Al crearse
+   instala Docker y levanta la aplicación; el script muestra su dirección.
+
+Para cambiar de modelo: `aws ssm put-parameter --name /jupiter/agente/llm_modelo --overwrite --value <id>`
+y reiniciar el agente (Desplegar → `agente`, o apagar y encender).
+
 ## Probar en local antes de desplegar
 
 ```powershell
