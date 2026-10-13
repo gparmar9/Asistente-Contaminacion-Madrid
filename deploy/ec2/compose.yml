@@ -1,12 +1,14 @@
-# La API en la EC2: los mismos servicios que el perfil "api" del docker-compose.yml de la raíz,
-# pero con las imágenes de ECR (no se construye nada en la máquina) y sin base de datos propia
-# (usa RDS). Lo lanza arrancar.sh, que genera antes los ficheros que se leen aquí:
-#   versiones.env     REGISTRO y VERSION_* (qué imagen de cada servicio está activa, desde SSM)
-#   secretos-bd.env   DATABASE_URL (desde SSM, cifrado)
-#   secretos-llm.env  LLM_BASE_URL, LLM_MODEL, LLM_API_KEY si existen en SSM (si no, vacío)
+# La aplicación en la EC2: los mismos servicios que el perfil "api" del docker-compose.yml de la
+# raíz, pero con las imágenes de ECR (no se construye nada en la máquina), sin base de datos propia
+# (usa RDS) y con el Agente en lugar del orquestador. Lo lanza arrancar.sh, que genera antes los
+# ficheros que se leen aquí:
+#   versiones.env       REGISTRO y VERSION_* (qué imagen de cada servicio está activa, desde SSM)
+#   secretos-bd.env     DATABASE_URL de la API (desde SSM, cifrado)
+#   config-agente.env   un VAR=valor por cada parámetro de /jupiter/agente/ en SSM (puede estar vacío)
 #
-# Solo api-usuario publica puerto. orquestador y rag no tienen autenticación y quedan en la red
-# interna de Docker; se encuentran por su nombre (http://rag:8010).
+# Solo web publica puerto (80): sirve la SPA y hace de proxy de /api/* hacia api-usuario. El resto
+# no tiene autenticación y queda en la red interna de Docker; se encuentran por su nombre
+# (http://rag:8010).
 name: jupiter
 
 x-logs: &logs
@@ -23,14 +25,18 @@ services:
     restart: unless-stopped
     <<: *logs
 
-  orquestador:
-    image: ${REGISTRO}/jupiter-orquestador:${VERSION_ORQUESTADOR}
+  # Bedrock con el rol de la máquina: sin claves. El modelo y el resto de su configuración
+  # (LLM_MODELO, DATABASE_URL con el rol agente_lectura...) salen de config-agente.env. Sin
+  # LLM_MODELO arranca igual y /responder devuelve 503.
+  agente:
+    image: ${REGISTRO}/jupiter-agente:${VERSION_AGENTE}
     restart: unless-stopped
     env_file:
-      - secretos-bd.env
-      - secretos-llm.env
+      - config-agente.env
     environment:
       APP_ENV: produccion
+      LLM_PROVEEDOR: bedrock
+      AWS_REGION: eu-west-1
       RAG_URL: http://rag:8010
     depends_on:
       rag:
@@ -44,10 +50,18 @@ services:
       - secretos-bd.env
     environment:
       APP_ENV: produccion
-      ORCHESTRATOR_URL: http://orquestador:8100
+      AGENTE_URL: http://agente:8200
     depends_on:
-      orquestador:
+      agente:
+        condition: service_healthy
+    <<: *logs
+
+  web:
+    image: ${REGISTRO}/jupiter-web:${VERSION_WEB}
+    restart: unless-stopped
+    depends_on:
+      api-usuario:
         condition: service_healthy
     ports:
-      - "8000:8000"
+      - "80:80"
     <<: *logs

@@ -16,8 +16,9 @@
         "ecr:BatchGetImage"
       ],
       "Resource": [
+        "arn:aws:ecr:eu-west-1:*:repository/jupiter-web",
         "arn:aws:ecr:eu-west-1:*:repository/jupiter-api-usuario",
-        "arn:aws:ecr:eu-west-1:*:repository/jupiter-orquestador",
+        "arn:aws:ecr:eu-west-1:*:repository/jupiter-agente",
         "arn:aws:ecr:eu-west-1:*:repository/jupiter-rag"
       ]
     },
@@ -27,9 +28,14 @@
       "Action": "ssm:GetParameter",
       "Resource": [
         "arn:aws:ssm:eu-west-1:*:parameter/jupiter/database_url",
-        "arn:aws:ssm:eu-west-1:*:parameter/jupiter/versiones/*",
-        "arn:aws:ssm:eu-west-1:*:parameter/jupiter/llm/*"
+        "arn:aws:ssm:eu-west-1:*:parameter/jupiter/versiones/*"
       ]
+    },
+    {
+      "Sid": "LeerLaConfiguracionDelAgente",
+      "Effect": "Allow",
+      "Action": "ssm:GetParametersByPath",
+      "Resource": "arn:aws:ssm:eu-west-1:*:parameter/jupiter/agente"
     },
     {
       "Sid": "DescifrarSecretosSoloATravesDeSSM",
@@ -39,6 +45,15 @@
       "Condition": {
         "StringEquals": { "kms:ViaService": "ssm.eu-west-1.amazonaws.com" }
       }
+    },
+    {
+      "Sid": "InvocarModelosDeBedrockDesdeElAgente",
+      "Effect": "Allow",
+      "Action": [
+        "bedrock:InvokeModel",
+        "bedrock:InvokeModelWithResponseStream"
+      ],
+      "Resource": "arn:aws:bedrock:eu-west-1::foundation-model/*"
     },
     {
       "Sid": "LeerLosFicherosDeArranqueDeS3",

@@ -10,9 +10,10 @@
 # Componentes:
 #   lambda       versión = número de versión de la función. Apunta la función a la imagen de esa
 #                versión (por digest) y publica una versión nueva con el motivo.
-#   api-usuario  versión = commit corto de la imagen (p. ej. 3b27c7c). Cambia la versión activa en
-#   orquestador  SSM (con el motivo en el historial del parámetro) y, si la EC2 está encendida,
-#   rag          actualiza solo ese contenedor. La imagen ya está en ECR: no se reconstruye nada.
+#   web          versión = commit corto de la imagen (p. ej. 3b27c7c). Cambia la versión activa en
+#   api-usuario  SSM (con el motivo en el historial del parámetro) y, si la EC2 está encendida,
+#   agente       actualiza solo ese contenedor. La imagen ya está en ECR: no se reconstruye nada.
+#   rag
 # Para añadir uno nuevo: sumarlo a `options` y a un job con `if:`.
 #
 # Usa el mismo rol OIDC que desplegar.yml y comparte su bloqueo por componente: nunca coinciden
@@ -30,8 +31,9 @@ on:
         default: lambda
         options:
           - lambda
+          - web
           - api-usuario
-          - orquestador
+          - agente
           - rag
       version:
         description: "Versión a la que volver: número (lambda) o commit corto (resto). Vacío = solo consultar"

@@ -8,10 +8,10 @@
 # Componentes:
 #   lambda       tests → build → push a ECR (tag = SHA del commit) → update-function-code
 #                → versión publicada con descripción → verificación del digest.
-#   api-usuario  tests → build → push a ECR (tag = SHA del commit) → ficheros de arranque a S3
-#   orquestador  → versión activa en SSM (/jupiter/versiones/<componente>) → si la EC2 está
-#   rag          encendida, actualiza solo ese contenedor por SSM Run Command y espera a que
-#                esté sano. Si está apagada, usará esta versión al encenderse.
+#   web          tests → build → push a ECR (tag = SHA del commit) → ficheros de arranque a S3
+#   api-usuario  → versión activa en SSM (/jupiter/versiones/<componente>) → si la EC2 está
+#   agente       encendida, actualiza solo ese contenedor por SSM Run Command y espera a que
+#   rag          esté sano. Si está apagada, usará esta versión al encenderse.
 # Para añadir uno nuevo: sumarlo a `options` y a un job con `if:` (y lo mismo en rollback.yml).
 #
 # Autenticación por OIDC: GitHub entrega un token firmado y AWS lo cambia por credenciales
@@ -31,8 +31,9 @@ on:
         default: lambda
         options:
           - lambda
+          - web
           - api-usuario
-          - orquestador
+          - agente
           - rag
 
 permissions:
@@ -164,9 +165,10 @@ jobs:
       - name: Datos del componente
         run: |
           case "$COMPONENTE" in
-            api-usuario) CONTEXTO=ApiUsuario      DOCKERFILE=ApiUsuario/Dockerfile      ;;
-            orquestador) CONTEXTO=LLMOrchestrator DOCKERFILE=LLMOrchestrator/Dockerfile ;;
-            rag)         CONTEXTO=.               DOCKERFILE=deploy/Dockerfile.rag      ;;
+            web)         CONTEXTO=Web        DOCKERFILE=Web/Dockerfile        ;;
+            api-usuario) CONTEXTO=ApiUsuario DOCKERFILE=ApiUsuario/Dockerfile ;;
+            agente)      CONTEXTO=Agente     DOCKERFILE=Agente/Dockerfile     ;;
+            rag)         CONTEXTO=.          DOCKERFILE=deploy/Dockerfile.rag ;;
             *) echo "::error::Componente desconocido: $COMPONENTE"; exit 1 ;;
           esac
           {

@@ -126,7 +126,7 @@ jobs:
             echo "| Base de datos | \`$DB_INSTANCE\` (estaba: $RDS_INICIAL) |"
             echo "| Servidor de la API | ${INSTANCIA:-no existe} (estaba: $EC2_INICIAL) |"
             if [ -n "${IP:-}" ]; then
-              echo "| API | http://$IP:8000/docs (solo desde las IP autorizadas) |"
+              echo "| Web | http://$IP (solo desde las IP autorizadas) |"
             fi
             echo "| Apagado automático | 01:30 (hora de Madrid) |"
             echo "| Lanzado por | @$GITHUB_ACTOR |"

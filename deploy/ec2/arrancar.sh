@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Arranca o actualiza la API en la EC2.
+# Arranca o actualiza la aplicación en la EC2.
 #
 #   arrancar.sh                 todos los servicios (lo lanza systemd en cada arranque)
 #   arrancar.sh rag             solo ese servicio (lo lanzará el despliegue por SSM)
@@ -7,14 +7,16 @@
 # Todo sale de AWS con el rol de la máquina, sin claves en disco más allá de este script:
 #   s3://jupiter-calidad-aire-madrid/ec2/compose.yml   compose de producción (del repositorio)
 #   SSM /jupiter/versiones/<servicio>                 qué imagen está activa (tag = commit)
-#   SSM /jupiter/database_url                         cadena de conexión a RDS (cifrada)
-#   SSM /jupiter/llm/{base_url,model,api_key}         proveedor del LLM (opcional)
+#   SSM /jupiter/database_url                         cadena de conexión a RDS de la API (cifrada)
+#   SSM /jupiter/agente/<variable>                    configuración del agente (opcional): cada
+#                                                     parámetro es una variable de entorno, p. ej.
+#                                                     /jupiter/agente/llm_modelo -> LLM_MODELO
 set -euo pipefail
 
 REGION=eu-west-1
 BUCKET=jupiter-calidad-aire-madrid
 DIR="${JUPITER_DIR:-/opt/jupiter}"   # variable solo para probarlo fuera de la EC2
-SERVICIOS=(api-usuario orquestador rag)
+SERVICIOS=(web api-usuario agente rag)
 export AWS_DEFAULT_REGION="$REGION"
 
 # A stderr: varios pasos redirigen stdout a ficheros .env y el mensaje acabaría dentro.
@@ -74,15 +76,21 @@ if [ -z "$DATABASE_URL" ]; then
     exit 1
 fi
 linea_env DATABASE_URL "$DATABASE_URL" > secretos-bd.env
-: > secretos-llm.env
-for p in base_url model api_key; do
-    VALOR=$(parametro "/jupiter/llm/$p")
-    if [ -n "$VALOR" ]; then
-        linea_env "LLM_$(echo "$p" | tr 'a-z' 'A-Z')" "$VALOR" >> secretos-llm.env
-    fi
-done
-if [ ! -s secretos-llm.env ]; then
-    log "Sin proveedor de LLM en SSM (/jupiter/llm/*): /chat responderá 503 hasta configurarlo"
+
+# Todo /jupiter/agente/ a variables de entorno: una variable nueva del agente se da de alta
+# creando el parámetro, sin tocar este script. Salida en texto: nombre<TAB>valor por línea.
+: > config-agente.env
+aws ssm get-parameters-by-path --path /jupiter/agente/ --with-decryption     --query "Parameters[].[Name,Value]" --output text > parametros-agente.tmp
+while IFS=$'	' read -r NOMBRE VALOR; do
+    [ -n "$NOMBRE" ] || continue
+    linea_env "$(basename "$NOMBRE" | tr 'a-z' 'A-Z')" "$VALOR" >> config-agente.env
+done < parametros-agente.tmp
+rm -f parametros-agente.tmp
+if ! grep -q '^LLM_MODELO=' config-agente.env; then
+    log "Falta /jupiter/agente/llm_modelo en SSM: el chat responderá 503 hasta configurarlo"
+fi
+if ! grep -q '^DATABASE_URL=' config-agente.env; then
+    log "Falta /jupiter/agente/database_url en SSM: el agente no responderá preguntas de datos"
 fi
 
 log "Login en ECR ($REGISTRO)"
@@ -97,6 +105,12 @@ if [ ${#OBJETIVO[@]} -eq 0 ]; then
     "${COMPOSE[@]}" up -d --remove-orphans --wait --wait-timeout 600
 else
     "${COMPOSE[@]}" up -d --wait --wait-timeout 600 "${OBJETIVO[@]}"
+    # nginx resuelve api-usuario al arrancar y guarda su IP: si el contenedor se recrea con otra,
+    # el proxy de /api/* quedaría apuntando a la antigua.
+    if [[ " ${OBJETIVO[*]} " == *" api-usuario "* && " ${OBJETIVO[*]} " != *" web "* ]]; then
+        log "Reiniciando web para que vuelva a resolver api-usuario"
+        "${COMPOSE[@]}" restart web
+    fi
 fi
 
 # Imágenes que ya no usa ningún contenedor (versiones anteriores): el disco es de 30 GB y la
