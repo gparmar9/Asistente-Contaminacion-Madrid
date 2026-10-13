@@ -154,7 +154,7 @@ Pestaña **Actions → Desplegar → Run workflow**, eligiendo:
   es `main`; con otra rama el workflow avisa). No hay que indicar ninguna imagen: el workflow la
   construye. Elegir una versión anterior es cosa del rollback.
 - **El componente** en el desplegable: `lambda` o uno de los servicios de la EC2 (`web`,
-  `api-usuario`, `agente`, `rag`; ver [La aplicación en la EC2](#la-aplicación-en-la-ec2-en-preparación)).
+  `api-usuario`, `agente`, `rag`; ver [La aplicación en la EC2](#la-aplicación-en-la-ec2)).
 
 Dos despliegues del **mismo** componente nunca coinciden (el segundo espera); de componentes
 distintos, sí. Para la Lambda, el workflow:
@@ -274,10 +274,10 @@ aws ssm describe-automation-executions --filters Key=DocumentNamePrefix,Values=A
 aws rds describe-db-instances --db-instance-identifier jupiter-postgres --query "DBInstances[0].DBInstanceStatus" --output text
 ```
 
-## La aplicación en la EC2 (en preparación)
+## La aplicación en la EC2
 
-> **Estado:** los ficheros están en el repositorio; la máquina y sus recursos en AWS **aún no
-> existen**. Esta sección describe cómo funcionará.
+> **Estado:** en marcha desde el 2026-10-13 (EC2 `jupiter-api`). Web, API y chat verificados de
+> punta a punta.
 
 Una EC2 `t3.medium` (x86, 30 GB) con Amazon Linux 2023 ejecuta con Docker Compose los cuatro
 servicios de la aplicación, cada uno con su imagen de ECR:
