@@ -1408,7 +1408,7 @@ la enciende a mano para trabajar o hacer una demo.
   coincidir con la Lambda (22:45 UTC) y hacerla fallar esa noche. Lo detecta la alarma de errores y
   la carga es idempotente, así que basta con relanzarla. Ocurre pocas veces al año.
 
-### 8.9 La aplicación en una EC2 — diseño (recursos de AWS pendientes de crear)
+### 8.9 La aplicación en una EC2 — estado actual
 
 - **Máquina:** EC2 `t3.medium` (2 vCPU, 4 GB, x86) con Amazon Linux 2023 y 30 GB de disco. x86
   y no Graviton (`t4g`, algo más barata) para construir las imágenes en los runners de GitHub, que
@@ -1445,6 +1445,14 @@ la enciende a mano para trabajar o hacer una demo.
 - **Detalle de nginx:** resuelve el nombre `api-usuario` al arrancar y guarda la IP. Si se
   redespliega `api-usuario`, el contenedor puede cambiar de IP y el proxy quedaría roto, así que
   `arrancar.sh` reinicia también `web` en ese caso.
+- **Verificado en AWS (2026-10-13):** web (200), `/estaciones` desde RDS y chat de punta a punta
+  con Bedrock: pregunta documental con cita `[D1]` validada por el RAG (18 s) y pregunta de datos
+  por SQL con el rol `agente_lectura` (5,6 s; media de NO₂ en Plaza de España, 29,3 µg/m³ en 27
+  días). Una medición por pregunta, sin repetir.
+- **Primer arranque fallido:** `arrancar.sh` pedía `/jupiter/agente/` (con barra final) y el rol
+  solo autoriza la ruta `parameter/jupiter/agente`: la consulta fallaba y el servicio no levantaba.
+  El workflow solo mostraba `failed`; ahora «Encender entorno» imprime el log del servicio si no
+  arranca. La simulación local no lo detectó porque el `aws` simulado no comprueba permisos.
 - **Probado sin AWS:** `arrancar.sh` se ejecutó en local con `aws` y `docker` simulados (todo, un
   solo servicio, `api-usuario` con reinicio de `web`, sin configuración del agente, servicio
   inválido y versión ausente) y `docker compose config` valida el compose de producción. En la
@@ -1906,7 +1914,7 @@ la enciende a mano para trabajar o hacer una demo.
 | 2026-10-12 | **Lote nuevo con el catálogo** (Carlos con Claude Code): 28 preguntas no vistas, tres combinaciones. Mejor resultado 12/20 en datos (11 de las 12 que caben en el catálogo y pasan el clasificador) con gpt-oss-120b como modelo y selector; 0/3 mixtas en todas. Fallan sobre todo clasificador, mixtas y la síntesis de Ministral. Coste 0,15 $. Siguiente: el mismo lote con el SQL libre. Veredictos pendientes de revisión humana. |
 | 2026-10-12 | **Lote nuevo con el SQL libre y comparación** (Carlos con Claude Code): las mismas 28 preguntas y tres combinaciones con el SQL libre. Con gpt-oss-120b gana el libre (15 y 16 de 20 en datos frente a 12 y 9 del catálogo), por las preguntas que no caben en las 7 consultas; con Ministral el catálogo acierta más en lo que cabe y en límites. Mixtas 0/3 en todas. Coste 0,15 $. Veredictos pendientes de revisión humana. |
 | 2026-10-13 | **Entorno local con `make`** (Guille con Claude Code): `Makefile` y `scripts/local.py` para levantar cada servicio o todo junto en un solo terminal, en Windows y Linux. `make frontend` probado con la base local y `make dev` con Bedrock (Ministral 14B) y el RAG; `make test` en verde (web 36, raíz 135, ApiUsuario 22, orquestador 51, agente 143 al crearlo). Después se simplifica a los servicios sueltos, se añade Phoenix y la comprobación de credenciales de AWS. |
-| 2026-10-13 | **EC2 adaptada al `Agente` y a la web** (Guille con Claude Code, rama `feature/infraestructura-ec2`): el compose de producción, `arrancar.sh`, los workflows Desplegar/Rollback y los permisos pasan de `orquestador` a `agente` (Bedrock con el rol de la máquina, configuración desde `/jupiter/agente/` en SSM) y suman `web` como único puerto abierto (80). Probado con `aws` y `docker` simulados en seis escenarios. Scripts de creación en dos pasos (`deploy/aws/`): primero los recursos sin máquina (ECR con limpieza a 5 imágenes, roles, grupo de seguridad, modelos en SSM: Ministral 14B para el agente y gpt-oss-120b para el clasificador) y la EC2 solo cuando las 4 imágenes están desplegadas, para que su primer arranque no falle; apagado nocturno con el destino universal de Scheduler (`ec2:StopInstances`), sin runbook. Pendiente: crear los recursos en AWS y la primera ejecución real |
+| 2026-10-13 | **EC2 adaptada al `Agente` y a la web** (Guille con Claude Code, rama `feature/infraestructura-ec2`): el compose de producción, `arrancar.sh`, los workflows Desplegar/Rollback y los permisos pasan de `orquestador` a `agente` (Bedrock con el rol de la máquina, configuración desde `/jupiter/agente/` en SSM) y suman `web` como único puerto abierto (80). Probado con `aws` y `docker` simulados en seis escenarios. Scripts de creación en dos pasos (`deploy/aws/`): primero los recursos sin máquina (ECR con limpieza a 5 imágenes, roles, grupo de seguridad, modelos en SSM: Ministral 14B para el agente y gpt-oss-120b para el clasificador) y la EC2 solo cuando las 4 imágenes están desplegadas, para que su primer arranque no falle; apagado nocturno con el destino universal de Scheduler (`ec2:StopInstances`), sin runbook. Mismo día: recursos creados con los scripts de `deploy/aws/` y aplicación en marcha en la EC2, verificada de punta a punta (§8.9). Errores encontrados: comas sin comillas en PowerShell (separan argumentos) y la barra final de la ruta de SSM, que el rol no autorizaba |
 
 
 ---
