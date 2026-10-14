@@ -1521,6 +1521,10 @@ la enciende a mano para trabajar o hacer una demo.
 - El porcentaje de anomalías de un Isolation Forest lo decide `contamination`, no los datos.
 
 **Ingeniería**
+- **Lo que funciona en `localhost` puede fallar en la nube por no ser HTTPS:** el chat de la web
+  no enviaba nada en la EC2 (sin error visible y sin ninguna petición) porque generaba el id de cada
+  consulta con `crypto.randomUUID()`, que el navegador solo ofrece en contextos seguros (HTTPS o
+  `localhost`). Las pruebas contra la API no lo detectaron: el fallo estaba antes de la llamada.
 - Compartir el código de features entre entrenamiento e inferencia evita divergencias silenciosas.
 - La idempotencia (`ON CONFLICT`) simplifica mucho programar el pipeline, pero **`DO NOTHING` no
   es lo mismo que idempotencia**. La API entrega siempre las 24 horas del día y las aún no
@@ -1915,6 +1919,7 @@ la enciende a mano para trabajar o hacer una demo.
 | 2026-10-12 | **Lote nuevo con el SQL libre y comparación** (Carlos con Claude Code): las mismas 28 preguntas y tres combinaciones con el SQL libre. Con gpt-oss-120b gana el libre (15 y 16 de 20 en datos frente a 12 y 9 del catálogo), por las preguntas que no caben en las 7 consultas; con Ministral el catálogo acierta más en lo que cabe y en límites. Mixtas 0/3 en todas. Coste 0,15 $. Veredictos pendientes de revisión humana. |
 | 2026-10-13 | **Entorno local con `make`** (Guille con Claude Code): `Makefile` y `scripts/local.py` para levantar cada servicio o todo junto en un solo terminal, en Windows y Linux. `make frontend` probado con la base local y `make dev` con Bedrock (Ministral 14B) y el RAG; `make test` en verde (web 36, raíz 135, ApiUsuario 22, orquestador 51, agente 143 al crearlo). Después se simplifica a los servicios sueltos, se añade Phoenix y la comprobación de credenciales de AWS. |
 | 2026-10-13 | **EC2 adaptada al `Agente` y a la web** (Guille con Claude Code, rama `feature/infraestructura-ec2`): el compose de producción, `arrancar.sh`, los workflows Desplegar/Rollback y los permisos pasan de `orquestador` a `agente` (Bedrock con el rol de la máquina, configuración desde `/jupiter/agente/` en SSM) y suman `web` como único puerto abierto (80). Probado con `aws` y `docker` simulados en seis escenarios. Scripts de creación en dos pasos (`deploy/aws/`): primero los recursos sin máquina (ECR con limpieza a 5 imágenes, roles, grupo de seguridad, modelos en SSM: Ministral 14B para el agente y gpt-oss-120b para el clasificador) y la EC2 solo cuando las 4 imágenes están desplegadas, para que su primer arranque no falle; apagado nocturno con el destino universal de Scheduler (`ec2:StopInstances`), sin runbook. Mismo día: recursos creados con los scripts de `deploy/aws/` y aplicación en marcha en la EC2, verificada de punta a punta (§8.9). Errores encontrados: comas sin comillas en PowerShell (separan argumentos) y la barra final de la ruta de SSM, que el rol no autorizaba |
+| 2026-10-14 | **Chat de la web en la EC2** (Guille con Claude Code, rama `feature/fix-chat-http`): el chat no enviaba la pregunta servido por HTTP porque `crypto.randomUUID()` solo existe en contextos seguros; sustituido por un contador local (el id no viaja a la API). Build, lint y 36 tests de la web en verde |
 
 
 ---
