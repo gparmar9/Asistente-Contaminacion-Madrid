@@ -95,6 +95,16 @@ function panelAbiertoInicial(): boolean {
   return new URLSearchParams(window.location.search).get('chat') === 'abierto'
 }
 
+/**
+ * Id local de cada consulta (clave de la lista; no viaja a la API). No usa `crypto.randomUUID()`:
+ * el navegador solo lo ofrece en HTTPS o localhost, y la web de la EC2 se sirve por HTTP.
+ */
+let ultimaConsulta = 0
+function nuevoIdConsulta(): string {
+  ultimaConsulta += 1
+  return `consulta-${ultimaConsulta}`
+}
+
 export function ChatProvider({ children }: { children: ReactNode }) {
   const [consultas, setConsultas] = useState<ConsultaChat[]>([])
   const [enviando, setEnviando] = useState(false)
@@ -117,7 +127,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       if (enviandoRef.current) return
       enviandoRef.current = true
       setEnviando(true)
-      const id = idExistente ?? crypto.randomUUID()
+      const id = idExistente ?? nuevoIdConsulta()
       const actualizar = (estado: EstadoConsulta) =>
         setConsultas((lista) => lista.map((c) => (c.id === id ? { ...c, estado } : c)))
       setConsultas((lista) => {
