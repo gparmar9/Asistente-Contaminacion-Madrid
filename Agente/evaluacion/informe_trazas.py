@@ -45,8 +45,9 @@ PRECIOS = {
     "openai.gpt-oss-120b-1:0": (0.18, 0.70),
     "openai.gpt-oss-20b-1:0": (0.08, 0.35),
     "qwen.qwen3-coder-30b-a3b-v1:0": (0.18, 0.70),
-    "eu.anthropic.claude-haiku-5-5": (0.11, 0.55),
+    "eu.anthropic.claude-haiku-5-5": (0.11, 0.55),  # confirmado el 2026-10-16 (AWS Marketplace)
     "minimax.minimax-m2.5": (0.36, 1.44),  # consultado el 2026-10-09
+    "qwen.qwen3-next-80b-a3b": (0.168, 1.44),  # consultado el 2026-10-16
 }
 
 # Orden de las fases en la tabla de latencias; el resto de spans van detrás, por nombre.
