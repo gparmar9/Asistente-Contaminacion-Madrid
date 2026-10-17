@@ -1209,7 +1209,13 @@ AWS para Irlanda.
   `get-use-case-for-model-access` responde que **nunca se ha enviado el formulario de caso de uso** que
   Anthropic exige una vez por cuenta (o en la cuenta de gestión de la organización). Sin él no se crea el
   acuerdo de Marketplace (`agreementAvailability: NOT_AVAILABLE` en todos los Claude). La oferta sí existe
-  para la cuenta (`list-foundation-model-agreement-offers`). Activarlo es un cambio en la cuenta; no se hizo.
+  para la cuenta (`list-foundation-model-agreement-offers`). El formulario se envió el mismo día. Aun
+  así, las llamadas siguieron dando el mismo error 7 minutos después y al día siguiente (2026-10-17). El acuerdo no se creó solo y en
+  CloudTrail no aparece ningún intento de suscripción en Marketplace. La consola (*playground*) da el mismo
+  error. El bloqueo afecta solo a Anthropic: todos los Claude, también desde `us-east-1`. Otros modelos
+  de terceros (gpt-oss, MiniMax) sí tienen acuerdo. La cuenta es miembro de una organización y sus
+  políticas no se pueden consultar desde ella. El texto del error («contact AWS Sales») apunta a una
+  restricción de la organización o de AWS para esta cuenta `[por confirmar con el máster]`.
 - Qwen3 Next se pasó por **las mismas baterías y el mismo código** que Ministral y gpt-oss. Usó el mismo
   modelo para conversación, clasificador y SQL, en serie y una sola pasada. La base local se replicó
   con los datos de Carlos: 326.700 filas y una vista de 314.411, del 2024-04-30 al 2026-04-30. Sin esa

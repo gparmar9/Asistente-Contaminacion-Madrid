@@ -251,7 +251,7 @@ footer { padding-block: 32px 48px; border-top: 1px solid var(--rule); color: var
       <span class="pill">Sin decidir</span>
       <div>
         <p><strong>gpt-oss</strong> sigue siendo el más completo: mejor clasificador, mejor selector del catálogo y el más prudente. <strong>Qwen3 Next</strong> le iguala en las preguntas de datos con SQL libre, a un coste parecido, pero entrega su prompt de sistema en cuanto se lo piden. <strong>Ministral</strong> es el más barato y se toma libertades con las cifras.</p>
-        <p><strong>Claude Haiku 5.5</strong> no se pudo probar: la cuenta del máster no ha rellenado el formulario de caso de uso que Anthropic pide una vez por cuenta.</p>
+        <p><strong>Claude Haiku 5.5</strong> no se pudo probar: aun con el formulario de Anthropic enviado, la cuenta del máster sigue sin acceso.</p>
       </div>
     </div>
   </header>
@@ -300,7 +300,7 @@ footer { padding-block: 32px 48px; border-top: 1px solid var(--rule); color: var
           <dt>Tipo</dt><dd>Modelo pequeño de Anthropic; se factura por AWS Marketplace</dd>
           <dt>Precio</dt><dd>0,11 $ / 0,55 $ por millón de tokens: más barato que gpt-oss</dd>
           <dt>Por qué</dt><dd>El candidato de «cuesta lo mismo y puede mejorar mucho»</dd>
-          <dt>Estado</dt><dd><code>AccessDeniedException</code>: falta el formulario de caso de uso de Anthropic en la cuenta (una vez por cuenta). Ver «Qué falta»</dd>
+          <dt>Estado</dt><dd><code>AccessDeniedException</code>. Formulario de Anthropic enviado el 16 oct, pero no se crea la suscripción de Marketplace. Ver «Qué falta»</dd>
         </dl>
       </article>
     </div>
@@ -398,7 +398,7 @@ footer { padding-block: 32px 48px; border-top: 1px solid var(--rule); color: var
             <li>Copia literal su prompt de sistema cuando se lo piden</li>
           </ul>
         </div>
-        <p class="after">El mismo día, Claude Haiku 5.5 devolvió <code>AccessDeniedException</code>: falta el formulario de caso de uso de Anthropic.</p>
+        <p class="after">El mismo día, Claude Haiku 5.5 devolvió <code>AccessDeniedException</code>, antes y después de enviar el formulario de caso de uso de Anthropic.</p>
       </div></li>
     </ol>
   </section>
@@ -517,7 +517,7 @@ footer { padding-block: 32px 48px; border-top: 1px solid var(--rule); color: var
       <h2>Qué falta para decidir</h2>
     </div>
     <ul class="todo">
-      <li>Desbloquear Claude Haiku 5.5: una persona con permisos en la cuenta rellena una vez el formulario de caso de uso de Anthropic (consola de Bedrock → catálogo de modelos → Claude) y hace la primera llamada para que se cree la suscripción de Marketplace. Después, pasarle las mismas baterías.</li>
+      <li>Desbloquear Claude Haiku 5.5: el formulario de Anthropic ya está enviado, pero falta la suscripción de Marketplace. Probar a crearla desde la consola y, si la cuenta no lo permite, pedírselo al máster. Después, pasarle las mismas baterías.</li>
       <li>Revisar a mano los veredictos de las preguntas de datos (los de Carlos y los de Qwen) y la calidad del español.</li>
       <li>Repetir los lotes clave para medir la variación: hoy hay una pasada por modelo.</li>
       <li>Si se elige Qwen3 Next: poner <code>fuga</code> en <code>COMPROBACIONES_BLOQUEAN</code> antes de desplegarlo.</li>
