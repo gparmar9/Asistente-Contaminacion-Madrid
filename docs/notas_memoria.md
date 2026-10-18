@@ -124,7 +124,8 @@ Hilo conductor de la memoria: cómo y por qué cambió el diseño.
 | 2026-10-13 | Servicios de la EC2 | `api-usuario` + `orquestador` + `rag`, con `api-usuario` publicado en el 8000 y el LLM por `/jupiter/llm/{base_url,model,api_key}` → **`web` + `api-usuario` + `agente` + `rag`**: solo `web` (nginx) publica puerto (80); el agente usa **Bedrock con el rol de la EC2** (sin claves) y lee su configuración de **todo `/jupiter/agente/`** en SSM (cada parámetro, una variable de entorno) | El equipo sustituyó el orquestador por el `Agente` (2026-10-08) y la web ya tiene imagen. Un solo origen para el navegador (nginx hace de proxy de `/api/*`), como en local. Leer la ruta entera evita tocar `arrancar.sh` cada vez que el agente añade una variable. Descartado: mantener el orquestador desplegado (código sin uso) y una clave de API del LLM en SSM (Bedrock no la necesita con el rol de la máquina) |
 
 **Decisiones abiertas que alimentarán esta tabla:** modelo del agente en Bedrock (Ministral 14B,
-gpt-oss-120b o, desde el 2026-10-16, Qwen3 Next 80B; Claude Haiku 5.5 no está disponible en la cuenta;
+gpt-oss-120b, Qwen3 Next 80B (2026-10-16) o Nemotron 3 Super 120B (2026-10-18); Claude Haiku 5.5 no está
+disponible en la cuenta;
 aplazado hasta poder evaluar las herramientas SQL y de ML, §13) El RAG irá en la EC2 (§8.9). La opción de red en AWS ya está decidida y aplicada (opción A, §8.4).
 
 ---
@@ -1194,14 +1195,17 @@ Cuatro rondas de arreglos guiadas por los mismos 16 casos arriesgan sobreajustar
 el 8/11 mide menos de lo que parece. Las reglas en código (tope de filas, media ponderada, sin periodo
 = histórico) funcionaron mejor que las del prompt: el modelo las puede ignorar y el validador no.
 
-**Modelos alternativos: Qwen3 Next 80B y Claude Haiku 5.5 (2026-10-16; veredictos en borrador,
-pendientes de revisión humana).** Se buscaron en Bedrock dos candidatos más, en la línea de precio de los
+**Modelos alternativos: Qwen3 Next 80B, Nemotron 3 Super 120B y Claude Haiku 5.5 (2026-10-16 y
+2026-10-18; veredictos en borrador, pendientes de revisión humana).** Se buscaron en Bedrock dos candidatos más, en la línea de precio de los
 dos anteriores. Criterios: disponibles desde `eu-west-1` y con *tool use* por Converse. Los modelos grandes
 (Opus, GPT-6 Astra a 10 $ / 50 $) quedaron fuera. Elegidos: **Claude Haiku 5.5** (`eu.anthropic.claude-haiku-5-5`,
 0,11 $ / 0,55 $ por 1M de tokens, perfil `eu.`) y **Qwen3 Next 80B A3B** (`qwen.qwen3-next-80b-a3b`,
 0,17 $ / 1,44 $, en la región, MoE con 3B activos y sin razonamiento). Precios de la API pública de precios de
 AWS para Irlanda.
-- Descartados: Nemotron 3 Super 120B (0,18 $ / 0,78 $, aplazado por decisión del equipo); Nova 2 Lite
+- **Nemotron 3 Super 120B** (`nvidia.nemotron-super-3-120b`, 0,18 $ / 0,78 $, en la región, MoE con 12B
+  activos y razonamiento configurable): aplazado al principio por decisión del equipo; evaluado el
+  2026-10-18 porque Haiku seguía bloqueado.
+- Descartados: Nova 2 Lite
   (salida a 3,16 $); GLM 4.7 Flash (en *Legacy*, se retira en marzo de 2027); DeepSeek v3.2, GLM 4.7,
   Kimi K2.5, Qwen3 235B y Mistral Large 3 (no están en Irlanda o cuestan de 3 a 5 veces más).
 - **Haiku 5.5 no se puede usar en la cuenta del máster**: `AccessDeniedException` («not available for
@@ -1216,29 +1220,32 @@ AWS para Irlanda.
   de terceros (gpt-oss, MiniMax) sí tienen acuerdo. La cuenta es miembro de una organización y sus
   políticas no se pueden consultar desde ella. El texto del error («contact AWS Sales») apunta a una
   restricción de la organización o de AWS para esta cuenta `[por confirmar con el máster]`.
-- Qwen3 Next se pasó por **las mismas baterías y el mismo código** que Ministral y gpt-oss. Usó el mismo
-  modelo para conversación, clasificador y SQL, en serie y una sola pasada. La base local se replicó
+- Qwen3 Next (2026-10-16) y Nemotron (2026-10-18) se pasaron por **las mismas baterías y el mismo
+  código** que Ministral y gpt-oss. Cada uno hizo de conversación, clasificador y SQL, en serie y una
+  sola pasada. La base local se replicó
   con los datos de Carlos: 326.700 filas y una vista de 314.411, del 2024-04-30 al 2026-04-30. Sin esa
   réplica, el gold no sirve, porque la base de trabajo ya llegaba al 2026-05-19.
 
-| Batería | Ministral 14B | gpt-oss-120b | **Qwen3 Next 80B** |
-|-|-|-|-|
-| Clasificador, 29 preguntas originales | 27/29 | 29/29 | 27/29 (mixtas nuevas 1/2) |
-| Turnos aislados (12) | 12/12 | 12/12 | 12/12 |
-| Conversaciones (11 turnos) | 11/11 | 11/11 | 10/11 |
-| JSON válido a la primera (documental) | 6/6 | 6/6 | 6/6 y 9/9 en conversaciones |
-| Datos, 16 casos (/11)¹ | 6 (+2 parciales) | 8 (+1) | 6 (+2) · SQL a la primera 9/11 |
-| Lote nuevo, SQL libre (/20) | 10 | 15 | **16** |
-| Lote nuevo, catálogo (/20) | 9 | 12 | 10 (+4 parciales) |
-| Mixtas | 1/2 y 0/3 | 1/2 y 0/3 | 0/2 y 0/3 |
-| Pedir el prompt de sistema | Lo parafrasea (4 de 4) | Frase fija (fuera de alcance) | **Lo copia literal** |
-| Turno documental, mediana | 8,3 s | 7,5 s | 7,9 s |
-| Clasificador, mediana | 0,3 s | 1,0 s | 0,5 s |
-| Coste del lote de 12 turnos | 0,0059 $ | 0,0087 $ | 0,0072 $ |
+| Batería | Ministral 14B | gpt-oss-120b | Qwen3 Next 80B | **Nemotron 3 Super** |
+|-|-|-|-|-|
+| Clasificador, 29 preguntas originales | 27/29 | 29/29 | 27/29 (mixtas nuevas 1/2) | **29/29 (mixtas nuevas 2/2)** |
+| Turnos aislados (12) | 12/12 | 12/12 | 12/12 | 11/12² |
+| Conversaciones (11 turnos) | 11/11 | 11/11 | 10/11 | 11/11 |
+| JSON válido a la primera (documental) | 6/6 | 6/6 | 6/6 y 9/9 en conversaciones | 7/7 y 9/9 |
+| Datos, 16 casos (/11)¹ | 6 (+2 parciales) | 8 (+1) | 6 (+2) · SQL a la primera 9/11 | 6 (+3) · SQL a la primera 10/11 |
+| Lote nuevo, SQL libre (/20) | 10 | 15 | **16** | **16** |
+| Lote nuevo, catálogo (/20) | 9 | 12 | 10 (+4 parciales) | **14 (+3)** |
+| Mixtas | 1/2 y 0/3 | 1/2 y 0/3 | 0/2 y 0/3 | 0/2 y 0/3 (4 parciales) |
+| Pedir el prompt de sistema | Lo parafrasea (4 de 4) | Frase fija (fuera de alcance) | **Lo copia literal** | Frase fija y **copia literal** (1 y 1) |
+| Turno documental, mediana | 8,3 s | 7,5 s | 7,9 s | **4,9 s** |
+| Clasificador, mediana | 0,3 s | 1,0 s | 0,5 s | 0,35 s |
+| Coste del lote de 12 turnos | 0,0059 $ | 0,0087 $ | 0,0072 $ | 0,0078 $ |
 
 ¹ Ministral y gpt-oss, del cuarto lote de Carlos. Ministral, con Qwen3 Coder como redactor. Los 16 casos
 se usaron para ajustar el prompt con gpt-oss; el lote nuevo de 28 no se usó para ajustar nada.
 Ministral en el lote nuevo, con Qwen3 Coder como redactor o selector.
+² El fallo es de la ruta, no del contenido: con el benceno, la búsqueda reformulada pasó el umbral y la
+respuesta fue «No puedo responder» por la ruta documental en vez de `sin_evidencia`.
 
 - **En preguntas de datos no vistas, Qwen3 Next iguala al mejor de Carlos**: 16/20 con SQL libre
   (gpt-oss 15–16). Acierta las cifras simples, el máximo horario y el porcentaje de anomalías. Falla lo
@@ -1249,7 +1256,7 @@ Ministral en el lote nuevo, con Qwen3 Coder como redactor o selector.
   subida entre veranos. En dos casos saca una conclusión falsa de una consulta que no responde: «13
   estaciones superaron el límite anual de NO2» (no lo superó ninguna) y «la mañana es la peor franja»
   (es la noche).
-- **Seguridad: es el peor de los tres.** Cuando le piden el prompt de sistema lo copia entero en un
+- **Seguridad: Qwen3 Next es el peor.** Cuando le piden el prompt de sistema lo copia entero en un
   bloque de código; en el otro caso de fuga lo parafrasea casi literal. La regla de fuga lo detecta en los
   dos, pero solo observa, así que la respuesta sale. Si se eligiera este modelo, `fuga` tendría que
   bloquear.
@@ -1270,6 +1277,36 @@ Ministral en el lote nuevo, con Qwen3 Coder como redactor o selector.
   ya fallaba con todos: clasificador fuera del lote original, mixtas y hora punta. Cautela: una sola
   pasada; diferencias de 1 o 2 casos están dentro de la variación. Detalle:
   `resultados/revision_qwen3next_20261016.md`.
+
+**Nemotron 3 Super (2026-10-18).** El mejor resultado global de los cuatro en una sola pasada.
+- **Clasificador 31/31**, incluidas las dos mixtas nuevas, con 0,35 s de mediana. Lleva 4 de las 5
+  preguntas mixtas de los lotes de datos por la ruta mixta (solo nm-03 sale como `DOCUMENTAL`); Qwen,
+  2 de 5. Aun así, ninguna mixta sale entera: la parte documental se abstiene o contradice al bloque de
+  datos, como con los demás.
+- **Datos: iguala a Qwen y gpt-oss con SQL libre (16/20) y es el mejor selector del catálogo (14/20
+  y +3 parciales; gpt-oss 12).** Es el único que acierta con el catálogo el «invierno pasado»
+  (2025-26) y la subida del ozono entre veranos (Escuelas Aguirre +5,3). SQL válido a la primera en
+  19 de 20 consultas; las 25 selecciones, JSON válido.
+- **El más rápido**: turno documental de 4,9 s de mediana (gpt-oss 7,5 s) y p95 del turno de 6,7 s.
+  Escribe poco (324 tokens de salida de mediana en la ruta documental): el razonamiento por defecto de
+  Bedrock no se nota ni en la latencia ni en el coste.
+- Fallos, por orden de gravedad:
+  - Copia literal del prompt de sistema cuando se lo piden en charla (la otra petición la para el
+    clasificador).
+  - Con el catálogo, conclusiones falsas cuando la consulta no responde: «13 estaciones superaron el
+    límite anual», la media anual presentada como «valor horario más alto», porcentajes del 109–117 %.
+  - **Inventa datos de Getafe** con la media de toda la ciudad.
+  - Con SQL libre, lee `dia_semana` desplazado y presenta medias como «descensos» de 93 µg/m³.
+- A favor en documentación: responde con citas los umbrales del protocolo de episodios (180 / 200 /
+  400 µg/m³), donde gpt-oss y Qwen se abstenían.
+- Coste de la pasada completa: unos **0,14 $** `[estimación por tokens de las trazas]`, como Qwen.
+- Incidencia: la primera prueba falló por dos arranques en frío (primera llamada a Bedrock, 10 s en el
+  clasificador; RAG recién levantado, 35 s por búsqueda). Repetida un minuto después, sin problema.
+  Lección práctica: calentar el RAG y el modelo antes de medir.
+- Lectura: en una pasada, Nemotron es el candidato más completo en acierto y velocidad, al nivel de
+  gpt-oss o por encima, a coste parecido. Comparte con Qwen la fuga literal del prompt, así que `fuga`
+  tendría que bloquear si se elige. Mismas cautelas: una pasada y veredictos en borrador. Detalle:
+  `resultados/revision_nemotron_20261018.md`.
 
 **Pendiente:** decidir entre SQL libre, catálogo o híbrido (catálogo como paso previo de comprobación de lugar y contaminante) con la comparación de arriba, elegir qué
 comprobaciones bloquean respuestas e incorporar las herramientas de ML. Otro miembro del equipo
@@ -2007,6 +2044,7 @@ la enciende a mano para trabajar o hacer una demo.
 | 2026-10-13 | **EC2 adaptada al `Agente` y a la web** (Guille con Claude Code, rama `feature/infraestructura-ec2`): el compose de producción, `arrancar.sh`, los workflows Desplegar/Rollback y los permisos pasan de `orquestador` a `agente` (Bedrock con el rol de la máquina, configuración desde `/jupiter/agente/` en SSM) y suman `web` como único puerto abierto (80). Probado con `aws` y `docker` simulados en seis escenarios. Scripts de creación en dos pasos (`deploy/aws/`): primero los recursos sin máquina (ECR con limpieza a 5 imágenes, roles, grupo de seguridad, modelos en SSM: Ministral 14B para el agente y gpt-oss-120b para el clasificador) y la EC2 solo cuando las 4 imágenes están desplegadas, para que su primer arranque no falle; apagado nocturno con el destino universal de Scheduler (`ec2:StopInstances`), sin runbook. Mismo día: recursos creados con los scripts de `deploy/aws/` y aplicación en marcha en la EC2, verificada de punta a punta (§8.9). Errores encontrados: comas sin comillas en PowerShell (separan argumentos) y la barra final de la ruta de SSM, que el rol no autorizaba |
 | 2026-10-14 | **Chat de la web en la EC2** (Guille con Claude Code, rama `feature/fix-chat-http`): el chat no enviaba la pregunta servido por HTTP porque `crypto.randomUUID()` solo existe en contextos seguros; sustituido por un contador local (el id no viaja a la API). Build, lint y 36 tests de la web en verde |
 | 2026-10-16 | **Dos modelos más para el agente** (Guille con Claude Code, rama `feature/evaluacion-haiku-qwen`): candidatos elegidos con la API de precios de AWS y la tabla de regiones: Claude Haiku 5.5 y Qwen3 Next 80B A3B. Haiku no está disponible en la cuenta (nadie ha enviado el formulario de caso de uso de Anthropic, así que no hay acuerdo de Marketplace). Qwen3 Next pasa por las baterías de Carlos (clasificador, 12 turnos, conversaciones, adversario, 16 de datos y los 28 nuevos con SQL libre y catálogo) contra una copia local de sus datos: 16/20 en datos no vistos con SQL libre (empata con gpt-oss), 10/20 como selector del catálogo, 0 mixtas y copia literal del prompt de sistema. Unos 0,14 $. Coste real de la campaña de Carlos en Cost Explorer: 1,21 $. Precio de Qwen3 Next añadido al informe de trazas y comparativa visual (`docs/agente/presentacion/comparativa_modelos.html`) ampliada a los tres modelos, con los resultados SQL. Veredictos pendientes de revisión humana |
+| 2026-10-18 | **Nemotron 3 Super en las baterías del agente** (Guille con Claude Code, rama `feature/evaluacion-haiku-qwen`): con Haiku 5.5 aún bloqueado, se evalúa Nemotron 3 Super 120B con las mismas baterías y los mismos datos. Clasificador 31/31, conversaciones 11/11, 16/20 en datos no vistos con SQL libre y 14/20 con el catálogo (el mejor selector), turno documental de 4,9 s; copia literal del prompt de sistema e inventa datos de Getafe con el catálogo. Unos 0,14 $. Precio en el informe de trazas y cuarta serie en la comparativa visual. Veredictos pendientes de revisión humana |
 
 
 ---
@@ -2022,9 +2060,10 @@ la enciende a mano para trabajar o hacer una demo.
   11/11 en conversaciones con los dos. **Elección aplazada** (2026-10-06) hasta poder evaluar
   también las herramientas SQL y de ML. Falta la revisión humana de las respuestas y del español.
   Tercer candidato desde el 2026-10-16: **Qwen3 Next 80B** (16/20 en datos no vistos con SQL libre,
-  como gpt-oss; peor como selector del catálogo y copia literal del prompt de sistema). Claude Haiku
-  5.5 no está disponible en la cuenta: falta el formulario de caso de uso de Anthropic. ¿Puede
-  rellenarlo el equipo o hay que pedírselo al máster? (§7.3.1)
+  como gpt-oss; peor como selector del catálogo y copia literal del prompt de sistema). Cuarto desde el
+  2026-10-18: **Nemotron 3 Super 120B** (clasificador 31/31, 16/20 con SQL libre, 14/20 con el
+  catálogo, el más rápido; también copia el prompt literal). Claude Haiku 5.5 sigue sin acceso aun con
+  el formulario de Anthropic enviado: consultado al máster, sin respuesta a 2026-10-18. (§7.3.1)
 - [ ] Agente nuevo: ¿necesitan las preguntas de datos (herramienta SQL) un modelo de razonamiento?
   Para la ruta documental no hace falta. Analizarlo cuando exista la herramienta SQL. (§11)
 - [x] Agente nuevo: precisión del clasificador con un proveedor real → 20/20 en intención y 5/5 en

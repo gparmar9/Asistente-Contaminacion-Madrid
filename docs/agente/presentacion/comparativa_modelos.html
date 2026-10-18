@@ -9,10 +9,11 @@
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500;12..96,700;12..96,800&family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:ital,wght@0,400;0,500;0,600;1,400&display=swap">
 <style>
 /* Layout: informe de comparación en scroll; marcador arriba, cronología de mediciones,
-   gráficos de latencia y coste, y tres columnas de fallos, una por modelo.
-   Serie 1 (azul) = gpt-oss-120b; serie 2 (naranja) = Ministral 14B; serie 3 (aqua) = Qwen3 Next 80B.
-   Paleta validada en claro (#ffffff) y oscuro (#152129); el aqua queda bajo 3:1 en claro, así que
-   cada barra lleva su valor escrito y el marcador hace de vista en tabla. */
+   gráficos de latencia y coste, y los fallos de cada modelo en una cuadrícula de 2 × 2.
+   Serie 1 (azul) = gpt-oss-120b; serie 2 (naranja) = Ministral 14B; serie 3 (aqua) = Qwen3 Next 80B;
+   serie 4 (amarillo) = Nemotron 3 Super 120B. Paleta validada en claro (#ffffff) y oscuro (#152129);
+   el aqua y el amarillo quedan bajo 3:1 en claro, así que cada barra lleva su valor escrito y el
+   marcador hace de vista en tabla. */
 :root {
   --paper: #f2f6f7;
   --surface: #ffffff;
@@ -24,9 +25,11 @@
   --s-gpt: #2a78d6;
   --s-min: #eb6834;
   --s-qw: #1baf7a;
+  --s-nm: #eda100;
   --s-gpt-soft: #e2edfa;
   --s-min-soft: #fce9e1;
   --s-qw-soft: #ddf3ea;
+  --s-nm-soft: #fbf1d9;
   --s-off: #9aa8af;
   --ok: #1f7a3d; --ok-soft: #e1f2e6;
   --warn: #8a5a00; --warn-soft: #fbf0d6;
@@ -40,16 +43,16 @@
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
     --paper: #0e161b; --surface: #152129; --ink: #e4edf0; --muted: #94a6af; --rule: #2a3a43; --grid: #22313a;
-    --accent: #52b9b8; --s-gpt: #3987e5; --s-min: #d95926; --s-qw: #199e70;
-    --s-gpt-soft: #1a2c44; --s-min-soft: #3b2219; --s-qw-soft: #13302a; --s-off: #5d6d75;
+    --accent: #52b9b8; --s-gpt: #3987e5; --s-min: #d95926; --s-qw: #199e70; --s-nm: #c98500;
+    --s-gpt-soft: #1a2c44; --s-min-soft: #3b2219; --s-qw-soft: #13302a; --s-nm-soft: #33290f; --s-off: #5d6d75;
     --ok: #5cc27e; --ok-soft: #173323; --warn: #e3b14d; --warn-soft: #3a2f14; --bad: #f08a80; --bad-soft: #3d1d1b;
     color-scheme: dark;
   }
 }
 :root[data-theme="dark"] {
   --paper: #0e161b; --surface: #152129; --ink: #e4edf0; --muted: #94a6af; --rule: #2a3a43; --grid: #22313a;
-  --accent: #52b9b8; --s-gpt: #3987e5; --s-min: #d95926; --s-qw: #199e70;
-  --s-gpt-soft: #1a2c44; --s-min-soft: #3b2219; --s-qw-soft: #13302a; --s-off: #5d6d75;
+  --accent: #52b9b8; --s-gpt: #3987e5; --s-min: #d95926; --s-qw: #199e70; --s-nm: #c98500;
+  --s-gpt-soft: #1a2c44; --s-min-soft: #3b2219; --s-qw-soft: #13302a; --s-nm-soft: #33290f; --s-off: #5d6d75;
   --ok: #5cc27e; --ok-soft: #173323; --warn: #e3b14d; --warn-soft: #3a2f14; --bad: #f08a80; --bad-soft: #3d1d1b;
   color-scheme: dark;
 }
@@ -75,6 +78,7 @@ a:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .hero h1 .m { color: var(--s-min); }
 .hero h1 .g { color: var(--s-gpt); }
 .hero h1 .q { color: var(--s-qw); }
+.hero h1 .n { color: var(--s-nm); }
 .hero h1 .vs { color: var(--muted); font-weight: 500; }
 .lede { font-size: var(--step-1); color: var(--muted); max-width: 66ch; }
 .verdict { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 14px; align-items: start; background: var(--surface); border: 1px solid var(--rule); border-radius: 10px; padding: 16px 18px; max-width: 84ch; }
@@ -90,6 +94,7 @@ section.block { padding-block: 52px; border-top: 1px solid var(--rule); display:
 .sw.g { background: var(--s-gpt); }
 .sw.m { background: var(--s-min); }
 .sw.q { background: var(--s-qw); }
+.sw.n { background: var(--s-nm); }
 .sw.x { background: transparent; border: 2px dashed var(--s-off); }
 
 /* candidatos */
@@ -102,6 +107,7 @@ section.block { padding-block: 52px; border-top: 1px solid var(--rule); display:
 .cand dd { margin: 0; min-width: 0; }
 .tag { font-family: var(--font-body); font-size: 0.7rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em; padding: 2px 8px; border-radius: 999px; background: var(--grid); color: var(--muted); }
 .tag.new { background: var(--s-qw-soft); color: var(--ink); box-shadow: inset 3px 0 0 var(--s-qw); }
+.tag.new.n { background: var(--s-nm-soft); box-shadow: inset 3px 0 0 var(--s-nm); }
 .discarded { display: grid; gap: 6px; font-size: var(--step--1); color: var(--muted); padding: 0; margin: 0; list-style: none; }
 .discarded b { color: var(--ink); font-weight: 600; }
 
@@ -122,6 +128,7 @@ td.t { min-width: 11em; }
 .chip.g { background: var(--s-gpt-soft); color: var(--ink); box-shadow: inset 3px 0 0 var(--s-gpt); }
 .chip.m { background: var(--s-min-soft); color: var(--ink); box-shadow: inset 3px 0 0 var(--s-min); }
 .chip.q { background: var(--s-qw-soft); color: var(--ink); box-shadow: inset 3px 0 0 var(--s-qw); }
+.chip.n { background: var(--s-nm-soft); color: var(--ink); box-shadow: inset 3px 0 0 var(--s-nm); }
 .foot { font-size: var(--step--1); color: var(--muted); max-width: 80ch; }
 
 /* cronología */
@@ -136,6 +143,7 @@ td.t { min-width: 11em; }
 .res.m { background: var(--s-min-soft); box-shadow: inset 3px 0 0 var(--s-min); }
 .res.g { background: var(--s-gpt-soft); box-shadow: inset 3px 0 0 var(--s-gpt); }
 .res.q { background: var(--s-qw-soft); box-shadow: inset 3px 0 0 var(--s-qw); }
+.res.n { background: var(--s-nm-soft); box-shadow: inset 3px 0 0 var(--s-nm); }
 .res.x { background: var(--surface); border: 1px dashed var(--s-off); }
 .res b { font-family: var(--font-mono); font-weight: 500; }
 .res small { color: var(--muted); font-size: 0.78rem; }
@@ -159,9 +167,12 @@ svg .baseline { stroke: var(--rule); stroke-width: 1; }
 svg .bar-g, svg .dot-g { fill: var(--s-gpt); }
 svg .bar-m, svg .dot-m { fill: var(--s-min); }
 svg .bar-q, svg .dot-q { fill: var(--s-qw); }
+svg .bar-n, svg .dot-n { fill: var(--s-nm); }
 svg .rng-g { stroke: var(--s-gpt); stroke-width: 2; stroke-linecap: round; }
 svg .rng-m { stroke: var(--s-min); stroke-width: 2; stroke-linecap: round; }
 svg .rng-q { stroke: var(--s-qw); stroke-width: 2; stroke-linecap: round; }
+svg .rng-n { stroke: var(--s-nm); stroke-width: 2; stroke-linecap: round; }
+svg .none-text { fill: var(--muted); font-size: 11px; font-style: italic; }
 svg .ring { stroke: var(--surface); stroke-width: 2; }
 svg .hit { fill: transparent; cursor: default; }
 svg g.item:hover .mark { opacity: 0.85; }
@@ -177,12 +188,13 @@ svg g.item:hover .mark { opacity: 0.85; }
 .stat small { color: var(--muted); font-size: 0.78rem; }
 
 /* fallos */
-.faults { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 18px; align-items: start; }
+.faults { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 24px 18px; align-items: start; }
 .col { display: grid; gap: 10px; min-width: 0; }
 .col > h3 { display: flex; align-items: center; gap: 8px; padding-bottom: 6px; border-bottom: 2px solid var(--rule); }
 .col.m > h3 { border-color: var(--s-min); }
 .col.g > h3 { border-color: var(--s-gpt); }
 .col.q > h3 { border-color: var(--s-qw); }
+.col.n > h3 { border-color: var(--s-nm); }
 .fault { background: var(--surface); border: 1px solid var(--rule); border-radius: 10px; padding: 14px 16px; display: grid; gap: 6px; min-width: 0; }
 .fault-head { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; }
 .fault h4 { margin: 0; font-family: var(--font-display); font-size: var(--step-0); font-weight: 700; }
@@ -211,7 +223,7 @@ blockquote { margin: 0; padding: 8px 12px; border-left: 3px solid var(--rule); b
 
 footer { padding-block: 32px 48px; border-top: 1px solid var(--rule); color: var(--muted); font-size: var(--step--1); }
 
-@media (max-width: 960px) {
+@media (max-width: 820px) {
   .faults { grid-template-columns: minmax(0, 1fr); }
 }
 @media (max-width: 820px) {
@@ -244,13 +256,13 @@ footer { padding-block: 32px 48px; border-top: 1px solid var(--rule); color: var
 
 <main class="wrap">
   <header class="hero">
-    <p class="eyebrow">Agente del TFM · Amazon Bedrock eu-west-1 · mediciones del 4 al 16 de octubre de 2026</p>
-    <h1><span class="m">Ministral 14B</span><span class="vs">, </span><span class="g">gpt-oss-120b</span> <span class="vs">y</span> <span class="q">Qwen3 Next 80B</span></h1>
-    <p class="lede">Los tres pasan por las mismas baterías: clasificador, turnos documentales, conversaciones, casos adversarios y preguntas de datos con resultado de referencia. En lo documental empatan; se separan en las preguntas de datos, en la latencia y, sobre todo, en cómo fallan cuando se salen del camino.</p>
+    <p class="eyebrow">Agente del TFM · Amazon Bedrock eu-west-1 · mediciones del 4 al 18 de octubre de 2026</p>
+    <h1><span class="m">Ministral 14B</span><span class="vs">, </span><span class="g">gpt-oss-120b</span><span class="vs">, </span><span class="q">Qwen3 Next 80B</span> <span class="vs">y</span> <span class="n">Nemotron 3 Super</span></h1>
+    <p class="lede">Los cuatro pasan por las mismas baterías: clasificador, turnos documentales, conversaciones, casos adversarios y preguntas de datos con resultado de referencia. En lo documental empatan; se separan en las preguntas de datos, en la latencia y, sobre todo, en cómo fallan cuando se salen del camino.</p>
     <div class="verdict">
       <span class="pill">Sin decidir</span>
       <div>
-        <p><strong>gpt-oss</strong> sigue siendo el más completo: mejor clasificador, mejor selector del catálogo y el más prudente. <strong>Qwen3 Next</strong> le iguala en las preguntas de datos con SQL libre, a un coste parecido, pero entrega su prompt de sistema en cuanto se lo piden. <strong>Ministral</strong> es el más barato y se toma libertades con las cifras.</p>
+        <p><strong>Nemotron 3 Super</strong>, el último en probarse, sale el más completo en una pasada: clasificador perfecto, el mejor selector del catálogo, el más rápido y al nivel de gpt-oss con SQL libre. Pero copia su prompt de sistema si se lo piden e inventa datos de un municipio sin estación. <strong>gpt-oss</strong> sigue siendo el más prudente. <strong>Qwen3 Next</strong> iguala en SQL libre y también entrega su prompt. <strong>Ministral</strong> es el más barato y se toma libertades con las cifras.</p>
         <p><strong>Claude Haiku 5.5</strong> no se pudo probar: aun con el formulario de Anthropic enviado, la cuenta del máster sigue sin acceso.</p>
       </div>
     </div>
@@ -284,13 +296,23 @@ footer { padding-block: 32px 48px; border-top: 1px solid var(--rule); color: var
         </dl>
       </article>
       <article class="cand">
-        <h3><i class="sw q"></i>Qwen3 Next 80B A3B <span class="tag new">Nuevo · 16 oct</span></h3>
+        <h3><i class="sw q"></i>Qwen3 Next 80B A3B <span class="tag new">Probado · 16 oct</span></h3>
         <dl>
           <dt>ID</dt><dd><code>qwen.qwen3-next-80b-a3b</code></dd>
           <dt>Tipo</dt><dd>MoE de 80B con 3B activos, sin razonamiento</dd>
           <dt>Precio</dt><dd>0,17 $ / 1,44 $ por millón de tokens</dd>
           <dt>Por qué</dt><dd>Rápido como Ministral pero con un MoE grande detrás, como gpt-oss; en la propia región</dd>
           <dt>Ojo</dt><dd>La salida es cara por token, pero escribe poco: la ruta documental le sale como a gpt-oss</dd>
+        </dl>
+      </article>
+      <article class="cand">
+        <h3><i class="sw n"></i>Nemotron 3 Super 120B <span class="tag new n">Probado · 18 oct</span></h3>
+        <dl>
+          <dt>ID</dt><dd><code>nvidia.nemotron-super-3-120b</code></dd>
+          <dt>Tipo</dt><dd>MoE de 120B con 12B activos; razonamiento configurable (se usó el de Bedrock por defecto)</dd>
+          <dt>Precio</dt><dd>0,18 $ / 0,78 $ por millón de tokens</dd>
+          <dt>Por qué</dt><dd>El rival directo de gpt-oss-120b: mismo tamaño y precio, en la propia región</dd>
+          <dt>Ojo</dt><dd>Primera llamada lenta (arranque en frío de 10 s); después, el más rápido de los cuatro</dd>
         </dl>
       </article>
       <article class="cand off">
@@ -307,7 +329,6 @@ footer { padding-block: 32px 48px; border-top: 1px solid var(--rule); color: var
     <ul class="discarded">
       <li><b>Magistral Small 1.2</b> (Small 3.2 con razonamiento): 0,59 / 1,76 $ y más lento; no cabe en 4 llamadas por turno.</li>
       <li><b>Mistral Large 3</b>: no está en Irlanda. <b>Pixtral Large</b>: solo por perfil <code>eu.</code> y con retirada cercana.</li>
-      <li><b>NVIDIA Nemotron 3 Super 120B</b> (0,18 / 0,78 $): candidato serio, aplazado por decisión del equipo.</li>
       <li><b>Nova 2 Lite</b>: salida a 3,16 $. <b>GLM 4.7 Flash</b>: en <em>Legacy</em>, se retira en marzo de 2027.</li>
       <li><b>DeepSeek v3.2, GLM 4.7, Kimi K2.5, Qwen3 235B</b>: no están en Irlanda o cuestan de 3 a 5 veces más. <b>Opus y GPT-6 Astra</b> (10 / 50 $): demasiado grandes.</li>
       <li><b>MiniMax M2.5</b>: probado como referencia para SQL el 9 de octubre; más caro y acertó menos (2/11).</li>
@@ -322,31 +343,34 @@ footer { padding-block: 32px 48px; border-top: 1px solid var(--rule); color: var
     </div>
     <div class="tablebox">
       <table>
-        <thead><tr><th>Indicador</th><th><i class="sw m"></i>Ministral 14B</th><th><i class="sw g"></i>gpt-oss-120b</th><th><i class="sw q"></i>Qwen3 Next</th><th>Lectura</th></tr></thead>
+        <thead><tr><th>Indicador</th><th><i class="sw m"></i>Ministral 14B</th><th><i class="sw g"></i>gpt-oss-120b</th><th><i class="sw q"></i>Qwen3 Next</th><th><i class="sw n"></i>Nemotron</th><th>Lectura</th></tr></thead>
         <tbody>
-          <tr class="grp"><td colspan="5">Entender la pregunta y documentación</td></tr>
-          <tr><td class="t">Clasificador, 29 preguntas originales</td><td class="v">27/29</td><td class="v win">29/29</td><td class="v">27/29</td><td><span class="chip g">gpt-oss</span></td></tr>
-          <tr><td class="t">Turnos aislados (12 casos)</td><td class="v">12/12</td><td class="v">12/12</td><td class="v">12/12</td><td><span class="chip tie">Empate</span></td></tr>
-          <tr><td class="t">Conversaciones, 11 turnos con seguimiento</td><td class="v">11/11</td><td class="v">11/11</td><td class="v">10/11</td><td><span class="chip tie">Empate</span></td></tr>
-          <tr><td class="t">JSON documental válido a la primera</td><td class="v">12/12</td><td class="v">12/12</td><td class="v">15/15</td><td><span class="chip tie">Empate</span></td></tr>
-          <tr class="grp"><td colspan="5">Preguntas de datos (SQL)</td></tr>
-          <tr><td class="t">16 casos de ajuste, mejor lote (/11)</td><td class="v">6 (+2)¹</td><td class="v win">8 (+1)</td><td class="v">6 (+2)</td><td><span class="chip g">gpt-oss</span></td></tr>
-          <tr><td class="t">20 preguntas no vistas, SQL libre</td><td class="v">10¹</td><td class="v">15</td><td class="v win">16</td><td><span class="chip q">Qwen ≈ gpt-oss</span></td></tr>
-          <tr><td class="t">Las mismas 20, catálogo de consultas fijas</td><td class="v">9¹</td><td class="v win">12</td><td class="v">10 (+4)</td><td><span class="chip g">gpt-oss</span></td></tr>
-          <tr><td class="t">Preguntas mixtas, datos + salud (5)</td><td class="v">1¹</td><td class="v">1</td><td class="v">0</td><td><span class="chip tie">Ninguno</span></td></tr>
-          <tr class="grp"><td colspan="5">Velocidad y coste</td></tr>
-          <tr><td class="t">Latencia mediana del turno (lote de 12)</td><td class="v">4,5 s</td><td class="v win">2,9 s</td><td class="v">4,4 s</td><td><span class="chip g">gpt-oss</span></td></tr>
-          <tr><td class="t">p95 del turno</td><td class="v">17,3 s</td><td class="v">9,2 s</td><td class="v">8,9 s</td><td><span class="chip tie">gpt-oss y Qwen</span></td></tr>
-          <tr><td class="t">Latencia del clasificador (mediana)</td><td class="v win">315 ms</td><td class="v">986 ms</td><td class="v">493 ms</td><td><span class="chip m">Ministral</span></td></tr>
-          <tr><td class="t">Coste de un turno documental (mediana)</td><td class="v win">0,00091 $</td><td class="v">0,00135 $</td><td class="v">0,00102 $</td><td><span class="chip m">Ministral</span></td></tr>
-          <tr class="grp"><td colspan="5">Seguridad y prudencia</td></tr>
-          <tr><td class="t">Si le piden su prompt de sistema</td><td>Lo parafrasea (4 de 4)</td><td class="win">Frase fija: no llega al modelo</td><td>Lo copia entero</td><td><span class="chip g">gpt-oss</span></td></tr>
-          <tr><td class="t">Sin evidencias (síntesis forzada)</td><td>Responde con conocimiento propio</td><td class="win">Dice que no tiene información</td><td>Sin medir</td><td><span class="chip g">gpt-oss</span></td></tr>
-          <tr><td class="t">La consulta de datos no responde a la pregunta</td><td>Inventa («18 estaciones…», porcentajes del 120 %)</td><td class="win">Dice que no puede</td><td>A veces inventa (2 de 6 en el catálogo)</td><td><span class="chip g">gpt-oss</span></td></tr>
+          <tr class="grp"><td colspan="6">Entender la pregunta y documentación</td></tr>
+          <tr><td class="t">Clasificador, 29 preguntas originales</td><td class="v">27/29</td><td class="v win">29/29</td><td class="v">27/29</td><td class="v win">29/29</td><td><span class="chip tie">gpt-oss y Nemotron</span></td></tr>
+          <tr><td class="t">Clasificador, 2 mixtas nuevas</td><td>Sin medir</td><td class="v">2/2 y 1/2</td><td class="v">1/2</td><td class="v win">2/2</td><td><span class="chip n">Nemotron</span></td></tr>
+          <tr><td class="t">Turnos aislados (12 casos)</td><td class="v">12/12</td><td class="v">12/12</td><td class="v">12/12</td><td class="v">11/12²</td><td><span class="chip tie">Empate</span></td></tr>
+          <tr><td class="t">Conversaciones, 11 turnos con seguimiento</td><td class="v">11/11</td><td class="v">11/11</td><td class="v">10/11</td><td class="v">11/11</td><td><span class="chip tie">Empate</span></td></tr>
+          <tr><td class="t">JSON documental válido a la primera</td><td class="v">12/12</td><td class="v">12/12</td><td class="v">15/15</td><td class="v">16/16</td><td><span class="chip tie">Empate</span></td></tr>
+          <tr><td class="t">Umbrales del protocolo de episodios</td><td>Responde con citas <em>[por confirmar]</em></td><td>Se abstiene</td><td>Se abstiene (busca con el tema equivocado)</td><td class="win">Responde con citas</td><td><span class="chip n">Nemotron</span></td></tr>
+          <tr class="grp"><td colspan="6">Preguntas de datos (SQL)</td></tr>
+          <tr><td class="t">16 casos de ajuste, mejor lote (/11)</td><td class="v">6 (+2)¹</td><td class="v win">8 (+1)</td><td class="v">6 (+2)</td><td class="v">6 (+3)</td><td><span class="chip g">gpt-oss</span></td></tr>
+          <tr><td class="t">20 preguntas no vistas, SQL libre</td><td class="v">10¹</td><td class="v">15</td><td class="v win">16</td><td class="v win">16</td><td><span class="chip tie">gpt-oss, Qwen y Nemotron</span></td></tr>
+          <tr><td class="t">Las mismas 20, catálogo de consultas fijas</td><td class="v">9¹</td><td class="v">12</td><td class="v">10 (+4)</td><td class="v win">14 (+3)</td><td><span class="chip n">Nemotron</span></td></tr>
+          <tr><td class="t">Preguntas mixtas, datos + salud (5)</td><td class="v">1¹</td><td class="v">1</td><td class="v">0</td><td class="v">0 (4 por la ruta mixta)</td><td><span class="chip tie">Ninguno</span></td></tr>
+          <tr class="grp"><td colspan="6">Velocidad y coste</td></tr>
+          <tr><td class="t">Latencia mediana del turno (lote de 12)</td><td class="v">4,5 s</td><td class="v win">2,9 s</td><td class="v">4,4 s</td><td class="v">3,5 s</td><td><span class="chip g">gpt-oss</span></td></tr>
+          <tr><td class="t">Turno documental (mediana)</td><td class="v">11,4 s</td><td class="v">7,4 s</td><td class="v">7,9 s</td><td class="v win">4,9 s</td><td><span class="chip n">Nemotron</span></td></tr>
+          <tr><td class="t">p95 del turno</td><td class="v">17,3 s</td><td class="v">9,2 s</td><td class="v">8,9 s</td><td class="v win">6,7 s</td><td><span class="chip n">Nemotron</span></td></tr>
+          <tr><td class="t">Latencia del clasificador (mediana)</td><td class="v win">315 ms</td><td class="v">986 ms</td><td class="v">493 ms</td><td class="v">351 ms</td><td><span class="chip tie">Ministral y Nemotron</span></td></tr>
+          <tr><td class="t">Coste de un turno documental (mediana)</td><td class="v win">0,00091 $</td><td class="v">0,00135 $</td><td class="v">0,00102 $</td><td class="v">0,00094 $</td><td><span class="chip tie">Ministral y Nemotron</span></td></tr>
+          <tr class="grp"><td colspan="6">Seguridad y prudencia</td></tr>
+          <tr><td class="t">Si le piden su prompt de sistema</td><td>Lo parafrasea (4 de 4)</td><td class="win">Frase fija: no llega al modelo</td><td>Lo copia entero</td><td>Frase fija una vez; la otra lo copia entero</td><td><span class="chip g">gpt-oss</span></td></tr>
+          <tr><td class="t">Sin evidencias (síntesis forzada)</td><td>Responde con conocimiento propio</td><td class="win">Dice que no tiene información</td><td>Sin medir</td><td>Sin medir</td><td><span class="chip g">gpt-oss</span></td></tr>
+          <tr><td class="t">La consulta de datos no responde a la pregunta</td><td>Inventa («18 estaciones…», porcentajes del 120 %)</td><td class="win">Dice que no puede</td><td>A veces inventa (2 de 6 en el catálogo)</td><td>A veces inventa (4 de 6 en el catálogo; también Getafe)</td><td><span class="chip g">gpt-oss</span></td></tr>
         </tbody>
       </table>
     </div>
-    <p class="foot">¹ Ministral, con Qwen3 Coder como redactor del SQL o selector del catálogo. gpt-oss y Qwen3 Next hacen las dos cosas. Las latencias de Ministral y gpt-oss salen de dos lotes (24 turnos); las de Qwen, de uno (12). Veredictos de las preguntas de datos en borrador, pendientes de revisión humana.</p>
+    <p class="foot">¹ Ministral, con Qwen3 Coder como redactor del SQL o selector del catálogo; los otros tres hacen las dos cosas. ² Con el benceno, la búsqueda de Nemotron sí encontró fragmentos y respondió «No puedo responder» por la ruta documental en vez de la de «sin evidencias»: el contenido es correcto. Las latencias de Ministral y gpt-oss salen de dos lotes (24 turnos); las de Qwen y Nemotron, de uno (12). Veredictos de las preguntas de datos en borrador, pendientes de revisión humana.</p>
   </section>
 
   <section class="block" id="cronologia">
@@ -400,6 +424,17 @@ footer { padding-block: 32px 48px; border-top: 1px solid var(--rule); color: var
         </div>
         <p class="after">El mismo día, Claude Haiku 5.5 devolvió <code>AccessDeniedException</code>, antes y después de enviar el formulario de caso de uso de Anthropic.</p>
       </div></li>
+      <li class="tl"><time>18 oct</time><div class="tl-body">
+        <h3>Con Haiku aún bloqueado, Nemotron 3 Super pasa por todas las baterías</h3>
+        <div class="res n"><b>Una pasada, mismos casos y mismos datos · ~0,14 $</b>
+          <ul>
+            <li>Clasificador <strong>31/31</strong> · turnos 11/12 · conversaciones 11/11 · JSON a la primera 16/16</li>
+            <li>Datos: 6 (+3)/11 en los 16 casos · <strong>16/20 no vistas con SQL libre</strong> · <strong>14 (+3)/20 con el catálogo</strong></li>
+            <li>Turno documental de 4,9 s de mediana · copia literal su prompt en una de las dos peticiones</li>
+          </ul>
+        </div>
+        <p class="after">La primera prueba falló por arranques en frío (Bedrock y el RAG recién levantado), no por el modelo: repetida un minuto después, sin problema.</p>
+      </div></li>
     </ol>
   </section>
 
@@ -407,21 +442,21 @@ footer { padding-block: 32px 48px; border-top: 1px solid var(--rule); color: var
     <div class="sec-head">
       <span class="sec-num">04</span>
       <h2>Latencia</h2>
-      <p>Lote de 12 casos con el RAG real: dos lotes por modelo para Ministral y gpt-oss (24 turnos), uno para Qwen3 Next (12). Medianas con su n; el p95 es solo descriptivo con tan pocos turnos.</p>
-      <div class="legend"><span><i class="sw m"></i>Ministral 14B</span><span><i class="sw g"></i>gpt-oss-120b</span><span><i class="sw q"></i>Qwen3 Next 80B</span></div>
+      <p>Lote de 12 casos con el RAG real: dos lotes por modelo para Ministral y gpt-oss (24 turnos), uno para Qwen3 Next y Nemotron (12). Medianas con su n; el p95 es solo descriptivo con tan pocos turnos.</p>
+      <div class="legend"><span><i class="sw m"></i>Ministral 14B</span><span><i class="sw g"></i>gpt-oss-120b</span><span><i class="sw q"></i>Qwen3 Next 80B</span><span><i class="sw n"></i>Nemotron 3 Super</span></div>
     </div>
     <div class="charts">
       <div class="chart">
         <h3>Turno completo por ruta</h3>
         <p class="sub">Mediana en segundos</p>
         <div class="svgbox" id="c-ruta"></div>
-        <p class="note">La ruta documental hace 4 llamadas al modelo; ahí se acumula la diferencia. En las frases fijas solo cuenta el clasificador. El «sin evidencia» de Qwen es un solo turno.</p>
+        <p class="note">La ruta documental hace 4 llamadas al modelo; ahí se acumula la diferencia. En las frases fijas solo cuenta el clasificador. El «sin evidencia» de Qwen es un solo turno; Nemotron no tuvo ninguno en este lote.</p>
       </div>
       <div class="chart">
         <h3>Cada llamada al modelo, por fase</h3>
         <p class="sub">Punto = mediana; línea = hasta el p95, en segundos</p>
         <div class="svgbox" id="c-fase"></div>
-        <p class="note">Ministral tiene una cola larga: su p95 duplica o quintuplica la mediana. Qwen es el más rápido en el clasificador y en el bucle, y el más lento en la síntesis.</p>
+        <p class="note">Ministral tiene una cola larga: su p95 duplica o quintuplica la mediana. Nemotron es el más rápido en la síntesis; Qwen, el más lento en esa fase.</p>
       </div>
     </div>
   </section>
@@ -434,14 +469,14 @@ footer { padding-block: 32px 48px; border-top: 1px solid var(--rule); color: var
     </div>
     <div class="stats">
       <div class="stat"><span class="lab">Tokens de salida, turno documental</span>
-        <div class="duo"><span><i class="sw m"></i><b>585</b> Ministral</span><span><i class="sw g"></i><b>1.108</b> gpt-oss</span><span><i class="sw q"></i><b>425</b> Qwen3 Next</span></div>
-        <small>gpt-oss casi duplica la salida: el razonamiento también se cobra. Qwen escribe lo justo.</small></div>
+        <div class="duo"><span><i class="sw m"></i><b>585</b> Ministral</span><span><i class="sw g"></i><b>1.108</b> gpt-oss</span><span><i class="sw q"></i><b>425</b> Qwen3 Next</span><span><i class="sw n"></i><b>324</b> Nemotron</span></div>
+        <small>gpt-oss casi duplica la salida: el razonamiento también se cobra. Qwen y Nemotron escriben lo justo.</small></div>
       <div class="stat"><span class="lab">Coste mediano, turno documental</span>
-        <div class="duo"><span><i class="sw m"></i><b>0,00091 $</b></span><span><i class="sw g"></i><b>0,00135 $</b></span><span><i class="sw q"></i><b>0,00102 $</b></span></div>
+        <div class="duo"><span><i class="sw m"></i><b>0,00091 $</b> Ministral</span><span><i class="sw g"></i><b>0,00135 $</b> gpt-oss</span><span><i class="sw q"></i><b>0,00102 $</b> Qwen3 Next</span><span><i class="sw n"></i><b>0,00094 $</b> Nemotron</span></div>
         <small>Entre 0,9 $ y 1,35 $ por cada 1.000 preguntas documentales (estimación).</small></div>
       <div class="stat"><span class="lab">Lo que ha costado medirlo</span>
-        <div class="duo"><span><b>1,21 $</b> campaña de Carlos</span><span><b>~0,14 $</b> Qwen3 Next</span></div>
-        <small>Carlos: todo su gasto en Bedrock del 4 al 14 de octubre (Cost Explorer, sin IVA), con iteraciones y repeticiones. Qwen: una pasada completa, estimada por tokens.</small></div>
+        <div class="duo"><span><b>1,21 $</b> campaña de Carlos</span><span><b>~0,14 $</b> Qwen3 Next</span><span><b>~0,14 $</b> Nemotron</span></div>
+        <small>Carlos: todo su gasto en Bedrock del 4 al 14 de octubre (Cost Explorer, sin IVA), con iteraciones y repeticiones. Qwen y Nemotron: una pasada completa cada uno, estimada por tokens.</small></div>
     </div>
     <p class="foot">Con estas cifras el coste no decide: la diferencia entre modelos es de céntimos por cada mil preguntas. Lo que decide es la calidad, la estabilidad y cómo se comporta cuando algo sale mal.</p>
   </section>
@@ -498,16 +533,28 @@ footer { padding-block: 32px 48px; border-top: 1px solid var(--rule); color: var
         <article class="fault"><div class="fault-head"><h4>Salida cara por token</h4><span class="sev lo">Baja</span></div>
           <p>1,44 $ por millón, el doble que gpt-oss. Lo compensa escribiendo poco: 425 tokens de mediana en la ruta documental.</p></article>
       </div>
+      <div class="col n">
+        <h3><i class="sw n"></i>Nemotron 3 Super</h3>
+        <article class="fault"><div class="fault-head"><h4>Copia su prompt de sistema</h4><span class="sev hi">Alta</span></div>
+          <p>Cuando la petición llega a la charla, lo copia literal, como Qwen. La otra petición la paró el clasificador. La regla de fuga lo detecta, pero hoy solo observa.</p></article>
+        <article class="fault"><div class="fault-head"><h4>Inventa datos de un sitio sin estación</h4><span class="sev hi">Alta</span></div>
+          <p>Con el catálogo, presenta la media de toda la ciudad como si fuera de Getafe.</p>
+          <blockquote>«El 2026-04-30, en Getafe, la calidad del aire muestra una media ponderada de NO2 de 15,4 µg/m³…»</blockquote></article>
+        <article class="fault"><div class="fault-head"><h4>Conclusiones falsas con el catálogo</h4><span class="sev hi">Alta</span></div>
+          <p>Cuando la consulta no responde, a veces concluye igual: «13 estaciones superaron el límite anual» (ninguna), la media anual (31,7) como «valor horario más alto» o porcentajes del 109–117 %.</p></article>
+        <article class="fault"><div class="fault-head"><h4>Arranque en frío</h4><span class="sev lo">Baja</span></div>
+          <p>La primera llamada del día tardó 10 s y el clasificador agotó su tiempo. Después, 0,35 s de mediana.</p></article>
+      </div>
     </div>
 
     <div class="sec-head"><h3>Problemas que no son del modelo</h3></div>
     <div class="common">
-      <article class="fault"><div class="fault-head"><h4>Preguntas mixtas</h4><span class="sev hi">Alta</span></div><p>Como mucho 1 de 5 con cualquiera de los tres. Los datos salen bien; la parte documental contradice al bloque de datos.</p></article>
-      <article class="fault"><div class="fault-head"><h4>Hora punta y comparaciones</h4><span class="sev md">Media</span></div><p>«Patrón en hora punta» (mañana − resto) y la subida entre dos veranos fallan con todos: la consulta devuelve niveles, no diferencias.</p></article>
-      <article class="fault"><div class="fault-head"><h4>Clasificador sobreajustado</h4><span class="sev md">Media</span></div><p>El 29/29 se logró en iteraciones sobre las mismas preguntas. Fuera de ellas, los tres fallan alguna (mixtas nuevas 1/2).</p></article>
+      <article class="fault"><div class="fault-head"><h4>Preguntas mixtas</h4><span class="sev hi">Alta</span></div><p>Como mucho 1 de 5 con cualquiera de los cuatro. Los datos salen bien; la parte documental contradice al bloque de datos.</p></article>
+      <article class="fault"><div class="fault-head"><h4>Hora punta, día de la semana y comparaciones</h4><span class="sev md">Media</span></div><p>«Patrón en hora punta» (mañana − resto) y la subida entre dos veranos fallan con todos: la consulta devuelve niveles, no diferencias. Con SQL libre, Qwen y Nemotron leen mal el código del día de la semana.</p></article>
+      <article class="fault"><div class="fault-head"><h4>Clasificador sobreajustado</h4><span class="sev md">Media</span></div><p>El 29/29 se logró en iteraciones sobre las mismas preguntas. Fuera de ellas fallan alguna todos menos Nemotron, que acertó las dos mixtas nuevas en su única pasada.</p></article>
       <article class="fault"><div class="fault-head"><h4>Calidad del contenido sin revisar</h4><span class="sev md">Media</span></div><p>Las métricas automáticas miden formato, ruta y citas. Los veredictos de datos están en borrador: falta que una persona los lea.</p></article>
       <article class="fault"><div class="fault-head"><h4>Bedrock varía de un rato a otro</h4><span class="sev lo">Baja</span></div><p>Entre dos lotes iguales la latencia cambia más que entre modelos. Compara siempre lotes tomados a la misma hora.</p></article>
-      <article class="fault"><div class="fault-head"><h4>Repetir un lote exige los mismos datos</h4><span class="sev lo">Baja</span></div><p>La base local ya llegaba a mayo; para Qwen se replicó la de Carlos (314.411 filas hasta el 30 de abril). Si no, el gold no sirve.</p></article>
+      <article class="fault"><div class="fault-head"><h4>Repetir un lote exige los mismos datos</h4><span class="sev lo">Baja</span></div><p>La base local ya llegaba a mayo; para Qwen y Nemotron se replicó la de Carlos (314.411 filas hasta el 30 de abril). Si no, el gold no sirve.</p></article>
     </div>
   </section>
 
@@ -519,8 +566,8 @@ footer { padding-block: 32px 48px; border-top: 1px solid var(--rule); color: var
     <ul class="todo">
       <li>Desbloquear Claude Haiku 5.5: el formulario de Anthropic ya está enviado, pero falta la suscripción de Marketplace. Probar a crearla desde la consola y, si la cuenta no lo permite, pedírselo al máster. Después, pasarle las mismas baterías.</li>
       <li>Revisar a mano los veredictos de las preguntas de datos (los de Carlos y los de Qwen) y la calidad del español.</li>
-      <li>Repetir los lotes clave para medir la variación: hoy hay una pasada por modelo.</li>
-      <li>Si se elige Qwen3 Next: poner <code>fuga</code> en <code>COMPROBACIONES_BLOQUEAN</code> antes de desplegarlo.</li>
+      <li>Repetir los lotes clave con los dos favoritos, gpt-oss y Nemotron, para ver si la ventaja de Nemotron se mantiene: hoy hay una pasada por modelo.</li>
+      <li>Si se elige Qwen3 Next o Nemotron: poner <code>fuga</code> en <code>COMPROBACIONES_BLOQUEAN</code> antes de desplegarlo.</li>
       <li>Arreglar lo que falla con todos: preguntas mixtas, hora punta y clasificador fuera del lote original.</li>
       <li>Evaluar la herramienta del detector de anomalías con los candidatos que queden.</li>
     </ul>
@@ -535,7 +582,7 @@ footer { padding-block: 32px 48px; border-top: 1px solid var(--rule); color: var
 </main>
 
 <footer>
-  <div class="wrap">Fuentes: <code>docs/notas_memoria.md</code> §7.3.1, <code>Agente/evaluacion/resultados/</code> (turnos, clasificador y revisiones de datos), informe de <code>informe_trazas.py</code> sobre <code>Agente/trazas/</code> y Cost Explorer, a 16 de octubre de 2026. Precios de Bedrock eu-west-1 de la API pública de precios de AWS.</div>
+  <div class="wrap">Fuentes: <code>docs/notas_memoria.md</code> §7.3.1, <code>Agente/evaluacion/resultados/</code> (turnos, clasificador y revisiones de datos), informe de <code>informe_trazas.py</code> sobre <code>Agente/trazas/</code> y Cost Explorer, a 18 de octubre de 2026. Precios de Bedrock eu-west-1 de la API pública de precios de AWS.</div>
 </footer>
 
 <script>
@@ -551,7 +598,8 @@ footer { padding-block: 32px 48px; border-top: 1px solid var(--rule); color: var
   var MODELS = [
     { key: "m", name: "Ministral 14B" },
     { key: "g", name: "gpt-oss-120b" },
-    { key: "q", name: "Qwen3 Next 80B" }
+    { key: "q", name: "Qwen3 Next 80B" },
+    { key: "n", name: "Nemotron 3 Super" }
   ];
 
   function tooltip(container) {
@@ -590,8 +638,15 @@ footer { padding-block: 32px 48px; border-top: 1px solid var(--rule); color: var
       var lab = mk("text", { x: left - 10, y: y0 + (MODELS.length * (barH + gap)) / 2 + 4, "text-anchor": "end", class: "cat-text" }, svg);
       lab.textContent = r.label;
       MODELS.forEach(function (m, j) {
-        var v = r[m.key], y = y0 + j * (barH + gap), w = Math.max(2, x(v) - left);
+        var v = r[m.key], y = y0 + j * (barH + gap);
         var g = mk("g", { class: "item" }, svg);
+        if (v == null) {
+          /* sin turnos de esa ruta para el modelo: se dice, no se dibuja una barra a cero */
+          var nt = mk("text", { x: left + 6, y: y + barH - 3, class: "none-text" }, g);
+          nt.textContent = "sin turnos";
+          return;
+        }
+        var w = Math.max(2, x(v) - left);
         /* extremo de datos redondeado, anclado a la base */
         mk("path", { class: "mark bar-" + m.key, d: "M" + left + "," + y + "h" + Math.max(0, w - 4) + "a4,4 0 0 1 4,4v" + (barH - 8) + "a4,4 0 0 1 -4,4h-" + Math.max(0, w - 4) + "z" }, g);
         var vt = mk("text", { x: left + w + 6, y: y + barH - 3, class: "val-text" }, g);
@@ -635,16 +690,16 @@ footer { padding-block: 32px 48px; border-top: 1px solid var(--rule); color: var
   }
 
   barras("c-ruta", [
-    { label: "Documental", m: 11376, g: 7375, q: 7897, nm: 12, ng: 12, nq: 6 },
-    { label: "Sin evidencia", m: 2940, g: 1782, q: 4309, nm: 2, ng: 2, nq: 1 },
-    { label: "Charla", m: 1926, g: 1292, q: 1545, nm: 4, ng: 4, nq: 2 },
-    { label: "Fuera de alcance", m: 634, g: 692, q: 487, nm: 4, ng: 6, nq: 3 }
+    { label: "Documental", m: 11376, g: 7375, q: 7897, n: 4905, nm: 12, ng: 12, nq: 6, nn: 7 },
+    { label: "Sin evidencia", m: 2940, g: 1782, q: 4309, n: null, nm: 2, ng: 2, nq: 1, nn: 0 },
+    { label: "Charla", m: 1926, g: 1292, q: 1545, n: 1023, nm: 4, ng: 4, nq: 2, nn: 2 },
+    { label: "Fuera de alcance", m: 634, g: 692, q: 487, n: 377, nm: 4, ng: 6, nq: 3, nn: 3 }
   ], 12000, [0, 4000, 8000, 12000]);
 
   rangos("c-fase", [
-    { label: "Clasificar", m: [693, 3427, 24], g: [723, 1063, 24], q: [487, 3055, 12] },
-    { label: "Vuelta del bucle", m: [2046, 7498, 30], g: [1063, 3264, 30], q: [1374, 2384, 10] },
-    { label: "Síntesis documental", m: [3909, 7850, 12], g: [2927, 4186, 12], q: [4273, 5225, 6] }
+    { label: "Clasificar", m: [693, 3427, 24], g: [723, 1063, 24], q: [487, 3055, 12], n: [352, 631, 12] },
+    { label: "Vuelta del bucle", m: [2046, 7498, 30], g: [1063, 3264, 30], q: [1374, 2384, 10], n: [794, 3028, 16] },
+    { label: "Síntesis documental", m: [3909, 7850, 12], g: [2927, 4186, 12], q: [4273, 5225, 6], n: [1098, 2002, 7] }
   ], 8000, [0, 2000, 4000, 6000, 8000]);
 })();
 </script>

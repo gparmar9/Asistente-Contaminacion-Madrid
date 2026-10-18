@@ -48,6 +48,7 @@ PRECIOS = {
     "eu.anthropic.claude-haiku-5-5": (0.11, 0.55),  # confirmado el 2026-10-16 (AWS Marketplace)
     "minimax.minimax-m2.5": (0.36, 1.44),  # consultado el 2026-10-09
     "qwen.qwen3-next-80b-a3b": (0.168, 1.44),  # consultado el 2026-10-16
+    "nvidia.nemotron-super-3-120b": (0.18, 0.78),  # consultado el 2026-10-16
 }
 
 # Orden de las fases en la tabla de latencias; el resto de spans van detrás, por nombre.
