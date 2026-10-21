@@ -11,6 +11,8 @@
 #   SSM /jupiter/agente/<variable>                    configuración del agente (opcional): cada
 #                                                     parámetro es una variable de entorno, p. ej.
 #                                                     /jupiter/agente/llm_modelo -> LLM_MODELO
+#   SSM /jupiter/web/contrasena                       contraseña de la web, usuario "demo"
+#                                                     (opcional, cifrado)
 set -euo pipefail
 
 REGION=eu-west-1
@@ -94,6 +96,36 @@ fi
 if ! grep -q '^DATABASE_URL=' config-agente.env; then
     log "Falta /jupiter/agente/database_url en SSM: el agente no responderá preguntas de datos"
 fi
+
+# Contraseña de la web: con /jupiter/web/contrasena, nginx pide usuario (demo) y contraseña a todo
+# el que no sea la propia máquina (el healthcheck entra por 127.0.0.1). Los dos ficheros se
+# escriben siempre, vacíos si no hay contraseña, porque compose.yml los monta en el contenedor web.
+# Solo «no existe» deja la web sin contraseña: cualquier otro error (permisos) para el arranque,
+# para no abrir la web sin protección por un fallo.
+if CONTRASENA=$(aws ssm get-parameter --name /jupiter/web/contrasena --with-decryption \
+                    --query Parameter.Value --output text 2>&1); then
+    # En el disco solo queda el hash. Por stdin: la contraseña no aparece en la lista de procesos.
+    HASH=$(openssl passwd -apr1 -stdin <<< "$CONTRASENA")
+    printf 'demo:%s\n' "$HASH" > web.htpasswd
+    cat > web-acceso.conf <<'EOF'
+# Generado por arrancar.sh: usuario y contraseña salvo para la propia máquina.
+satisfy any;
+allow 127.0.0.1;
+deny all;
+auth_basic "Calidad del aire de Madrid";
+auth_basic_user_file /etc/nginx/web.htpasswd;
+EOF
+    log "Web protegida con usuario y contraseña"
+elif [[ "$CONTRASENA" == *ParameterNotFound* ]]; then
+    : > web.htpasswd
+    : > web-acceso.conf
+    log "Sin /jupiter/web/contrasena en SSM: la web no pide contraseña (acceso solo por IP)"
+else
+    log "No se pudo leer /jupiter/web/contrasena: $CONTRASENA"
+    exit 1
+fi
+# Los workers de nginx no son root: necesitan leer el fichero de contraseñas (solo guarda el hash).
+chmod 644 web.htpasswd web-acceso.conf
 
 log "Login en ECR ($REGISTRO)"
 aws ecr get-login-password | docker login --username AWS --password-stdin "$REGISTRO" > /dev/null
