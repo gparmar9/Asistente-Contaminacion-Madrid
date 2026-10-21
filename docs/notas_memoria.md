@@ -114,6 +114,7 @@ Hilo conductor de la memoria: cómo y por qué cambió el diseño.
 | 2026-10-09 | Modelo de referencia para SQL | Claude Haiku 5.5 → **MiniMax M2.5** | Haiku no estaba disponible en la cuenta del máster. MiniMax fue elegido por su menor precio entre las alternativas disponibles; GLM 5.3 y Kimi K3 eran más caros |
 | 2026-10-09 | Fechas de las preguntas de datos | Fechas elegidas por el LLM → **periodos calculados en Python a partir de la pregunta original** | Los modelos alteraban los periodos. Un calendario en el prompt o parámetros elegidos por el LLM no eliminaban ese riesgo; `dateparser` y Duckling no daban los rangos definidos por el proyecto, y un único par de fechas no cubría periodos separados |
 | 2026-10-09 | Modelo de referencia para SQL | MiniMax M2.5 → **sin modelo de referencia en los siguientes lotes** | Logró 2/11 aciertos en datos frente a 4/11 del mejor modelo barato, con mayor coste por lote: 0,085 $ frente a 0,023–0,043 $. Se prioriza corregir el diseño |
+| 2026-10-11 | Predicción de calidad del aire | Intent `PREDICCION` con frase fija («no hago predicciones») → **modelo de predicción t+1 por bloques** (`HistGradientBoostingRegressor`, uno por contaminante) con baselines honestos | Es la segunda herramienta de ML que el agente necesita (§6.7). HGB porque ya está en las dependencias, maneja los NaN de los lags sin imputar y no necesita escalado. Descartados: LightGBM (dependencia nueva sin ganancia a este tamaño), SARIMA (≈550 series frágiles con huecos) y LSTM (sin meteorología no hay señal que justifique PyTorch en CI) |
 
 **Decisiones abiertas que alimentarán esta tabla:** modelo del agente en Bedrock (Ministral 14B o
 gpt-oss-120b; aplazado hasta poder evaluar las herramientas SQL y de ML, §13) y dónde se despliega
@@ -340,6 +341,59 @@ limitación permanente ya documentada — no un resto del bug.
 - **Fuga de información en el baseline:** el valor esperado se calcula con **todo** el histórico,
   incluido el periodo evaluado. En producción debería ajustarse solo con datos de entrenamiento.
 - El baseline no pondera la recencia, aunque la contaminación baja con los años.
+
+### 6.7 Predicción a corto plazo (t+1 por bloques) — en construcción
+
+Segundo modelo de ML del proyecto, para la herramienta `PREDICCION` del agente (hoy una frase
+fija). Predice la **media del día siguiente** por (estación, contaminante, bloque). Rama
+`feature/ml-prediccion`; notebook `04_entrenamiento_prediccion.ipynb`; funciones puras en
+`src/etl/features_prediccion.py` e `inferencia_prediccion.py` (mismo reparto notebook/`src` que el
+detector). **Alcance de esta iteración:** solo el modelo y su evaluación; la conexión con el agente,
+el pipeline y el despliegue quedan para iteraciones posteriores.
+
+**Diseño.** Un modelo por contaminante (convenio del detector), `HistGradientBoostingRegressor`.
+Features (16): la media del día t, lags 1–6 del mismo bloque, medias móviles 3 y 7 días,
+climatología del mes objetivo, cobertura, bloque y estación, y el calendario de la fecha objetivo.
+Rejilla diaria completa por serie para que un hueco de ingesta quede como NaN y no arrastre el valor
+de hace dos días; HGB trabaja con esos NaN sin imputar. Baselines: persistencia (lo de hoy),
+climatología (valor típico del mes, solo train) y persistencia semanal (lag 6).
+
+**Anti-fuga.** La climatología se recalcula **solo con el train** (la columna del parquet se calculó
+con todo el histórico); en la frontera, una fila de train cuyo objetivo cae en el test se descarta
+(`FECHA_OBJETIVO <= corte` para train, `FECHA > corte` para test). La configuración de HGB se elige
+contra una validación **temporal** interna, nunca contra el test.
+
+**Resultados (2026-10-14, histórico completo de S3).** Entrenado con `resumen_bloques.parquet`
+(1.274.644 bloques, 24 estaciones, 2018-01-01 → 2026-04-30, sin huecos de día). Corte temporal
+2025-04-30 → **test de un año completo** (2025-05 → 2026-04, 147.790 filas comparables); train 1,1 M
+filas. Configuración elegida por validación temporal interna: «suave» (`max_iter=120, lr=0,05,
+min_samples_leaf=50`). Se descarta la climatología precalculada del parquet (se computó con todo el
+histórico = fuga) y se recalcula solo con el train.
+
+MAE global en µg/m³: **persistencia 10,46**, climatología 15,00, lag semanal 13,38; **modelo 10,11**
+→ *skill* global **+0,03**. El modelo **bate a la climatología en los 6 contaminantes** y a la
+persistencia en **5 de 6**: O3 +0,12, NO2/PM10/PM2.5 +0,08, NOx +0,01; solo el **NO** pierde
+(−0,18). Por bloque, la mañana es donde más aporta (skill +0,12); noche y tarde quedan a la par
+(−0,01). El criterio propuesto (skill > 0 global y en ≥4/6, y batir a la climatología en todos)
+**se cumple**, con margen modesto. Los peores errores son picos nocturnos extremos de NOx
+(400–580 µg/m³) que ni el modelo ni la persistencia anticipan: episodios puntuales, la limitación
+esperable sin meteorología.
+
+**Lectura.** A 1 día vista la persistencia es un rival fuerte y el modelo la mejora poco pero de
+forma consistente y medida sobre un año fuera de muestra; su valor real frente a la climatología
+(el «¿cómo suele estar?») es claro. Sobre el CSV provisional de ~4 meses (2026-10-11) el modelo
+**perdía** contra la persistencia (skill −0,28): la diferencia la hizo el volumen y la
+estacionalidad del histórico, no un cambio de diseño.
+
+**Hallazgo de calidad del dato** (para el equipo): en el CSV live de CI hay bloques con
+`MEDIA = 0,0` marcados como válidos (flag V) seguidos de valores altos —ceros placeholder que el
+filtro de validez no descarta—; en el parquet histórico no se observó ese problema.
+
+**Pendiente:** cerrar el criterio de éxito con el equipo, y —en otra iteración— exponer el modelo
+como herramienta del agente (requiere además que el resolutor de fechas del agente entienda
+expresiones de futuro: hoy `periodos.py` es solo pasado/presente). Trabajo futuro: valorar predecir
+la **probabilidad de superar un umbral** (aviso de episodio), que es lo que más piden los usuarios y
+donde la persistencia no ayuda.
 
 ---
 
@@ -1675,6 +1729,8 @@ la enciende a mano para trabajar o hacer una demo.
 | 2026-10-09 | **Segunda evaluación SQL** (Carlos con Claude Code): Tres combinaciones: todas logran 4/11 en datos. Mejoran periodos, aviso de recorte y SQL; persisten errores al reformular y redactar. Coste estimado: 0,10 $. Veredictos pendientes de revisión humana. |
 | 2026-10-09 | **Correcciones tras la segunda evaluación** (Carlos con Claude Code): Descripción de herramienta simplificada, periodo explícito, respuesta fija fuera del histórico y rechazo de medias que mezclan contaminantes. 126 tests e integración con PostgreSQL en verde; falta otro lote con Bedrock. |
 | 2026-10-09 | **Tercera evaluación SQL** (Carlos con Claude Code): Tres combinaciones; ninguna cumple. Mejor resultado 6/11 en datos (gpt-oss-120b · mismo); límites 3/3 con Ministral · Qwen3 Coder. Resueltos el caso fuera del histórico, el filtro de anomalías y las medias mezcladas; quedan rankings recortados, filas sin agregar y medias sin ponderar. Coste 0,10 $. Veredictos pendientes de revisión humana. |
+| 2026-10-11 | **Modelo de predicción t+1 (parte ML del agente)** (Sheila con Claude Code, rama `feature/ml-prediccion`): notebook `04_entrenamiento_prediccion.ipynb`, funciones puras `src/etl/features_prediccion.py` e `inferencia_prediccion.py` (lags con rejilla anti-hueco, split temporal sin fuga, climatología solo-train) y bundle `models/prediccion_bloques.joblib`. `HistGradientBoostingRegressor` por contaminante, 16 features. Evaluado con el CSV live de CI (provisional, ~4 meses): MAE global 5,99 µg/m³ frente a 4,69 de la persistencia → skill −0,28 (solo O3 la supera). 11 tests nuevos; suite unit 129 en verde. Pendiente reentrenar con el histórico de S3 y conectar la herramienta al agente (fuera de alcance de esta iteración) |
+| 2026-10-14 | **Predicción reentrenada con el histórico completo de S3** (Sheila con Claude Code): `resumen_bloques.parquet` (1,27 M bloques, 2018–2026, sin huecos), test de un año (2025-05 → 2026-04). El resultado se da la vuelta frente al lote provisional: MAE modelo 10,11 vs 10,46 de la persistencia → **skill global +0,03**, batiendo a la climatología en los 6 contaminantes y a la persistencia en 5 de 6 (solo NO pierde). Se cumple el criterio propuesto, con margen modesto. Se detecta y corrige una fuga: el parquet traía la climatología calculada con todo el histórico, se descarta y se recalcula solo con el train (§6.7) |
 
 
 ---
