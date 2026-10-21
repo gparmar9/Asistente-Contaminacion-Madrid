@@ -5,6 +5,7 @@
 #   versiones.env       REGISTRO y VERSION_* (qué imagen de cada servicio está activa, desde SSM)
 #   secretos-bd.env     DATABASE_URL de la API (desde SSM, cifrado)
 #   config-agente.env   un VAR=valor por cada parámetro de /jupiter/agente/ en SSM (puede estar vacío)
+#   web-acceso.conf     y web.htpasswd: usuario y contraseña de la web (vacíos si no hay)
 #
 # Solo web publica puerto (80): sirve la SPA y hace de proxy de /api/* hacia api-usuario. El resto
 # no tiene autenticación y queda en la red interna de Docker; se encuentran por su nombre
@@ -64,4 +65,9 @@ services:
         condition: service_healthy
     ports:
       - "80:80"
+    # Contraseña opcional (ver arrancar.sh): nginx incluye conf.d/*.conf a nivel http, así que
+    # web-acceso.conf se aplica a toda la web sin reconstruir la imagen. Vacío, no hace nada.
+    volumes:
+      - ./web-acceso.conf:/etc/nginx/conf.d/zz-acceso.conf:ro
+      - ./web.htpasswd:/etc/nginx/web.htpasswd:ro
     <<: *logs

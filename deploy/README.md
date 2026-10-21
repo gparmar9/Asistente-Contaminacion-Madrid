@@ -307,6 +307,7 @@ De dónde sale cada cosa (todo con el rol de la máquina, `jupiter-ec2-api`, sin
 | SSM `/jupiter/versiones/<servicio>` | Qué imagen está activa (tag = commit). La escribe el despliegue |
 | SSM `/jupiter/database_url` | La misma cadena de conexión que usa la Lambda (la usa `api-usuario`) |
 | SSM `/jupiter/agente/<variable>` | Configuración del agente: cada parámetro se convierte en una variable de entorno (`/jupiter/agente/llm_modelo` → `LLM_MODELO`). Una variable nueva del agente se da de alta creando el parámetro, sin tocar ningún script |
+| SSM `/jupiter/web/contrasena` (SecureString, opcional) | Contraseña de la web, usuario `demo` (ver [Usuario y contraseña de la web](#usuario-y-contraseña-de-la-web)) |
 
 Parámetros del agente que hacen falta (los demás, como en [`Agente/.env.example`](../Agente/.env.example), son opcionales):
 
@@ -329,6 +330,33 @@ gestionada `AmazonSSMManagedInstanceCore` para entrar con *Session Manager* (sin
 
 Los ficheros de `ec2/` llevan finales de línea LF aunque se trabaje en Windows
 ([`.gitattributes`](../.gitattributes)): un script con CRLF falla en Linux.
+
+### Usuario y contraseña de la web
+
+Por defecto el puerto 80 solo está abierto a las IP del equipo. Para enseñar la web desde
+cualquier red (una demo, el tribunal con sus móviles) se le pone usuario y contraseña y se abre el
+puerto a todo internet:
+
+- `arrancar.sh` lee la contraseña de `/jupiter/web/contrasena`, calcula su hash con `openssl` y
+  escribe `web-acceso.conf` y `web.htpasswd`, que `compose.yml` monta en el contenedor `web`. En el
+  disco solo queda el hash. nginx pide usuario (`demo`) y contraseña en toda la web, también en
+  `/api/*`, salvo a la propia máquina (el healthcheck entra por 127.0.0.1). No hace falta
+  reconstruir la imagen.
+- Sin el parámetro, los dos ficheros quedan vacíos y la web funciona como antes. Si el parámetro
+  existe pero no se puede leer (permisos), el arranque **se detiene**: mejor sin web que abierta sin
+  contraseña.
+- **La web va por HTTP**: la contraseña viaja sin cifrar. Usa una contraseña exclusiva para esto,
+  nunca una que se use en otro sitio. **Nunca en el repositorio**: es público.
+
+Poner o cambiar la contraseña (cifrada en SSM):
+
+```powershell
+aws ssm put-parameter --name /jupiter/web/contrasena --type SecureString --overwrite --value 'la-contraseña'
+```
+
+Se aplica al encenderse la EC2 o con **Desplegar → `web`** si ya está encendida. Para quitarla:
+`aws ssm delete-parameter --name /jupiter/web/contrasena` y volver a desplegar `web`, cerrando antes
+el puerto 80 a todo internet.
 
 ### Operarla desde GitHub Actions
 

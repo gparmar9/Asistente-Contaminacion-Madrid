@@ -28,6 +28,7 @@
       "Action": "ssm:GetParameter",
       "Resource": [
         "arn:aws:ssm:eu-west-1:*:parameter/jupiter/database_url",
+        "arn:aws:ssm:eu-west-1:*:parameter/jupiter/web/contrasena",
         "arn:aws:ssm:eu-west-1:*:parameter/jupiter/versiones/*"
       ]
     },
