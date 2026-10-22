@@ -115,6 +115,7 @@ Hilo conductor de la memoria: cómo y por qué cambió el diseño.
 | 2026-10-09 | Fechas de las preguntas de datos | Fechas elegidas por el LLM → **periodos calculados en Python a partir de la pregunta original** | Los modelos alteraban los periodos. Un calendario en el prompt o parámetros elegidos por el LLM no eliminaban ese riesgo; `dateparser` y Duckling no daban los rangos definidos por el proyecto, y un único par de fechas no cubría periodos separados |
 | 2026-10-09 | Modelo de referencia para SQL | MiniMax M2.5 → **sin modelo de referencia en los siguientes lotes** | Logró 2/11 aciertos en datos frente a 4/11 del mejor modelo barato, con mayor coste por lote: 0,085 $ frente a 0,023–0,043 $. Se prioriza corregir el diseño |
 | 2026-10-11 | Predicción de calidad del aire | Intent `PREDICCION` con frase fija («no hago predicciones») → **modelo de predicción t+1 por bloques** (`HistGradientBoostingRegressor`, uno por contaminante) con baselines honestos | Es la segunda herramienta de ML que el agente necesita (§6.7). HGB porque ya está en las dependencias, maneja los NaN de los lags sin imputar y no necesita escalado. Descartados: LightGBM (dependencia nueva sin ganancia a este tamaño), SARIMA (≈550 series frágiles con huecos) y LSTM (sin meteorología no hay señal que justifique PyTorch en CI) |
+| 2026-10-22 | Integración de la predicción con el agente | Importar los modelos en el agente → **servicio HTTP propio** (`src/prediccion`, espejo de `rag.api`, herramienta publicada en `/prediccion/herramienta`) | El agente se mantiene ligero (sin scikit-learn ni bundles) y conserva su patrón de herramientas remotas; reentrenar un modelo es redesplegar solo el servicio. El ancla y la elección de horizonte (h1/h2) quedan en código del servicio, nunca en el LLM (§6.7) |
 
 **Decisiones abiertas que alimentarán esta tabla:** modelo del agente en Bedrock (Ministral 14B o
 gpt-oss-120b; aplazado hasta poder evaluar las herramientas SQL y de ML, §13) y dónde se despliega
@@ -402,14 +403,27 @@ h2 = mañana, comparado contra lo medido). La herramienta del agente debe elegir
 código: `fecha pedida − último día completo de datos` (0 → ya está medido, consultar datos; >2 →
 fuera de alcance), nunca el LLM — el mismo convenio que las fechas de `consultar_datos`.
 
-**Pendiente:** cerrar el criterio de éxito con el equipo, y —en otra iteración— exponer el modelo
-como herramienta del agente (requiere además que el resolutor de fechas del agente entienda
-expresiones de futuro: hoy `periodos.py` es solo pasado/presente, y «mañana» exige desambiguar
-día frente a bloque matinal). Antes de la integración: incluir la climatología del train en el
-bundle (hoy el llamador debe pasarla o se recalcula una peor) y proteger `preparar_dataset` frente
-a una columna `MEDIA_ESPERADA` ya presente en la entrada (colisión del merge). Trabajo futuro:
-valorar predecir la **probabilidad de superar un umbral** (aviso de episodio), que es lo que más
-piden los usuarios y donde la persistencia no ayuda.
+**Servicio HTTP (2026-10-22).** La predicción se expone como servicio propio, `src/prediccion`
+(paquete `prediccion`, puerto 8011), **espejo de `src/rag`**: publica su definición de herramienta
+en `GET /prediccion/herramienta` (función `predecir_calidad_aire`), `GET /salud` y
+`POST /prediccion` con `{fecha_objetivo, estacion?, contaminante?, bloque?}`. Alternativa
+descartada: importar los modelos en el propio agente — habría metido scikit-learn y los bundles en
+un servicio deliberadamente ligero y acoplado los despliegues. El servicio concentra las dos reglas
+que no deben decidir ni el agente ni el LLM: el **ancla** (último día con los 4 bloques: un día a
+medio ingerir desplazaría los horizontes) y el **horizonte** (`fecha_objetivo − ancla` → bundle h1
+o h2; `<=0` → `ya_medido`, `>2` → `fuera_de_alcance`). Lee la misma vista `mediciones_bloques` del
+agente (solo lectura); la fecha objetivo la calculará el código del cliente, nunca el LLM. Se
+corrigieron de paso los dos pendientes: la climatología del train ya viaja **dentro de los bundles**
+y `preparar_dataset` descarta una `MEDIA_ESPERADA` precalculada en la entrada (la colisión que
+rompía la inferencia con el parquet). 21 tests nuevos (motor + contrato HTTP, sin base de datos ni
+sklearn: lector inyectado y modelos dobles); suite unit 150 en verde.
+
+**Pendiente:** cerrar el criterio de éxito con el equipo; el cliente del agente (herramienta fina
+tipo `tools/rag.py`, cambio de la frase fija en `intencion.py` y `periodos.py` con expresiones de
+futuro, donde «mañana» exige desambiguar día frente a bloque matinal); y el despliegue del servicio
+(Dockerfile + compose, como el RAG). Trabajo futuro: valorar predecir la **probabilidad de superar
+un umbral** (aviso de episodio), que es lo que más piden los usuarios y donde la persistencia no
+ayuda.
 
 ---
 
@@ -1748,6 +1762,7 @@ la enciende a mano para trabajar o hacer una demo.
 | 2026-10-11 | **Modelo de predicción t+1 (parte ML del agente)** (Sheila con Claude Code, rama `feature/ml-prediccion`): notebook `04_entrenamiento_prediccion.ipynb`, funciones puras `src/etl/features_prediccion.py` e `inferencia_prediccion.py` (lags con rejilla anti-hueco, split temporal sin fuga, climatología solo-train) y bundle `models/prediccion_bloques.joblib`. `HistGradientBoostingRegressor` por contaminante, 16 features. Evaluado con el CSV live de CI (provisional, ~4 meses): MAE global 5,99 µg/m³ frente a 4,69 de la persistencia → skill −0,28 (solo O3 la supera). 11 tests nuevos; suite unit 129 en verde. Pendiente reentrenar con el histórico de S3 y conectar la herramienta al agente (fuera de alcance de esta iteración) |
 | 2026-10-14 | **Predicción reentrenada con el histórico completo de S3** (Sheila con Claude Code): `resumen_bloques.parquet` (1,27 M bloques, 2018–2026, sin huecos), test de un año (2025-05 → 2026-04). El resultado se da la vuelta frente al lote provisional: MAE modelo 10,11 vs 10,46 de la persistencia → **skill global +0,03**, batiendo a la climatología en los 6 contaminantes y a la persistencia en 5 de 6 (solo NO pierde). Se cumple el criterio propuesto, con margen modesto. Se detecta y corrige una fuga: el parquet traía la climatología calculada con todo el histórico, se descarta y se recalcula solo con el train (§6.7) |
 | 2026-10-21 | **Segundo bundle de predicción, t+2** (Sheila con Claude Code): el nb04 parametrizado por horizonte y reentrenado con `HORIZONTE=2` para poder responder «mañana» cuando los datos llegan hasta ayer (h1 cae en hoy). Mismo año de test: MAE 11,86 vs 12,80 de la persistencia → **skill +0,07** (5/6 contaminantes; climatología 6/6). Verificado con un replay en terminal contra lo medido de verdad (§6.7) |
+| 2026-10-22 | **Servicio de predicción `src/prediccion` (ml.api)** (Sheila con Claude Code): servicio FastAPI espejo del RAG con la herramienta `predecir_calidad_aire` publicada, `/salud` y `POST /prediccion`; ancla por último día completo y elección de bundle por horizonte en código. De paso, la climatología del train entra en los bundles y `preparar_dataset` se protege de una `MEDIA_ESPERADA` precalculada. 21 tests nuevos sin red ni sklearn; suite 150 en verde. Verificado de punta a punta con los bundles reales sobre el histórico. Pendiente: cliente en el agente y despliegue (§6.7) |
 
 
 ---

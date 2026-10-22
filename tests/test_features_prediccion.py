@@ -99,6 +99,17 @@ def test_preparar_dataset_filtra_por_cobertura_del_objetivo():
     assert len(penultimo_mal) == 0
 
 
+def test_entrada_con_climatologia_precalculada_no_colisiona():
+    """El parquet histórico trae MEDIA_ESPERADA (calculada con TODO el histórico: fuga).
+    Se descarta en la entrada: la del dataset es la del baseline pasado, sin sufijos _x/_y."""
+    serie = _serie(range(9))
+    base = calcular_baseline(serie)
+    con_vieja = serie.assign(MEDIA_ESPERADA=999.0, STD_ESPERADA=9.0)
+    df = preparar_dataset(con_vieja, base)
+    assert "MEDIA_ESPERADA_x" not in df.columns and "MEDIA_ESPERADA_y" not in df.columns
+    assert (df["MEDIA_ESPERADA"] != 999.0).all()
+
+
 def test_preparar_dataset_cruza_la_climatologia_del_mes_objetivo():
     """La MEDIA_ESPERADA de una fila es la del MES de la fecha OBJETIVO, no la del día t:
     el 30 de junio debe recibir la climatología de julio."""

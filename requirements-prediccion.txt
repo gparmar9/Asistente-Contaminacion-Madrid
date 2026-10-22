@@ -1,0 +1,11 @@
+# Dependencias del servicio de predicción (src/prediccion). Complementan a requirements.txt,
+# que ya trae pandas, scikit-learn (y joblib), SQLAlchemy y psycopg2.
+# Instalar con:  pip install -r requirements-prediccion.txt
+
+fastapi==0.141.1         # servicio HTTP de la herramienta (prediccion/api.py)
+uvicorn==0.53.0          # `python -m prediccion.api`
+httpx==0.28.1            # cliente HTTP que usa fastapi.testclient en las pruebas
+pytest==9.1.1
+
+# El propio paquete `prediccion` (src/prediccion) en modo editable.
+-e .

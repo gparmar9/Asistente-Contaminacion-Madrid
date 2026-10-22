@@ -44,11 +44,13 @@ def predecir_manana(bloques_recientes: pd.DataFrame, bundle: dict,
     """Del resumen por bloques reciente (>= max(LAGS)+1 días para lags completos) a
     una fila por (estación, contaminante, bloque) con la PREDICCION para t+horizonte.
 
-    `baseline`: la climatología del train (como en el nb04). Si no se pasa, se
-    calcula sobre `bloques_recientes` — peor que la del train, pero autónomo.
-    Devuelve solo las filas del último día con datos; FECHA_OBJETIVO es ese día
-    más el horizonte del bundle.
+    `baseline`: la climatología del train. Por defecto se toma la del bundle
+    (`bundle["baseline"]`, la del nb04); como último recurso se calcula sobre
+    `bloques_recientes` — peor que la del train, pero autónomo. Devuelve solo las
+    filas del último día con datos; FECHA_OBJETIVO es ese día más el horizonte.
     """
+    if baseline is None:
+        baseline = bundle.get("baseline")
     if baseline is None:
         baseline = calcular_baseline(bloques_recientes)
     horizonte = int(bundle.get("horizonte", 1))

@@ -45,6 +45,34 @@ def test_predecir_recorta_las_negativas_a_cero():
     assert r.loc[r.MAGNITUD == 8, "PREDICCION"].iloc[0] == 0.0
 
 
+class _ModeloEspia:
+    """Registra las features que recibe (para comprobar qué climatología llegó)."""
+
+    def __init__(self):
+        self.visto = None
+
+    def predict(self, X):
+        self.visto = X.copy()
+        return [1.0] * len(X)
+
+
+def test_predecir_manana_usa_el_baseline_del_bundle():
+    """Sin baseline explícito, la climatología es la del bundle (la del train),
+    no una recalculada sobre los datos recientes."""
+    inicio = dt.date(2026, 6, 1)
+    bloques = pd.DataFrame([
+        {"ESTACION": 4, "MAGNITUD": 8, "BLOQUE": "manana",
+         "FECHA": inicio + dt.timedelta(days=d), "MEDIA": 10.0 + d, "COBERTURA": 1.0}
+        for d in range(9)
+    ])
+    espia = _ModeloEspia()
+    bundle = {"modelos": {"NO2": espia}, "features": list(FEATURES_PREDICCION), "horizonte": 1,
+              "baseline": pd.DataFrame([{"ESTACION": 4, "MAGNITUD": 8, "BLOQUE": "manana",
+                                         "MES": 6, "MEDIA_ESPERADA": 77.7, "STD_ESPERADA": 1.0}])}
+    predecir_manana(bloques, bundle)
+    assert espia.visto["MEDIA_ESPERADA"].iloc[0] == 77.7
+
+
 def test_predecir_manana_devuelve_los_bloques_del_ultimo_dia():
     """9 días de un bloque de NO2 -> una fila, para el día siguiente al último."""
     inicio = dt.date(2026, 6, 1)

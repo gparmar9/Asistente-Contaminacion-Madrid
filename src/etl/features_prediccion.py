@@ -83,7 +83,7 @@ def preparar_dataset(bloques: pd.DataFrame, baseline: pd.DataFrame,
     `exigir_objetivo=False` (predecir el futuro): el objetivo aún no existe, así que
     se devuelven todas las filas con sus features; el llamador elige el día.
     """
-    df = completar_calendario(bloques)
+    df = completar_calendario(bloques.drop(columns=["MEDIA_ESPERADA", "STD_ESPERADA"], errors="ignore"))
     df = construir_lags(df)
     df = anadir_objetivo(df, horizonte)
     df["BLOQUE_ORD"] = df["BLOQUE"].map(_ORDINAL_BLOQUE)
