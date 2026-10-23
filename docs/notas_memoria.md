@@ -1483,14 +1483,15 @@ documentada, no una configuración por defecto; la opción C queda como mejora f
 
 ### 8.7 Observabilidad
 
-Diez alarmas de CloudWatch que avisan por correo (SNS `jupiter-alertas`). Las dos de la Lambda se
-crearon a mano; las otras ocho, los filtros y el panel están en la plantilla de CloudFormation
+Once alarmas de CloudWatch que avisan por correo (SNS `jupiter-alertas`). Las dos de la Lambda se
+crearon a mano; las otras nueve, los filtros y el panel están en la plantilla de CloudFormation
 `jupiter-observabilidad`:
 
 | Alarma | Métrica | Dispara cuando |
 |---|---|---|
 | `jupiter-pipeline-errores` | `Errors` (suma, 5 min) | La función lanza una excepción |
 | `jupiter-pipeline-sin-ejecuciones` | `Invocations` (suma, 24 h) | No ha habido ninguna ejecución |
+| `jupiter-pipeline-sin-datos` | `HorasNuevas` (suma, 24 h; métrica EMF) | La ejecución no cargó ninguna hora, o no publicó |
 | `jupiter-web-5xx` | Filtro `Peticiones5xx` | ≥ 5 en 5 min: API, agente o proxy rotos |
 | `jupiter-bedrock-errores` | `InvocationClientErrors` + `InvocationThrottles` | ≥ 3 en 15 min: modelo retirado, cuota, permisos |
 | `jupiter-bedrock-tokens-dia` | `InputTokenCount` (suma, 24 h) | Supera un umbral (parámetro de la plantilla; provisional 2 M) |
@@ -1503,7 +1504,8 @@ crearon a mano; las otras ocho, los filtros y el panel están en la plantilla de
 La segunda es la que más aporta y depende de un detalle de configuración: `treatMissingData:
 breaching`, es decir, **la ausencia de datos se interpreta como fallo**. Cubre el fallo silencioso
 de que el programador deje de disparar o alguien desactive la función: no hay errores que contar,
-no salta nada y el hueco en los datos se descubriría semanas después. Las ocho nuevas hacen lo
+no salta nada y el hueco en los datos se descubriría semanas después. `jupiter-pipeline-sin-datos`
+cubre el otro fallo silencioso (§10) con la misma configuración. Las demás de la pila hacen lo
 contrario (`notBreaching`): la EC2 y la RDS pasan la mayor parte del día apagadas, y sin datos no
 hay fallo.
 
@@ -1527,10 +1529,45 @@ y el primer acceso de cada navegador la piden constantemente) y `TiempoRespuesta
 `request_time` de las 200 en `/api/chat*`; en el streaming, hasta el último evento). Los filtros se
 aplican al grupo entero, pero solo el log de `web` es JSON con `status`.
 
-**Panel `jupiter`** con cuatro filas: Bedrock por modelo (invocaciones, latencia, tokens, errores),
-borde HTTP (4xx/5xx, tiempo de `/api/chat` y el estado de las diez alarmas), máquina (CPU, créditos,
-memoria, disco) y datos (Lambda, CPU, conexiones y espacio de la RDS). Los gráficos por modelo usan
-`SEARCH`, así que un modelo nuevo aparece sin tocar la plantilla.
+**Panel `jupiter`** con cinco filas: Bedrock por modelo (invocaciones, latencia, tokens, errores),
+borde HTTP (4xx/5xx, tiempo de `/api/chat` y el estado de las once alarmas), máquina (CPU, créditos,
+memoria, disco), datos (Lambda, CPU, conexiones y espacio de la RDS) y negocio (abajo). Los
+gráficos por modelo usan `SEARCH`, así que un modelo nuevo aparece sin tocar la plantilla.
+
+**Métricas de negocio del pipeline.** Lo anterior dice si la infraestructura funciona; no si el
+sistema cumple su objetivo (cargar cada noche los datos de las 24 estaciones y detectar
+anomalías). Cada ejecución de la Lambda termina con una línea JSON en formato **EMF** (*Embedded
+Metric Format*): CloudWatch extrae las métricas del propio log, sin `PutMetricData`, sin boto3 y
+sin permisos nuevos. Namespace `Jupiter/Pipeline`, sin dimensiones:
+
+| Métrica | Qué mide |
+|---|---|
+| `HorasNuevas` | Filas horarias insertadas o corregidas |
+| `EstacionesConDatos` | Estaciones con al menos una medición válida (de 24) |
+| `BloquesAnomalos` | Bloques marcados por el Isolation Forest |
+| `TasaAnomalias` | `BloquesAnomalos` / bloques procesados (%); el modelo espera ~1 % (`contamination`) |
+
+- **Sin API, la línea sale igual con ceros**: la alarma se evalúa con dato y el hueco se ve en el
+  panel, en lugar de depender solo de la falta de datos.
+- **Detalle gratis como campos del log**: `pct_validas`, `estaciones_sin_datos` y
+  `anomalias_por_magnitud` viajan en la misma línea sin directiva de métrica, así que no cuentan
+  como métricas y se consultan con Logs Insights. Descartado: `PorcentajeValidas` como métrica y el
+  desglose de anomalías por contaminante como dimensión (cada valor sería una métrica de pago:
+  hasta 6 más por las 6 magnitudes), y una métrica de frescura del dato (fuera de alcance).
+- **«Preguntas respondidas hoy» sin métrica nueva**: es la estadística `SampleCount` de
+  `TiempoRespuestaChat`, que ya cuenta una muestra por cada 200 en `/api/chat*`.
+- Fila «Negocio» del panel: horas cargadas por noche (barras), estaciones con datos (indicador
+  0–24 con la zona por debajo de 20 en rojo), tasa de anomalías con una línea de referencia en el
+  1 % y preguntas del día.
+- Presupuesto: 9 de las 10 métricas personalizadas gratuitas; 12 métricas en alarmas, dos por
+  encima de la capa gratuita `[estimación: 0,20 $/mes en total, 0,10 $/mes por la nueva]`.
+- Código separado del *handler* (`deploy/metricas_emf.py`) para probarlo sin AWS: el *handler* lee
+  SSM y S3 al importarse. 7 tests nuevos (forma del JSON, rama sin datos, tasa con cero bloques,
+  cobertura de estaciones).
+
+Estado (2026-10-23): código, plantilla y tests listos; plantilla validada con `cfn-lint`.
+`[por confirmar: validate-template, despliegue de la imagen y de la pila, que Dimensions: [[]]
+publique las 4 métricas sin dimensión y las cifras de la primera ejecución real]`
 
 La retención de los logs se baja a 14 días; por defecto no caducan nunca.
 
@@ -1772,6 +1809,12 @@ la enciende a mano para trabajar o hacer una demo.
   manuales durante la tarde, las horas 18 a 23 quedaron guardadas como inválidas de forma
   permanente (740 filas `N` frente a 135-153 en los días de ejecución única). Corregido pasando a
   `DO UPDATE` condicionado a que la medición entrante sea válida y la guardada no.
+- **Que una función no falle no significa que haya hecho su trabajo.** Si la API de Madrid no
+  devolvía registros, la Lambda terminaba con `{"ok": False}` sin lanzar excepción: ni la alarma de
+  errores ni la de «sin ejecuciones» saltaban, y la noche quedaba sin datos sin que nadie se
+  enterase. Lo cierra una métrica de resultado (`HorasNuevas`) que se publica también en ese caso
+  y una alarma que trata su ausencia como fallo. Lección: además de vigilar que el proceso corre,
+  hay que vigilar lo que produce.
 - La carga fila a fila no escala a millones de filas; `COPY` sí.
 - **Un fallo de tipos que solo aparece con datos reales.** La API devuelve `PROVINCIA` y
   `MUNICIPIO` como texto, pero `calidad_aire_horas_live` los declara `INTEGER`: como la tabla
@@ -2200,6 +2243,7 @@ la enciende a mano para trabajar o hacer una demo.
 | 2026-10-23 | **Logs y métricas de la EC2 en CloudWatch** (Carlos con Claude Code, rama `feature/cloudwatch-logs`): `web`, `api-usuario` y `rag` envían su log a `/jupiter/ec2` con el driver `awslogs` (modo `non-blocking`); `agente` y `phoenix` siguen en la máquina. El agente de CloudWatch publica memoria y disco (2 métricas en `CWAgent`, dimensión `InstanceId`); `arrancar.sh` lo instala si falta y, si falla, avisa y sigue. El grupo de logs lo crea una pila de CloudFormation (`jupiter-observabilidad`) que recogerá también alarmas y panel. Rol de la EC2: escribir solo en ese grupo y métricas solo en `CWAgent`. Probado sin AWS: `docker compose config` (driver por servicio), plantilla validada con `validate-template` y `arrancar.sh` con `aws`, `docker`, `rpm`, `dnf` y el agente simulados en seis casos (primera instalación, ya instalado, un solo servicio, y fallos de `dnf`, de S3 y de la configuración: en los tres avisa y la aplicación arranca). Aplicado el mismo día: pila y permisos del rol, «Desplegar → `phoenix`» (instaló el agente de CloudWatch) y `arrancar.sh rag api-usuario web` por SSM para recrear solo esos tres contenedores, sin apagar la EC2. Verificado: tres *streams*, exactamente 2 métricas en `CWAgent` (memoria ~30 %, disco 23,4 %) y una pregunta al chat en Logs Insights (`POST /api/chat/stream`, 200, 5,6 s). Incidencia: la pila se creó primero en otra cuenta porque la terminal usaba el perfil por defecto; se borró y la guía de despliegue comprueba ahora la cuenta antes de aplicar. `docker compose logs` en la máquina funciona para los cinco servicios. `[por confirmar: arranque completo tras apagar y encender]` |
 | 2026-10-23 | **Alarmas y panel de CloudWatch** (Carlos con Claude Code, rama `feature/cloudwatch-logs`): la pila `jupiter-observabilidad` suma al grupo de logs 3 filtros de métricas sobre el log de nginx, 8 alarmas (web 5xx, errores y tokens de Bedrock, estado, créditos, memoria y disco de la EC2, espacio de la RDS) y el panel `jupiter`. Parámetros: `InstanceId` de la EC2 y `UmbralTokensDia` (provisional 2 M; la cifra la fija quien lleva el coste). Los umbrales se fijaron con consultas de solo lectura a la cuenta, que dieron tres hallazgos: EC2 en modo `unlimited` (los créditos son coste, no lentitud), RDS con autoescalado de disco y métricas de Bedrock solo por modelo o para toda la cuenta. La alarma de errores de Bedrock suma dos métricas: 11 métricas en alarmas, una por encima de la capa gratuita `[estimación: 0,10 $/mes]`. Guía de despliegue con la tabla de alarmas, la prueba de una alarma y el cierre del 443. Validado con `validate-template`, `cfn-lint` y el JSON del panel. Aplicado el mismo día: nueve alarmas en `OK` con datos reales al minuto, prueba de `jupiter-web-5xx` con `set-alarm-state` publicada en SNS y filtros comprobados con `test-metric-filter` sobre una línea real del chat. Grupo de seguridad: cerrados el 443 y la regla de la IP del equipo; queda solo el 80 abierto a todo internet con contraseña. `[por confirmar: 503 reales con el agente parado]` |
 | 2026-10-23 | **Batería de uso contra la EC2** (Carlos con Claude Code): para poblar Phoenix y el panel `jupiter` con uso representativo, 95 peticiones con contraseña en 234 s y 2 en paralelo: 61 turnos de chat sacados de los casos de evaluación del agente (turno, datos, comprobaciones, 5 conversaciones de varios turnos y una muestra del clasificador; 3 de cada 4 por `/api/chat/stream`), 31 consultas de estaciones y series y 3 errores de cliente. Resultado: 61/61 turnos con 200, ningún 5xx, 3 respuestas 422 esperadas; tiempo por turno p50 4,7 s, p90 9,1 s y máximo 22,2 s medido en el cliente. En CloudWatch: 218 invocaciones y unos 245 000 tokens de entrada en Bedrock (un 12 % del umbral diario provisional), `TiempoRespuestaChat` con media de 5,5 s y las diez alarmas en `OK`. En Phoenix, 66 trazas y 597 spans en el proyecto `agente`, mediana de 4,9 s |
+| 2026-10-23 | **Métricas de negocio del pipeline** (Carlos con Claude Code, rama `feature/metricas-pipeline`): la Lambda publica en formato EMF `HorasNuevas`, `EstacionesConDatos`, `BloquesAnomalos` y `TasaAnomalias` (namespace `Jupiter/Pipeline`), también con ceros cuando la API no devuelve registros, más tres campos de detalle que no son métricas (`pct_validas`, `estaciones_sin_datos`, `anomalias_por_magnitud`). Alarma nueva `jupiter-pipeline-sin-datos` (cierra el fallo silencioso del `{"ok": False}`) y fila «Negocio» en el panel, con las preguntas del día como `SampleCount` de `TiempoRespuestaChat`. 9 de 10 métricas gratuitas. Tests unitarios: 125 en verde. `[por confirmar: despliegue en AWS]` |
 
 ---
 
