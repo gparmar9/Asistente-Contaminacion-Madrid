@@ -125,6 +125,8 @@ Hilo conductor de la memoria: cómo y por qué cambió el diseño.
 | 2026-10-21 | Acceso a la web de la EC2 | Puerto 80 abierto solo a las IP del equipo → **IP del equipo o, para demos, abierto a todo internet con usuario y contraseña** (autenticación básica de nginx, contraseña cifrada en SSM) | La demo la presentan compañeros desde redes cuya IP pública no se conoce de antemano y puede cambiar. Descartados: una contraseña fija en el código (el repositorio es público), abrirlo sin contraseña (la API no tiene autenticación y el chat cuesta dinero), *port forwarding* con Session Manager (cada presentador necesita la CLI de AWS y su plugin) y un balanceador con Cognito o CloudFront con HTTPS (exigen dominio y certificado; demasiado para la víspera de la demo) |
 | 2026-10-23 | Logs y métricas de la EC2 | Logs de los contenedores solo en el disco de la máquina (`json-file`) y sin métricas de memoria ni disco → logs de `web`, `api-usuario` y `rag` en CloudWatch Logs y memoria y disco con el agente de CloudWatch; `agente` y `phoenix` siguen en la máquina | Depurar exigía entrar por Session Manager y los fallos de la EC2 no avisaban a nadie. Base para las alarmas. Descartados: Grafana + Loki en la misma EC2 (3-4 contenedores más en 4 GB y duplica Phoenix y CloudWatch), Amazon Managed Grafana (9 $ por usuario y mes), métricas propias del agente con EMF (unos 5-8 $/mes `[estimación]` y repiten Phoenix) y enviar también los logs del agente (duplican sus trazas) |
 | 2026-10-23 | Trazas del agente en producción | Phoenix solo en local (perfil `observabilidad` del compose) → **Phoenix como quinto contenedor de la EC2**, sin puerto propio, servido por el nginx de la web en `/phoenix/` y **siempre con la contraseña de la web** (403 si no hay contraseña). El agente le envía las trazas por la red interna de Docker. Imagen pública fijada en el compose (`20.19.0`), SQLite en un volumen del disco de la EC2 | Las trazas de cada turno (fases, tiempos, tokens, errores) son la observabilidad del asistente y solo existían en el portátil de quien probaba. Descartados: Phoenix Cloud de Arize (manda a un tercero las preguntas de los usuarios), publicar su puerto 6006 (un segundo puerto sin autenticación), un balanceador con reglas por ruta (unos 16 $/mes `[estimación]`), guardar las trazas en la RDS (ata Phoenix a los horarios de la base y mete un esquema ajeno), copiar la imagen a ECR (un repositorio y un job más para una imagen que no se construye) y la autenticación propia de Phoenix (usuarios y API keys, pero exige un paso manual tras el primer arranque y un secreto más en SSM; no compensa con una sola persona operando) |
+| 2026-10-23 | Acceso a la web de la EC2 | 80 para la IP del equipo y para todo internet, y 443 abierto a todo internet → **solo el 80, abierto a todo internet con contraseña** | La contraseña ya protegía la web y `/phoenix/`, así que la regla de la IP del equipo sobraba. En el 443 no escucha nada: su regla solo servía para que el navegador que prueba HTTPS primero recibiera un rechazo inmediato. Se acepta que ese navegador tarde más en pasar a HTTP a cambio de no tener abierto un puerto sin uso |
+| 2026-10-23 | Alarmas | Dos alarmas, solo de la Lambda → **diez alarmas** que cubren también la web (5xx), Bedrock (errores y tokens al día), la EC2 (estado, créditos de CPU, memoria, disco) y la RDS (espacio), con 3 filtros de métricas sobre el log de nginx y un panel; todo en la plantilla de CloudFormation `jupiter-observabilidad` | Un fallo de la web, del modelo o de la máquina no avisaba a nadie, y un bucle del agente o la web abierta a internet podían disparar el gasto en Bedrock sin que nadie lo viera. Descartados: un script con `put-metric-alarm` por alarma, como el resto de `deploy/aws/` (con ocho alarmas se desvía de lo que hay en AWS sin que nadie lo note), crearlas en la consola (no se revisan en un PR) y métricas propias del agente (Phoenix ya lo mide) |
 
 **Decisiones abiertas que alimentarán esta tabla:** modelo del agente en Bedrock (Ministral 14B,
 gpt-oss-120b, Qwen3 Next 80B (2026-10-16) o Nemotron 3 Super 120B (2026-10-18); Claude Haiku 5.5 no está
@@ -1402,6 +1404,10 @@ Los objetos se organizan con los mismos prefijos que el repositorio: `models/`, 
 
 - **~95 % del coste es RDS.** Bajar la frecuencia del pipeline no ahorra nada.
 - Coste a evitar: un **NAT Gateway** (~32 $/mes) duplicaría la factura.
+- **CloudWatch** (§8.7): 5 métricas propias de 10 gratuitas (3 filtros de logs + 2 del agente de
+  CloudWatch), 1 panel de 3 gratuitos y logs muy por debajo de los 5 GB/mes. Las alarmas se cobran
+  por métrica vigilada: las diez alarmas vigilan 11 métricas, porque la de errores de Bedrock suma
+  dos. Una por encima de las 10 gratuitas ≈ **0,10 $/mes** `[estimación: confirmar con la factura]`.
 - La instancia se creó con la **plantilla de capa gratuita** (750 h/mes de `db.t4g.micro` Single-AZ,
   20 GB de SSD de uso general y 20 GB de backups). La configuración elegida cabe entera en esos
   límites; se eligió **gp2** en lugar de gp3 precisamente porque es lo que cubre la capa gratuita.
@@ -1477,17 +1483,54 @@ documentada, no una configuración por defecto; la opción C queda como mejora f
 
 ### 8.7 Observabilidad
 
-Dos alarmas de CloudWatch que avisan por correo (SNS), pensadas para dos fallos distintos:
+Diez alarmas de CloudWatch que avisan por correo (SNS `jupiter-alertas`). Las dos de la Lambda se
+crearon a mano; las otras ocho, los filtros y el panel están en la plantilla de CloudFormation
+`jupiter-observabilidad`:
 
 | Alarma | Métrica | Dispara cuando |
 |---|---|---|
 | `jupiter-pipeline-errores` | `Errors` (suma, 5 min) | La función lanza una excepción |
 | `jupiter-pipeline-sin-ejecuciones` | `Invocations` (suma, 24 h) | No ha habido ninguna ejecución |
+| `jupiter-web-5xx` | Filtro `Peticiones5xx` | ≥ 5 en 5 min: API, agente o proxy rotos |
+| `jupiter-bedrock-errores` | `InvocationClientErrors` + `InvocationThrottles` | ≥ 3 en 15 min: modelo retirado, cuota, permisos |
+| `jupiter-bedrock-tokens-dia` | `InputTokenCount` (suma, 24 h) | Supera un umbral (parámetro de la plantilla; provisional 2 M) |
+| `jupiter-ec2-status` | `StatusCheckFailed` | Dos periodos de 5 min seguidos |
+| `jupiter-ec2-creditos-cpu` | `CPUCreditBalance` | < 20 créditos |
+| `jupiter-ec2-memoria` | `mem_used_percent` (agente) | > 90 % durante 10 min |
+| `jupiter-ec2-disco` | `disk_used_percent` (agente) | > 85 % |
+| `jupiter-rds-espacio` | `FreeStorageSpace` | < 2 GB |
 
 La segunda es la que más aporta y depende de un detalle de configuración: `treatMissingData:
 breaching`, es decir, **la ausencia de datos se interpreta como fallo**. Cubre el fallo silencioso
 de que el programador deje de disparar o alguien desactive la función: no hay errores que contar,
-no salta nada y el hueco en los datos se descubriría semanas después.
+no salta nada y el hueco en los datos se descubriría semanas después. Las ocho nuevas hacen lo
+contrario (`notBreaching`): la EC2 y la RDS pasan la mayor parte del día apagadas, y sin datos no
+hay fallo.
+
+Lo que se aprendió al fijar los umbrales con los datos reales de la cuenta:
+
+- **La EC2 está en modo `unlimited`**: sin créditos de CPU no se frena, sino que paga la CPU
+  extra. La alarma de créditos avisa de coste, no de lentitud (el saldo medido estaba entre 145 y
+  272).
+- **La RDS tiene autoescalado de almacenamiento** (20 GB, máximo 1000): antes de llenarse, crece.
+  La alarma de espacio avisa de que va a crecer el disco y la factura (17,9 GB libres medidos).
+- **Bedrock solo da métricas por modelo o para toda la cuenta**, no por aplicación: las
+  evaluaciones de modelos del equipo cuentan en los errores y los tokens. El umbral provisional
+  de 2 M tokens al día deja margen sobre el pico medido (1,23 M en un día de campaña de evaluación;
+  un día normal, entre 3.000 y 57.000).
+- **El disco del agente de CloudWatch** lleva las dimensiones `path` y `fstype` además de
+  `InstanceId` aunque se descarte el dispositivo; la alarma tiene que nombrar las tres.
+
+**Filtros de métricas** sobre el log de acceso de nginx (namespace `Jupiter`, sin dimensiones):
+`Peticiones5xx`, `Peticiones4xx` (sin 401: con la web abierta a internet y contraseña, los robots
+y el primer acceso de cada navegador la piden constantemente) y `TiempoRespuestaChat` (el
+`request_time` de las 200 en `/api/chat*`; en el streaming, hasta el último evento). Los filtros se
+aplican al grupo entero, pero solo el log de `web` es JSON con `status`.
+
+**Panel `jupiter`** con cuatro filas: Bedrock por modelo (invocaciones, latencia, tokens, errores),
+borde HTTP (4xx/5xx, tiempo de `/api/chat` y el estado de las diez alarmas), máquina (CPU, créditos,
+memoria, disco) y datos (Lambda, CPU, conexiones y espacio de la RDS). Los gráficos por modelo usan
+`SEARCH`, así que un modelo nuevo aparece sin tocar la plantilla.
 
 La retención de los logs se baja a 14 días; por defecto no caducan nunca.
 
@@ -1495,7 +1538,7 @@ El asistente se observa con **Phoenix**, no con CloudWatch: cada turno deja una 
 con sus fases, tiempos, tokens y errores. En la EC2 se consulta en `/phoenix/` (§8.9).
 
 **Regla de reparto: Phoenix para el asistente, CloudWatch para la infraestructura y el borde HTTP.**
-Nada se mide dos veces y todo cabe en la capa gratuita `[estimación: 0 $/mes]`.
+Nada se mide dos veces y casi todo cabe en la capa gratuita `[estimación: ~0,10 $/mes, §8.3]`.
 
 - **Logs de la EC2** en el grupo `/jupiter/ec2` (14 días): `web` (log de acceso de nginx en JSON:
   estado, ruta, tiempo de respuesta), `api-usuario` y `rag`, con el driver `awslogs` de Docker y un
@@ -1507,15 +1550,31 @@ Nada se mide dos veces y todo cabe en la capa gratuita `[estimación: 0 $/mes]`.
   sean exactamente 2 métricas personalizadas (de 10 gratuitas). Si el agente no se instala o no
   arranca, `arrancar.sh` lo avisa y la aplicación arranca igual: la vigilancia no puede tumbar
   el servicio.
-- **El grupo de logs lo crea CloudFormation** (pila `jupiter-observabilidad`), donde irán también
-  los filtros, las alarmas y el panel. Crearlo a mano habría hecho fallar la pila después, porque
+- **El grupo de logs lo crea CloudFormation** (pila `jupiter-observabilidad`), junto con los
+  filtros, las alarmas y el panel. Crearlo a mano habría hecho fallar la pila después, porque
   CloudFormation no adopta un recurso que ya existe.
 - Permisos del rol de la EC2: escribir solo en `/jupiter/ec2` y publicar métricas solo en el
   namespace `CWAgent`. Sin ellos Docker no crea el contenedor con `awslogs`: el rol se amplía
   antes de desplegar.
 
-Estado (2026-10-23): código listo en la rama `feature/cloudwatch-logs`, pendiente de aplicar en
-AWS `[por confirmar: logs y métricas visibles en CloudWatch]`.
+Estado (2026-10-23): aplicado en AWS y verificado. Tres *streams* en `/jupiter/ec2` y exactamente
+dos métricas en `CWAgent` (memoria ~30 % y disco 23,4 % con los cinco contenedores en marcha). Una
+pregunta al chat queda en el log de `web` como `POST /api/chat/stream`, estado 200, 5,6 s, y se
+consulta con Logs Insights. El log de `rag` es casi todo su *healthcheck* (`GET /salud` cada 30 s).
+En la máquina, `docker compose logs` sigue funcionando para los cinco servicios (copia local de
+Docker también con `awslogs`). El *healthcheck* de `web` (`GET /` desde `127.0.0.1` cada 30 s)
+también entra en el log de acceso, pero responde 200 y no casa con ningún filtro.
+`[por confirmar: arranque completo tras apagar y encender]`
+
+Filtros, alarmas y panel (2026-10-23): plantilla validada con `validate-template` y `cfn-lint`,
+aplicada en AWS el mismo día. Un minuto después, nueve de las diez alarmas estaban en `OK`
+evaluadas con datos reales (memoria 29,5 %, disco 23,4 %, 294 créditos de CPU, 17,97 GB libres en
+la RDS, 44.421 tokens en el último día); la de 5xx esperaba el primer dato de su filtro. Forzada a
+`ALARM` con `set-alarm-state`, CloudWatch publicó en `jupiter-alertas` y volvió a `OK` al minuto.
+Los tres filtros, probados con `test-metric-filter` sobre una línea real del chat (y la misma con
+503 y con 401), casan lo esperado: el 503 cuenta como 5xx, el 401 no cuenta como 4xx y el tiempo
+del chat solo toma la 200. `[por confirmar: 503 reales con el agente parado y primer dato de
+TiempoRespuestaChat]`
 
 ### 8.8 Encendido programado de la base de datos — estado actual
 
@@ -1576,11 +1635,11 @@ la enciende a mano para trabajar o hacer una demo.
   `compose.yml`, `arrancar.sh` (lo descarga el propio servicio de systemd antes de ejecutarlo) y
   `jupiter.service` (lo reinstala `arrancar.sh` si cambió): los tres salen siempre del mismo commit,
   aunque se desplegara con la máquina apagada.
-- **Seguridad:** solo `web` (nginx: SPA y proxy de `/api/*`) publica puerto, el 80, abierto solo a
-  las IP del equipo (la API no tiene autenticación y cada pregunta al chat cuesta dinero). Desde el
-  2026-10-21, **usuario y contraseña opcionales** (autenticación básica de nginx, contraseña cifrada en SSM
-  `/jupiter/web/contrasena`; en el disco de la EC2 solo queda su hash) para abrir el 80 a todo internet en demos: las IP del equipo cambian y
-  quien presenta no tiene por qué saber añadirlas. Si el parámetro existe pero no se puede leer, el
+- **Seguridad:** solo `web` (nginx: SPA y proxy de `/api/*`) publica puerto, el 80, **abierto a
+  todo internet con usuario y contraseña** (autenticación básica de nginx, contraseña cifrada en SSM
+  `/jupiter/web/contrasena`; en el disco de la EC2 solo queda su hash): las IP del equipo cambian y
+  quien presenta no tiene por qué saber añadirlas. La contraseña es imprescindible: la API no tiene
+  autenticación y cada pregunta al chat cuesta dinero. El 443 está cerrado: no hay HTTPS. Si el parámetro existe pero no se puede leer, el
   arranque se detiene: mejor sin web que abierta sin contraseña. `/phoenix/` exige siempre esa
   contraseña, también desde la propia máquina, y sin contraseña configurada responde 403: guarda
   las preguntas y respuestas de los usuarios y no tiene autenticación propia. Limitación: es HTTP, la contraseña
@@ -1880,6 +1939,12 @@ la enciende a mano para trabajar o hacer una demo.
   ajenas. Cambiar de modelo obliga a reindexar y recalibrar.
 - **Recuperación NO/NO2:** el modelo de embeddings no distingue bien NO de NO2 (14/15 documentales
   con hit@4; el fallo es ese caso).
+- **Las alarmas de Bedrock miden toda la cuenta** (§8.7): una campaña de evaluación del equipo
+  puede disparar el aviso de tokens sin que la web haya hecho nada. Separarlo exigiría un perfil
+  de inferencia propio de la aplicación o métricas propias del agente.
+- **Panel y trazas no están enlazados**: la IP de la EC2 cambia en cada encendido, así que el
+  panel de CloudWatch no puede llevar un enlace fijo a `/phoenix/`. Lo resolvería una IP elástica
+  o un dominio.
 
 **Trabajo futuro**
 - **¿Hace falta un modelo de razonamiento para el agente?** En la ruta documental no: el modelo sin
@@ -2132,7 +2197,9 @@ la enciende a mano para trabajar o hacer una demo.
 | 2026-10-23 | **Phoenix en la EC2** (Carlos con Claude Code, rama `feature/phoenix-prefijo`): `phoenix` pasa a ser el quinto contenedor del compose de producción, con imagen pública fijada (`20.19.0`), volumen propio y healthcheck con el Python de la imagen (no trae `curl` ni `wget`). `arrancar.sh` genera el acceso a `/phoenix/` (contraseña de la web siempre o 403 sin ella), no busca versión de Phoenix en SSM y deja de reiniciar `web` al redesplegar `api-usuario`. Hallazgo: al relanzar `web` con la misma imagen, compose no recrea el contenedor aunque cambien los ficheros de acceso que monta, así que poner o quitar la contraseña no se aplicaba hasta el siguiente encendido; ahora `arrancar.sh` recarga nginx cuando actualiza `web`. «Desplegar» gana el componente `phoenix`, sin tests ni build. Probado sin AWS: `arrancar.sh` con `aws` y `docker` simulados en seis casos (nunca pide la versión de Phoenix; con permiso denegado se detiene sin generar el acceso) y Phoenix real levantado con el compose de producción (sano en 16 s) detrás de nginx con los ficheros generados: con contraseña, 401 sin credenciales o con una errónea, 200 con la buena y 401 desde la propia máquina; estáticos y GraphQL con prefijo; una traza enviada a `http://phoenix:6006/v1/traces` aparece en su proyecto; sin contraseña, 403 en `/phoenix/` y la web abierta. Pendiente de aplicar en AWS |
 | 2026-10-23 | **Arreglo del arranque de la EC2** (Carlos con Claude Code, rama `fix/arranque-ec2`): dos ejecuciones de «Encender entorno» fallaron porque la EC2 ejecutaba el `arrancar.sh` de su disco, anterior a Phoenix, con el `compose.yml` nuevo de S3 (§8.9). `jupiter.service` trae ahora `arrancar.sh` de S3 antes de ejecutarlo; `arrancar.sh` reinstala `jupiter.service` si cambió y borra los directorios que Docker crea en lugar de los ficheros de acceso; «Encender entorno» reintenta el arranque una vez. Sintaxis de `arrancar.sh` y del comando del workflow comprobada con `bash -n`, y `arrancar.sh` probado con `aws`, `docker` y `systemctl` simulados y el fichero de acceso convertido en directorio. EC2 recuperada a mano por SSM el mismo día (borrar el directorio, `arrancar.sh` y `jupiter.service` de S3, reiniciar el servicio): cinco contenedores sanos y 401 sin credenciales en `/`, `/api/health` y `/phoenix/`. `[por confirmar: encendido tras desplegar con la máquina apagada, con el arreglo ya en S3]` |
 | 2026-10-23 | **Trazas de Phoenix en la EC2: dirección en el compose** (Carlos con Claude Code, rama `fix/arranque-ec2`): con Phoenix en marcha en `/phoenix/` no llegaban trazas porque no existía `/jupiter/agente/phoenix_endpoint` en SSM (comprobado en AWS: solo `database_url`, `llm_modelo` y `llm_modelo_clasificador`). La imagen activa del agente (`fcfe855`) ya traía el exportador. `PHOENIX_ENDPOINT` pasa a estar fijo en el `environment` del agente en `compose.yml`; se revisaron los demás parámetros del agente y siguen en SSM por ser secretos o cambiables sin desplegar. Aplicado el mismo día: tras una pregunta en el chat de la EC2, su traza aparece en Phoenix (`/phoenix/`) |
-| 2026-10-23 | **Logs y métricas de la EC2 en CloudWatch** (Carlos con Claude Code, rama `feature/cloudwatch-logs`): `web`, `api-usuario` y `rag` envían su log a `/jupiter/ec2` con el driver `awslogs` (modo `non-blocking`); `agente` y `phoenix` siguen en la máquina. El agente de CloudWatch publica memoria y disco (2 métricas en `CWAgent`, dimensión `InstanceId`); `arrancar.sh` lo instala si falta y, si falla, avisa y sigue. El grupo de logs lo crea una pila de CloudFormation (`jupiter-observabilidad`) que recogerá también alarmas y panel. Rol de la EC2: escribir solo en ese grupo y métricas solo en `CWAgent`. Probado sin AWS: `docker compose config` (driver por servicio), plantilla validada con `validate-template` y `arrancar.sh` con `aws`, `docker`, `rpm`, `dnf` y el agente simulados en seis casos (primera instalación, ya instalado, un solo servicio, y fallos de `dnf`, de S3 y de la configuración: en los tres avisa y la aplicación arranca). `[por confirmar en AWS: streams en /jupiter/ec2, 2 métricas en CWAgent y docker compose logs en la máquina]` |
+| 2026-10-23 | **Logs y métricas de la EC2 en CloudWatch** (Carlos con Claude Code, rama `feature/cloudwatch-logs`): `web`, `api-usuario` y `rag` envían su log a `/jupiter/ec2` con el driver `awslogs` (modo `non-blocking`); `agente` y `phoenix` siguen en la máquina. El agente de CloudWatch publica memoria y disco (2 métricas en `CWAgent`, dimensión `InstanceId`); `arrancar.sh` lo instala si falta y, si falla, avisa y sigue. El grupo de logs lo crea una pila de CloudFormation (`jupiter-observabilidad`) que recogerá también alarmas y panel. Rol de la EC2: escribir solo en ese grupo y métricas solo en `CWAgent`. Probado sin AWS: `docker compose config` (driver por servicio), plantilla validada con `validate-template` y `arrancar.sh` con `aws`, `docker`, `rpm`, `dnf` y el agente simulados en seis casos (primera instalación, ya instalado, un solo servicio, y fallos de `dnf`, de S3 y de la configuración: en los tres avisa y la aplicación arranca). Aplicado el mismo día: pila y permisos del rol, «Desplegar → `phoenix`» (instaló el agente de CloudWatch) y `arrancar.sh rag api-usuario web` por SSM para recrear solo esos tres contenedores, sin apagar la EC2. Verificado: tres *streams*, exactamente 2 métricas en `CWAgent` (memoria ~30 %, disco 23,4 %) y una pregunta al chat en Logs Insights (`POST /api/chat/stream`, 200, 5,6 s). Incidencia: la pila se creó primero en otra cuenta porque la terminal usaba el perfil por defecto; se borró y la guía de despliegue comprueba ahora la cuenta antes de aplicar. `docker compose logs` en la máquina funciona para los cinco servicios. `[por confirmar: arranque completo tras apagar y encender]` |
+| 2026-10-23 | **Alarmas y panel de CloudWatch** (Carlos con Claude Code, rama `feature/cloudwatch-logs`): la pila `jupiter-observabilidad` suma al grupo de logs 3 filtros de métricas sobre el log de nginx, 8 alarmas (web 5xx, errores y tokens de Bedrock, estado, créditos, memoria y disco de la EC2, espacio de la RDS) y el panel `jupiter`. Parámetros: `InstanceId` de la EC2 y `UmbralTokensDia` (provisional 2 M; la cifra la fija quien lleva el coste). Los umbrales se fijaron con consultas de solo lectura a la cuenta, que dieron tres hallazgos: EC2 en modo `unlimited` (los créditos son coste, no lentitud), RDS con autoescalado de disco y métricas de Bedrock solo por modelo o para toda la cuenta. La alarma de errores de Bedrock suma dos métricas: 11 métricas en alarmas, una por encima de la capa gratuita `[estimación: 0,10 $/mes]`. Guía de despliegue con la tabla de alarmas, la prueba de una alarma y el cierre del 443. Validado con `validate-template`, `cfn-lint` y el JSON del panel. Aplicado el mismo día: nueve alarmas en `OK` con datos reales al minuto, prueba de `jupiter-web-5xx` con `set-alarm-state` publicada en SNS y filtros comprobados con `test-metric-filter` sobre una línea real del chat. Grupo de seguridad: cerrados el 443 y la regla de la IP del equipo; queda solo el 80 abierto a todo internet con contraseña. `[por confirmar: 503 reales con el agente parado]` |
+| 2026-10-23 | **Batería de uso contra la EC2** (Carlos con Claude Code): para poblar Phoenix y el panel `jupiter` con uso representativo, 95 peticiones con contraseña en 234 s y 2 en paralelo: 61 turnos de chat sacados de los casos de evaluación del agente (turno, datos, comprobaciones, 5 conversaciones de varios turnos y una muestra del clasificador; 3 de cada 4 por `/api/chat/stream`), 31 consultas de estaciones y series y 3 errores de cliente. Resultado: 61/61 turnos con 200, ningún 5xx, 3 respuestas 422 esperadas; tiempo por turno p50 4,7 s, p90 9,1 s y máximo 22,2 s medido en el cliente. En CloudWatch: 218 invocaciones y unos 245 000 tokens de entrada en Bedrock (un 12 % del umbral diario provisional), `TiempoRespuestaChat` con media de 5,5 s y las diez alarmas en `OK`. En Phoenix, 66 trazas y 597 spans en el proyecto `agente`, mediana de 4,9 s |
 
 ---
 
