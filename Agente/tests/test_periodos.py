@@ -3,7 +3,7 @@ from datetime import date
 
 import pytest
 
-from agente.business.periodos import resolver
+from agente.business.periodos import resolver, resolver_futuro
 
 HOY, PRIMERA, ULTIMA = date(2026, 5, 1), date(2024, 4, 30), date(2026, 4, 30)
 
@@ -49,3 +49,47 @@ def test_expresion_se_resuelve_con_las_definiciones_del_proyecto(pregunta, rango
         return
     assert len(periodos) == 1
     assert periodos[0].rangos == tuple((_d(i), _d(f)) for i, f in rangos) and periodos[0].bloque == bloque
+
+
+# --------------------------------------------------------------------------- futuro (PREDICCION)
+
+@pytest.mark.parametrize("pregunta, dia, bloque", [
+    ("¿Cómo estará el aire mañana?", "2026-05-02", None),
+    ("¿Y pasado mañana?", "2026-05-03", None),
+    ("¿Habrá pico de ozono esta tarde?", "2026-05-01", "tarde"),
+    ("¿Cómo pinta esta noche?", "2026-05-01", "noche"),
+    ("¿Y mañana por la mañana?", "2026-05-02", "manana"),         # día siguiente + bloque, no doble día
+    ("¿Cómo estará mañana por la noche?", "2026-05-02", "noche"),
+    ("¿Cómo va a estar hoy?", "2026-05-01", None),
+    ("¿Qué tal en las próximas 24 h?", "2026-05-02", None),
+    ("¿Y en las próximas 48 h?", "2026-05-03", None),
+    ("¿Cómo estará el aire el 3 de mayo?", None, None),            # «de mayo» no es regla de futuro
+    ("¿Y el 2026-05-02?", "2026-05-02", None),                     # fecha ISO explícita
+    ("¿Cómo estará este fin de semana?", "2026-05-02", None),      # hoy jueves → sábado
+    ("¿Y la semana que viene?", "2026-05-04", None),               # lunes natural siguiente
+])
+def test_resolver_futuro(pregunta, dia, bloque):
+    periodos = resolver_futuro(pregunta, HOY)
+    if dia is None:
+        assert periodos == []
+        return
+    assert periodos[-1].rangos == ((_d(dia), _d(dia)),)
+    assert periodos[-1].bloque == bloque
+
+
+def test_resolver_futuro_sin_expresion_vacio():
+    """Sin expresión de futuro, vacío: la herramienta aplica el defecto (hoy)."""
+    assert resolver_futuro("¿cómo estará el aire en Retiro?", HOY) == []
+
+
+def test_esta_manana_es_bloque_de_hoy_no_dia_siguiente():
+    """«esta mañana» → hoy + bloque mañana; no debe contar como «mañana» (día siguiente)."""
+    periodos = resolver_futuro("¿cómo estará esta mañana?", HOY)
+    assert periodos[-1].rangos == ((HOY, HOY),) and periodos[-1].bloque == "manana"
+
+
+def test_resolver_futuro_varias_expresiones_conserva_ambas():
+    """«hoy y mañana» → dos periodos; el llamador elige la fecha máxima."""
+    periodos = resolver_futuro("¿cómo está hoy y cómo estará mañana?", HOY)
+    assert [p.rangos for p in periodos] == [((HOY, HOY),), ((_d("2026-05-02"), _d("2026-05-02")),)]
+    assert max(p.rangos[0][0] for p in periodos) == _d("2026-05-02")
