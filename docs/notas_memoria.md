@@ -131,6 +131,7 @@ Hilo conductor de la memoria: cómo y por qué cambió el diseño.
 | 2026-10-23 | Alarmas | Dos alarmas, solo de la Lambda → **diez alarmas** que cubren también la web (5xx), Bedrock (errores y tokens al día), la EC2 (estado, créditos de CPU, memoria, disco) y la RDS (espacio), con 3 filtros de métricas sobre el log de nginx y un panel; todo en la plantilla de CloudFormation `jupiter-observabilidad` | Un fallo de la web, del modelo o de la máquina no avisaba a nadie, y un bucle del agente o la web abierta a internet podían disparar el gasto en Bedrock sin que nadie lo viera. Descartados: un script con `put-metric-alarm` por alarma, como el resto de `deploy/aws/` (con ocho alarmas se desvía de lo que hay en AWS sin que nadie lo note), crearlas en la consola (no se revisan en un PR) y métricas propias del agente (Phoenix ya lo mide) |
 | 2026-10-23 | Evaluación del asistente | Solo *offline* (baterías de preguntas con respuesta esperada y LLM juez) → **offline + valoración 👍/👎 de los usuarios** pedida en la web y anotada en Phoenix sobre el span del turno | Las baterías miden lo que el equipo pregunta, no lo que preguntan los usuarios ni si les sirve. Votar en Phoenix deja el voto junto a la traza (ruta, tema, coste) sin tabla nueva. Descartados: una tabla de votos en la RDS (apagada fuera de horario y separa el voto de su traza), un 👍/👎 en cada respuesta y una encuesta abierta (texto libre de usuarios que no se puede versionar) |
 | 2026-10-23 | KPIs de uso del asistente | Script local `kpis_phoenix.py` que leía Phoenix y escribía un informe markdown o HTML → **endpoint `GET /kpis` del agente**, reenviado por api-usuario, para verlos en la web desplegada; **script eliminado** | Ver los KPIs exigía ejecutar el script en un portátil con la contraseña de la web, y el tribunal no lo vería. El cálculo pasa al agente, dueño de la lógica del turno, y comparte con el informe de evaluación el árbol del turno y la tabla de precios. Descartados: mantener el script además del endpoint (dos sitios con la misma lógica), que api-usuario lea Phoenix (duplica el turno) y una página estática regenerada cada hora |
+| 2026-10-23 | Acceso a la web de la EC2 | 80 abierto a todo internet **con contraseña**, IP automática que cambiaba en cada encendido → **web pública sin contraseña en una IP elástica** (fija), `/phoenix/` cerrado (403) para todos y **presupuesto diario de Bedrock** (AWS Budgets, 2 $/día, solo aviso por correo) | El tribunal tiene que entrar a probarla sin pedir credenciales y con un enlace que no cambie. La IP elástica cuesta lo mismo que la automática (0,005 $/h). Riesgo asumido: la API y el chat no tienen autenticación y cada pregunta se paga en Bedrock (0,001–0,003 $ `[estimación]`). Descartados: un cupo diario de preguntas en el agente (corte inmediato, pero código nuevo en el agente y la API a días de la entrega), una *budget action* que deniegue Bedrock al rol de la EC2 (AWS actualiza los costes unas tres veces al día: corta horas tarde y hay que quitarla a mano), las cuotas de servicio de Bedrock (son por minuto y solo admiten subidas) y mantener Phoenix con contraseña (exigía separar su contraseña de la de la web en `arrancar.sh` y un permiso IAM nuevo) |
 
 **Decisiones abiertas que alimentarán esta tabla:** modelo del agente en Bedrock (Ministral 14B,
 gpt-oss-120b, Qwen3 Next 80B (2026-10-16) o Nemotron 3 Super 120B (2026-10-18); Claude Haiku 5.5 no está
@@ -1538,7 +1539,10 @@ documentada, no una configuración por defecto; la opción C queda como mejora f
   conexión vive en `/jupiter/database_url` y la Lambda la leerá en ejecución con su rol. Efecto
   secundario útil: el equipo deja de compartirse la contraseña, cada persona la obtiene con sus
   propias credenciales de AWS.
-- **Presupuesto con alertas** antes de crear recursos. Un Budget **avisa, no bloquea**.
+- **Presupuesto con alertas** antes de crear recursos. Un Budget **avisa, no bloquea**. Con la web
+  pública se suma `jupiter-bedrock-diario`: 2 $ al día solo de Bedrock, con correo al 80 % y al
+  100 %. Llega con horas de retraso (AWS actualiza los costes unas tres veces al día); el aviso
+  rápido es la alarma de tokens de CloudWatch (§8.7).
 - **Roles:** ejecución de la Lambda (`jupiter-lambda-pipeline`), EventBridge Scheduler
   (`jupiter-scheduler-pipeline`), desde el 2026-09-27 **`jupiter-github-actions-deploy`** para el
   despliegue automático (§13) y, desde el 2026-10-01, **`jupiter-automation-rds`** (los runbooks que
@@ -1911,11 +1915,12 @@ equipo la encendía a mano para trabajar o hacer una demo.
   `compose.yml`, `arrancar.sh` (lo descarga el propio servicio de systemd antes de ejecutarlo) y
   `jupiter.service` (lo reinstala `arrancar.sh` si cambió): los tres salen siempre del mismo commit,
   aunque se desplegara con la máquina apagada.
-- **Seguridad:** solo `web` (nginx: SPA y proxy de `/api/*`) publica puerto, el 80, **abierto a
-  todo internet con usuario y contraseña** (autenticación básica de nginx, contraseña cifrada en SSM
-  `/jupiter/web/contrasena`; en el disco de la EC2 solo queda su hash): las IP del equipo cambian y
-  quien presenta no tiene por qué saber añadirlas. La contraseña es imprescindible: la API no tiene
-  autenticación y cada pregunta al chat cuesta dinero. El 443 está cerrado: no hay HTTPS. Si el parámetro existe pero no se puede leer, el
+- **Seguridad:** solo `web` (nginx: SPA y proxy de `/api/*`) publica puerto, el 80. **Para la
+  corrección del TFM, abierto a todo internet sin contraseña** en una **IP elástica** (fija), con
+  el presupuesto diario de Bedrock de la §8.5 como aviso de gasto (`deploy/aws/3_web_publica.ps1`;
+  aplicado en AWS `[por confirmar]`). La contraseña sigue disponible sin tocar código: autenticación
+  básica de nginx, contraseña cifrada en SSM `/jupiter/web/contrasena` y en el disco de la EC2 solo
+  su hash; se pensó para demos desde redes con IP desconocida. El 443 está cerrado: no hay HTTPS. Si el parámetro existe pero no se puede leer, el
   arranque se detiene: mejor sin web que abierta sin contraseña. `/phoenix/` exige siempre esa
   contraseña, también desde la propia máquina, y sin contraseña configurada responde 403: guarda
   las preguntas y respuestas de los usuarios y no tiene autenticación propia. Limitación: es HTTP, la contraseña
@@ -2232,11 +2237,14 @@ equipo la encendía a mano para trabajar o hacer una demo.
 - **Las alarmas de Bedrock miden toda la cuenta** (§8.7): una campaña de evaluación del equipo
   puede disparar el aviso de tokens sin que la web haya hecho nada. Separarlo exigiría un perfil
   de inferencia propio de la aplicación o métricas propias del agente.
-- **Panel y trazas no están enlazados**: la IP de la EC2 cambia en cada encendido, así que el
-  panel de CloudWatch no puede llevar un enlace fijo a `/phoenix/`. Lo resolvería una IP elástica
-  o un dominio.
+- **La web pública no tiene autenticación ni límite de uso**: cualquiera puede preguntar al
+  asistente y el gasto en Bedrock solo se vigila (presupuesto diario y alarma de tokens), no se
+  corta. Lo resolvería un cupo diario en el agente o un límite por IP en nginx.
+- **Phoenix no se ve en la web pública**: sin contraseña, `/phoenix/` responde 403 a todos. Para
+  consultar las trazas hay que volver a poner la contraseña un rato.
 - **La página de KPIs no tiene control de acceso propio** (§8.7): lleva el rótulo «Solo
-  administradores», pero la ve cualquiera con la contraseña de la web. No hay gestión de usuarios.
+  administradores», pero con la web pública la ve cualquiera (solo agregados, sin texto de
+  usuarios). No hay gestión de usuarios.
 
 **Trabajo futuro**
 - **¿Hace falta un modelo de razonamiento para el agente?** En la ruta documental no: el modelo sin
@@ -2510,6 +2518,7 @@ equipo la encendía a mano para trabajar o hacer una demo.
 | 2026-10-23 | **Ingesta por franjas aplicada en AWS** (Guille con Claude Code): desactivadas `jupiter-rds-encender`, `jupiter-rds-apagar` y, para la entrega, `jupiter-ec2-apagar`; RDS y EC2 quedan siempre encendidas. Lambda desplegada desde `main` y `jupiter-pipeline-diario` cambiada a `cron(45 7,13,20,23 * * ? *)`. `--reprocesar 2026-09-16`: 15.869 bloques reescritos; la noche pasa del 7,19 % al **0,74 %** de bloques marcados y su cobertura media de 0,75 a 0,989 (§6.5 bis). Invocación manual a media tarde: 214 bloques (madrugada y mañana; la tarde, abierta, no se escribe), 0 anomalías, 23 estaciones, frente a las 107 anomalías de la tarde a medias en la prueba de las 16:07 |
 
 ---
+| 2026-10-23 | **Web pública para la corrección del TFM** (Guille con Claude Code, rama `feature/web-publica`): script `deploy/aws/3_web_publica.ps1` que crea una IP elástica para la EC2 y la asocia, borra la contraseña de la web (`/phoenix/` pasa a 403 para todos) y crea el presupuesto diario `jupiter-bedrock-diario` (2 $/día, correo al 80 % y al 100 %); después, «Desplegar → `web`». Sin cambios de código: el acceso sin contraseña ya estaba previsto en `arrancar.sh`. Guía de despliegue y workflow «Encender entorno» actualizados (la IP ya no cambia). Validado sin AWS: sintaxis del script y JSON del presupuesto. Pendiente de aplicar en AWS `[por confirmar]` |
 
 ## 13. Preguntas abiertas
 
