@@ -7,11 +7,19 @@
  */
 import { useQueries, useQuery } from '@tanstack/react-query'
 
-import { interpretarEventoChat, textoFase } from '../dominio/chat'
+import { interpretarEventoChat, textoFase, type EventoChat } from '../dominio/chat'
 import { crearParserSSE } from '../dominio/sse'
 import { cliente } from './cliente'
 import { ErrorApi } from './errores'
-import type { Contaminante, Estacion, ParametrosSerie, RespuestaChat, Salud, SerieBloques } from './tipos'
+import type {
+  Contaminante,
+  Estacion,
+  ParametrosSerie,
+  RespuestaChat,
+  Salud,
+  SerieBloques,
+  ValoracionChat,
+} from './tipos'
 
 /** Techo del cliente para /chat: por encima del timeout de nginx (180 s) para que, si se agota, el 504 sea del servidor. */
 export const TIEMPO_MAX_CHAT_MS = 185_000
@@ -119,7 +127,7 @@ export async function preguntarStream(
   const alimentar = crearParserSSE()
   let tokens = ''
   let textoEntero: string | null = null
-  let cierre: { sessionId: string | null; fuentes: RespuestaChat['fuentes']; advertencia: string | null } | null = null
+  let cierre: Extract<EventoChat, { tipo: 'done' }> | null = null
 
   try {
     for (;;) {
@@ -158,6 +166,18 @@ export async function preguntarStream(
     fuentes: cierre.fuentes,
     advertencia: cierre.advertencia,
     session_id: cierre.sessionId,
+    traza_id: cierre.trazaId,
+    span_id: cierre.spanId,
+  }
+}
+
+/** Envía la valoración del turno sin reintentos. */
+export async function valorar(valoracion: ValoracionChat): Promise<void> {
+  try {
+    const { error, response } = await cliente.POST('/chat/valoracion', { body: valoracion })
+    if (!response.ok) throw ErrorApi.desdeRespuesta(response, error)
+  } catch (error) {
+    throw ErrorApi.desdeExcepcion(error)
   }
 }
 

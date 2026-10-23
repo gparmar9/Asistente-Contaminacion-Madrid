@@ -1086,6 +1086,21 @@ th[aria-sort] .tabla-orden {
   background: var(--superficie);
 }
 
+/* Valoración del asistente */
+.aviso-valoracion {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--e-2);
+  padding: var(--e-2) var(--e-3);
+  border: 1px solid var(--borde);
+  border-radius: var(--radio);
+  background: var(--superficie-2);
+  color: var(--tinta-2);
+  font-size: var(--t-s);
+}
+
 /* Versión compacta de los componentes del chat dentro del panel */
 .panel-chat .consultas {
   gap: var(--e-3);

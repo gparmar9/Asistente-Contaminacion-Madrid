@@ -239,6 +239,41 @@
           }
         }
       }
+    },
+    "/chat/valoracion": {
+      "post": {
+        "tags": [
+          "chat"
+        ],
+        "summary": "Valoración 👍/👎 del usuario sobre una respuesta del asistente",
+        "description": "Se reenvía al agente. 503 si no la guarda: la web no reintenta, la valoración no es crítica.",
+        "operationId": "post_valoracion_chat_valoracion_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ValoracionChat"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
@@ -567,6 +602,18 @@
             ],
             "title": "Traza Id",
             "description": "Traza del turno en el agente; null sin agente"
+          },
+          "span_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Span Id",
+            "description": "Span del turno en el agente, el que recibe la valoración; null sin agente"
           }
         },
         "type": "object",
@@ -652,6 +699,44 @@
           "type"
         ],
         "title": "ValidationError"
+      },
+      "ValoracionChat": {
+        "properties": {
+          "session_id": {
+            "type": "string",
+            "maxLength": 64,
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9_-]+$",
+            "title": "Session Id"
+          },
+          "traza_id": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{32}$",
+            "title": "Traza Id"
+          },
+          "span_id": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{16}$",
+            "title": "Span Id"
+          },
+          "valor": {
+            "type": "string",
+            "enum": [
+              "positiva",
+              "negativa"
+            ],
+            "title": "Valor"
+          }
+        },
+        "type": "object",
+        "required": [
+          "session_id",
+          "traza_id",
+          "span_id",
+          "valor"
+        ],
+        "title": "ValoracionChat",
+        "description": "👍/👎 del usuario sobre un turno del agente, con los ids que devolvió ese turno."
       }
     }
   }

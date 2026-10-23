@@ -105,6 +105,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/chat/valoracion": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Valoración 👍/👎 del usuario sobre una respuesta del asistente
+         * @description Se reenvía al agente. 503 si no la guarda: la web no reintenta, la valoración no es crítica.
+         */
+        post: operations["post_valoracion_chat_valoracion_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -221,6 +241,11 @@ export interface components {
              * @description Traza del turno en el agente; null sin agente
              */
             traza_id?: string | null;
+            /**
+             * Span Id
+             * @description Span del turno en el agente, el que recibe la valoración; null sin agente
+             */
+            span_id?: string | null;
         };
         /** SerieBloques */
         SerieBloques: {
@@ -253,6 +278,23 @@ export interface components {
             input?: unknown;
             /** Context */
             ctx?: Record<string, never>;
+        };
+        /**
+         * ValoracionChat
+         * @description 👍/👎 del usuario sobre un turno del agente, con los ids que devolvió ese turno.
+         */
+        ValoracionChat: {
+            /** Session Id */
+            session_id: string;
+            /** Traza Id */
+            traza_id: string;
+            /** Span Id */
+            span_id: string;
+            /**
+             * Valor
+             * @enum {string}
+             */
+            valor: "positiva" | "negativa";
         };
     };
     responses: never;
@@ -393,6 +435,37 @@ export interface operations {
         responses: {
             /** @description Successful Response */
             200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    post_valoracion_chat_valoracion_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ValoracionChat"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            204: {
                 headers: {
                     [name: string]: unknown;
                 };

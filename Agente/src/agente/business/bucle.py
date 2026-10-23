@@ -100,6 +100,7 @@ class ResultadoTurno:
     valida: bool | None = None                         # ruta documental: /rag/validar la aceptó
     reparaciones: int = 0                              # ruta documental: reintentos tras validar
     traza_id: str | None = None
+    span_id: str | None = None                         # span `turno`: el que anota la valoración
     emitida: bool = False                              # la respuesta ya salió como tokens por el emisor
     respuesta_contexto: str = ""                       # la que entra en el historial; documental: sin [Dn]
     hallazgos: list[Hallazgo] = field(default_factory=list)  # comprobaciones posteriores que saltaron
@@ -133,7 +134,8 @@ class Bucle:
         historial = list(historial)
         with observabilidad.turno(pregunta) as span:
             span.set_attribute("agente.historial_turnos", len(historial))
-            resultado = ResultadoTurno(respuesta="", traza_id=observabilidad.trace_id_actual())
+            resultado = ResultadoTurno(respuesta="", traza_id=observabilidad.trace_id_actual(),
+                                       span_id=observabilidad.span_id_actual())
             # Con alguna regla en bloqueo, nada sale como token antes de comprobarlo.
             emitir_texto = None if self._bloquean else _texto_al_cliente(emitir, resultado, span)
             try:

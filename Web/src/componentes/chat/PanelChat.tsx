@@ -2,6 +2,7 @@ import { useEffect, useId, useRef } from 'react'
 import { Link, useLocation } from 'react-router-dom'
 
 import { useChat } from '../../estado/hooks'
+import { AvisoValoracion } from './AvisoValoracion'
 import { ChipsSugeridas } from './ChipsSugeridas'
 import { Consulta } from './Consulta'
 import { EntradaChat } from './EntradaChat'
@@ -83,6 +84,7 @@ export function PanelChat() {
           </div>
 
           <footer className="panel-chat-pie">
+            <AvisoValoracion />
             <EntradaChat enviando={enviando} onEnviar={(p) => enviar(p)} compacta autoFocus />
             {consultas.length > 0 && (
               <div className="fila-entre t-xs texto-apagado">

@@ -1,4 +1,5 @@
-"""Servicio del agente LLM: FastAPI con /salud, POST /responder y POST /responder/stream (SSE).
+"""Servicio del agente LLM: FastAPI con /salud, POST /responder, POST /responder/stream (SSE) y
+POST /valoracion (👍/👎 del usuario, anotado en Phoenix sobre el span del turno).
 
 Un turno a la vez por sesión (`business/sesiones.py`): una segunda pregunta de la misma sesión
 espera a que termine la primera. Los dos endpoints comparten sesión, bloqueo, memoria y log del turno.
@@ -31,7 +32,8 @@ from agente.business.redactor_sql import RedactorSQL
 from agente.business.selector_catalogo import SelectorCatalogo
 from agente.datos.mediciones import Mediciones, crear_motor
 from agente.datos.memoria import AlmacenConversaciones, AlmacenEnMemoria
-from agente.entities.chat import Pregunta, Respuesta
+from agente.datos.valoraciones import AnotadorPhoenix, PhoenixNoDisponible
+from agente.entities.chat import Pregunta, Respuesta, Valoracion
 from agente.entities.eventos import Emisor, EventoEstado, Fase
 from agente.entities.memoria import TurnoGuardado
 from agente.llm.cliente import ConfiguracionLLMInvalida, crear_llm
@@ -43,6 +45,8 @@ logger = logging.getLogger("agente")
 log_turnos = observabilidad.configurar_resumen()
 
 settings = get_settings()
+
+VALORACION_NO_DISPONIBLE = "La valoración no está disponible en este momento"
 
 
 def construir_bucle(settings: Settings = settings) -> Bucle | None:
@@ -83,6 +87,7 @@ async def lifespan(app_: FastAPI):
     app_.state.bucle = construir_bucle()
     app_.state.sesiones = Sesiones()
     app_.state.memoria = AlmacenEnMemoria(settings.memoria_max_turnos, settings.memoria_ttl_h * 3600)
+    app_.state.anotador = AnotadorPhoenix(settings.phoenix_url) if settings.phoenix_url else None
     yield
     observabilidad.cerrar()
 
@@ -105,6 +110,10 @@ def get_sesiones(request: Request) -> Sesiones:
 
 def get_memoria(request: Request) -> AlmacenConversaciones:
     return request.app.state.memoria
+
+
+def get_anotador(request: Request) -> AnotadorPhoenix | None:
+    return getattr(request.app.state, "anotador", None)
 
 
 @app.get("/salud", summary="Estado del servicio")
@@ -132,7 +141,8 @@ async def responder(entrada: Pregunta, bucle: Bucle | None = Depends(get_bucle),
     except LLMNoDisponible as exc:
         raise HTTPException(status_code=503, detail=sse.NO_DISPONIBLE) from exc
     return Respuesta(respuesta=resultado.respuesta, fuentes=resultado.fuentes,
-                     advertencia=resultado.advertencia, traza_id=resultado.traza_id, session_id=session_id)
+                     advertencia=resultado.advertencia, traza_id=resultado.traza_id, span_id=resultado.span_id,
+                     session_id=session_id)
 
 
 @app.post("/responder/stream", summary="Pregunta al agente con la respuesta en streaming (SSE)",
@@ -151,6 +161,18 @@ async def responder_stream(entrada: Pregunta, bucle: Bucle | None = Depends(get_
     return StreamingResponse(
         sse.eventos(turno, session_id, settings.stream_heartbeat_s, settings.stream_cola),
         media_type="text/event-stream", headers=sse.CABECERAS)
+
+
+@app.post("/valoracion", status_code=204, summary="Valoración 👍/👎 del usuario sobre un turno")
+async def valorar(entrada: Valoracion, anotador: AnotadorPhoenix | None = Depends(get_anotador)) -> None:
+    """Se anota en Phoenix. Sin Phoenix (configurado o accesible), 503: la web la da por perdida."""
+    if anotador is None:
+        raise HTTPException(status_code=503, detail=VALORACION_NO_DISPONIBLE)
+    try:
+        await anotador.anotar(entrada)
+    except PhoenixNoDisponible as exc:
+        raise HTTPException(status_code=503, detail=VALORACION_NO_DISPONIBLE) from exc
+    log_turnos.info("valoracion traza=%s valor=%s", entrada.traza_id, entrada.valor)
 
 
 def _comprobar_llm(bucle: Bucle | None) -> None:
@@ -173,7 +195,8 @@ async def _turno_en_sesion(bucle: Bucle, sesiones: Sesiones, session_id: str, pr
             historial = []
             if memoria is not None:
                 historial = ventana(await memoria.cargar(session_id), settings.memoria_presupuesto_tokens)
-            resultado = await bucle.responder(pregunta, emitir, historial)
+            with observabilidad.sesion(session_id):
+                resultado = await bucle.responder(pregunta, emitir, historial)
             if memoria is not None:
                 await memoria.guardar(session_id, _turno_guardado(pregunta, resultado))
     except LLMNoDisponible:
