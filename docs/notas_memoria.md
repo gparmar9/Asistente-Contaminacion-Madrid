@@ -1681,12 +1681,10 @@ la evaluación del asistente (§7.3) era hasta ahora solo *offline*, con baterí
   respuesta: en el informe, sesiones con voto entre las que tienen 2 o más respuestas completas (el
   mismo criterio que la web: los turnos con error o cancelados no cuentan); frente al uso real, votos /
   `SampleCount` de `TiempoRespuestaChat` en CloudWatch.
-- 11 tests nuevos (7 del agente con un Phoenix fingido por `MockTransport` y 4 de api-usuario), y una
-  comprobación más en cada contrato; cuerpo de la anotación aceptado por el Phoenix local
-  (20.19.0).
-
-- Tests: 11 del lado servidor, 7 de la regla del aviso (Vitest) y 3 del informe (descarga por lotes,
-  último voto, satisfacción por ruta y tema).
+- Tests: 11 del lado servidor (7 del agente con un Phoenix fingido por `MockTransport` y 4 de
+  api-usuario) y una comprobación más en cada contrato, 7 de la regla del aviso (Vitest) y 3 del
+  informe (descarga por lotes, último voto, satisfacción por ruta y tema). Cuerpo de la anotación
+  aceptado por el Phoenix local (20.19.0).
 
 Estado (2026-10-23): agente, api-usuario, web e informe listos; contrato regenerado.
 `[por confirmar: despliegue y prueba con una anotación real en la EC2]`
@@ -1862,6 +1860,10 @@ la enciende a mano para trabajar o hacer una demo.
 
 - **Flujo de ramas:** `feature/*` → PR a `development` → PR a `main`. Un workflow bloquea cualquier
   PR a `main` que no venga de `development`. Más de 30 pull requests hasta julio de 2026.
+  GitHub guarda el resultado de cada check por **commit**, no por PR: si se abre por error un PR a
+  `main` y se rehace contra `development` con el mismo commit, el nuevo PR sigue mostrando el fallo
+  de la protección. No bloquea el merge (`development` no exige checks) y desaparece con el
+  siguiente commit (PR #93 → #95, 2026-10-23).
 - **Tests:** 16 en `main` (limpieza, features, inferencia, estaciones, ingesta, pipeline e
   integración). Con el RAG reescrito la suite unitaria llega a **96 pruebas** (verificado el
   2026-09-27 en local con todas las dependencias del RAG: 95 pasan por defecto y 1 se salta —
@@ -2368,6 +2370,7 @@ la enciende a mano para trabajar o hacer una demo.
 | 2026-10-23 | **Valoración 👍/👎 de los usuarios, parte de servidor** (Carlos con Claude Code, rama `feature/valoracion-usuario`): el agente devuelve el `span_id` del turno en `done` y en `/responder`, marca todos los spans con `session.id` y expone `POST /valoracion`, que anota el voto en Phoenix sobre el span `turno` (`valoracion_usuario`, `HUMAN`, 1/0). api-usuario lo reenvía desde `POST /chat/valoracion`. 11 tests nuevos; 159 del agente y 26 de api-usuario en verde. `[por confirmar: aviso en la web y despliegue]` |
 | 2026-10-23 | **Valoración 👍/👎 de los usuarios, web e informe** (Carlos con Claude Code, rama `feature/valoracion-usuario`): aviso «¿Qué tal lo está haciendo el asistente hoy?» en el panel y en `/asistente` tras la 2.ª respuesta, una vez al día por navegador; `traza_id` y `span_id` leídos del `done`; contrato OpenAPI regenerado. El informe de KPIs añade satisfacción total, por ruta y por tema con su *n* y la figura de satisfacción por ruta. Tests: 43 de la web, 162 del agente y 26 de api-usuario en verde. `[por confirmar: despliegue y anotación real en la EC2]` |
 | 2026-10-23 | **Revisión local de valoraciones** (Codex): simplificados los comentarios; reproducidos el estado diario obsoleto del aviso y el sesgo del denominador de participación. Detectada por lectura la falta de validación de pertenencia del span. Hallazgos pendientes de corrección (§8). Web: 43 pruebas, lint y compilación correctos. Agente y API: 188 pruebas correctas y 10 omitidas; ejecución fuera del sandbox por bloqueo de TestClient dentro de él. |
+| 2026-10-23 | **PR de la valoración a `development`** (Carlos con Claude Code): PR #95. El primer intento, #93, se abrió contra `main` y la protección falló como debía; al rehacerlo con el mismo commit, el fallo seguía visible en el #95 porque los checks van por commit (§9). Tests de la PR en verde |
 
 ---
 
