@@ -12,7 +12,8 @@
 # Los demás servicios quedan en la red interna de Docker, accesibles por nombre (http://rag:8010).
 name: jupiter
 
-x-logs: &logs
+x-logs-local: &logs-local
+  # Solo en la máquina (agente y phoenix: lo del agente ya está en sus trazas de Phoenix).
   # Sin límite, los logs de Docker crecen hasta llenar el disco.
   logging:
     driver: json-file
@@ -20,11 +21,25 @@ x-logs: &logs
       max-size: "10m"
       max-file: "3"
 
+# A CloudWatch Logs con el rol de la máquina: grupo /jupiter/ec2 (lo crea la plantilla
+# deploy/cloudwatch/observabilidad.yaml), un stream por contenedor (jupiter-web-1...).
+# non-blocking: si CloudWatch no responde, el contenedor sigue y se pierden líneas, no se para.
+# Docker guarda además una copia local, así que docker compose logs sigue funcionando.
+x-logs-cloudwatch: &logs-cloudwatch
+  logging:
+    driver: awslogs
+    options:
+      awslogs-region: eu-west-1
+      awslogs-group: /jupiter/ec2
+      tag: "{{.Name}}"
+      mode: non-blocking
+      max-buffer-size: 4m
+
 services:
   rag:
     image: ${REGISTRO}/jupiter-rag:${VERSION_RAG}
     restart: unless-stopped
-    <<: *logs
+    <<: *logs-cloudwatch
 
   # Bedrock con el rol de la máquina: sin claves. En SSM (config-agente.env) solo va lo secreto o
   # lo que se cambia sin tocar código: LLM_MODELO, DATABASE_URL con el rol agente_lectura...
@@ -45,7 +60,7 @@ services:
     depends_on:
       rag:
         condition: service_healthy
-    <<: *logs
+    <<: *logs-local
 
   api-usuario:
     image: ${REGISTRO}/jupiter-api-usuario:${VERSION_API_USUARIO}
@@ -58,7 +73,7 @@ services:
     depends_on:
       agente:
         condition: service_healthy
-    <<: *logs
+    <<: *logs-cloudwatch
 
   web:
     image: ${REGISTRO}/jupiter-web:${VERSION_WEB}
@@ -75,7 +90,7 @@ services:
       - ./web.htpasswd:/etc/nginx/web.htpasswd:ro
       # Exige contraseña en /phoenix/; devuelve 403 si no hay ninguna configurada.
       - ./phoenix-acceso.conf:/etc/nginx/phoenix-acceso.conf:ro
-    <<: *logs
+    <<: *logs-cloudwatch
 
   # Trazas del agente. Para cambiar la imagen de Docker Hub, editar la versión y desplegar "phoenix".
   # El agente le envía las trazas (PHOENIX_ENDPOINT, arriba), pero puede arrancar sin Phoenix.
@@ -98,7 +113,7 @@ services:
       timeout: 5s
       start_period: 60s
       retries: 3
-    <<: *logs
+    <<: *logs-local
 
 # En el disco EBS de la EC2: sobrevive a apagar y encender la máquina.
 volumes:

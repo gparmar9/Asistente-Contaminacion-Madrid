@@ -7,6 +7,7 @@
 # Todo sale de AWS con el rol de la máquina, sin claves en disco más allá de este script:
 #   s3://jupiter-calidad-aire-madrid/ec2/compose.yml   compose de producción (del repositorio)
 #   s3://jupiter-calidad-aire-madrid/ec2/jupiter.service  servicio de systemd
+#   s3://jupiter-calidad-aire-madrid/ec2/cloudwatch-agent.json  métricas de memoria y disco
 #   SSM /jupiter/versiones/<servicio>                 qué imagen está activa (tag = commit)
 #   SSM /jupiter/database_url                         cadena de conexión a RDS de la API (cifrada)
 #   SSM /jupiter/agente/<variable>                    configuración del agente (opcional): cada
@@ -21,6 +22,7 @@ set -euo pipefail
 REGION=eu-west-1
 BUCKET=jupiter-calidad-aire-madrid
 DIR="${JUPITER_DIR:-/opt/jupiter}"   # variable solo para probarlo fuera de la EC2
+CWAGENT_CTL="${CWAGENT_CTL:-/opt/aws/amazon-cloudwatch-agent/bin/amazon-cloudwatch-agent-ctl}"
 SERVICIOS=(web api-usuario agente rag phoenix)
 export AWS_DEFAULT_REGION="$REGION"
 
@@ -41,6 +43,22 @@ linea_env() {
         exit 1
     fi
     printf "%s='%s'\n" "$1" "$2"
+}
+
+# Agente de CloudWatch: memoria y disco de la máquina (2 métricas en CWAgent). Lo instala la
+# primera vez y aplica la configuración de S3 en cada ejecución. Devuelve error en vez de
+# detener el script: sin métricas la aplicación tiene que arrancar igual.
+agente_cloudwatch() {
+    if ! rpm -q amazon-cloudwatch-agent > /dev/null 2>&1; then
+        log "Instalando el agente de CloudWatch"
+        dnf install -y -q amazon-cloudwatch-agent > /dev/null || return 1
+    fi
+    aws s3 cp "s3://$BUCKET/ec2/cloudwatch-agent.json" cloudwatch-agent.json --only-show-errors \
+        || return 1
+    # fetch-config valida el fichero y reinicia el agente con él (-s).
+    "$CWAGENT_CTL" -a fetch-config -m ec2 -s -c "file:$DIR/cloudwatch-agent.json" > /dev/null \
+        || return 1
+    log "Agente de CloudWatch en marcha"
 }
 
 # Servicios a actualizar: los indicados (validados) o todos.
@@ -157,6 +175,8 @@ else
 fi
 # Los workers de nginx no son root: necesitan leer el fichero de contraseñas (solo guarda el hash).
 chmod 644 web.htpasswd web-acceso.conf phoenix-acceso.conf
+
+agente_cloudwatch || log "AVISO: el agente de CloudWatch no arrancó; sigue sin métricas de memoria y disco"
 
 log "Login en ECR ($REGISTRO)"
 aws ecr get-login-password | docker login --username AWS --password-stdin "$REGISTRO" > /dev/null
