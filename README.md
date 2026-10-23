@@ -30,9 +30,10 @@ lenguaje natural:
 
 Todo está desplegado en AWS. La web se abre sin instalar nada:
 
-**http://`[IP por confirmar]`/**
+**http://madrid-respira.duckdns.org/**
 
-Entra por `http://`: la web no tiene HTTPS.
+Entra por `http://`: la web no tiene HTTPS. Si el subdominio no resolviera, la misma web está
+en http://108.132.195.84/.
 
 ## Puesta en marcha en local
 
