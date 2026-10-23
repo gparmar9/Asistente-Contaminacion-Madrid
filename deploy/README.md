@@ -41,7 +41,7 @@ apagado a demanda en [`encender_entorno.yml`](../.github/workflows/encender_ento
 | **EventBridge Scheduler** | `jupiter-rds-encender` / `jupiter-rds-apagar` | Enciende la RDS a las 22:00 y la apaga a la 01:30 (`Europe/Madrid`) |
 | **Systems Manager Automation** | `AWS-StartRdsInstance` / `AWS-StopRdsInstance` | Runbooks de AWS que encienden o apagan la RDS solo si hace falta |
 | **SSM Parameter Store** | `/jupiter/database_url` | La cadena de conexión, cifrada |
-| **CloudWatch + SNS** | `jupiter-alertas` | Logs y avisos por correo |
+| **CloudWatch + SNS** | `jupiter-alertas` | Logs, métricas de negocio del pipeline (`Jupiter/Pipeline`) y avisos por correo |
 | **CloudFormation** | `jupiter-observabilidad` | Logs de la EC2, filtros de métricas, alarmas y el panel `jupiter` |
 
 Flujo de una ejecución:
@@ -523,13 +523,14 @@ aws rds start-db-instance --db-instance-identifier jupiter-postgres
 ## Alarmas y panel
 
 Todas avisan por correo a través del tema SNS `jupiter-alertas`. Las dos de la Lambda se crearon a
-mano; las otras ocho las crea la pila `jupiter-observabilidad`
+mano; las otras nueve las crea la pila `jupiter-observabilidad`
 ([`cloudwatch/observabilidad.yaml`](cloudwatch/observabilidad.yaml)).
 
 | Alarma | Salta cuando | Por qué importa |
 |---|---|---|
 | `jupiter-pipeline-errores` | La función lanza una excepción | El fallo evidente |
 | `jupiter-pipeline-sin-ejecuciones` | No hay ninguna invocación en 24 h | **El fallo silencioso**: si el disparador deja de funcionar no hay ningún error que contar, y el hueco en los datos se descubriría semanas después |
+| `jupiter-pipeline-sin-datos` | `HorasNuevas` suma menos de 1 en 24 h, o no hay dato | El otro fallo silencioso: la Lambda se ejecuta, la API de Madrid no devuelve registros y la función termina sin excepción. También salta si la Lambda falla (p. ej. con la RDS apagada) |
 | `jupiter-web-5xx` | 5 o más respuestas 5xx en 5 min | API, agente o proxy rotos. Si el agente cae, `api-usuario` responde 503: cubre también el chat caído |
 | `jupiter-bedrock-errores` | 3 o más errores de cliente o llamadas limitadas en 15 min | Modelo retirado, cuota agotada o permisos |
 | `jupiter-bedrock-tokens-dia` | Más de `UmbralTokensDia` tokens de entrada en 24 h | Freno de coste: un bucle o la web abierta al mundo |
@@ -539,8 +540,9 @@ mano; las otras ocho las crea la pila `jupiter-observabilidad`
 | `jupiter-ec2-disco` | Disco `/` > 85 % | Imágenes, logs locales y trazas de Phoenix, que no se purgan con la EC2 apagada |
 | `jupiter-rds-espacio` | Menos de 2 GB libres en la RDS | La RDS tiene autoescalado de disco: antes de llenarse crece, y cuesta más |
 
-- Las ocho de la pila usan `notBreaching`: con la EC2 o la RDS apagadas no hay datos y eso no es
-  un fallo. Solo `jupiter-pipeline-sin-ejecuciones` trata la falta de datos como fallo, a propósito.
+- Las de la pila usan `notBreaching`: con la EC2 o la RDS apagadas no hay datos y eso no es
+  un fallo. Solo `jupiter-pipeline-sin-ejecuciones` y `jupiter-pipeline-sin-datos` tratan la falta
+  de datos como fallo, a propósito.
 - **Bedrock se mide para toda la cuenta**, no por aplicación: las evaluaciones de modelos del equipo
   también cuentan para los errores y los tokens.
 - **Umbral de tokens**: parámetro `UmbralTokensDia` de la plantilla, provisional en 2 M (el día con
@@ -560,9 +562,46 @@ mano; las otras ocho las crea la pila `jupiter-observabilidad`
 | `TiempoRespuestaChat` | `{ $.uri = "/api/chat*" && $.status = 200 }`, valor `request_time`. En el streaming es el tiempo hasta el último evento |
 
 **Panel [`jupiter`](https://eu-west-1.console.aws.amazon.com/cloudwatch/home?region=eu-west-1#dashboards/dashboard/jupiter)** (la URL sale también en las salidas de la pila): Bedrock por modelo (invocaciones,
-latencia, tokens y errores), borde HTTP (4xx/5xx, tiempo de `/api/chat` y el estado de las diez
-alarmas), máquina (CPU, créditos, memoria y disco) y datos (ejecuciones de la Lambda, CPU,
-conexiones y espacio de la RDS). El detalle de cada pregunta al asistente está en `/phoenix/`.
+latencia, tokens y errores), borde HTTP (4xx/5xx, tiempo de `/api/chat` y el estado de las once
+alarmas), máquina (CPU, créditos, memoria y disco), datos (ejecuciones de la Lambda, CPU,
+conexiones y espacio de la RDS) y negocio (horas cargadas, estaciones con datos, tasa de anomalías
+y preguntas del día). El detalle de cada pregunta al asistente está en `/phoenix/`.
+
+### Métricas de negocio del pipeline
+
+Cada ejecución de la Lambda termina con una línea JSON en formato **EMF** (*Embedded Metric
+Format*, [`metricas_emf.py`](metricas_emf.py)). CloudWatch extrae de ella las métricas al recibir
+el log: sin `PutMetricData`, sin boto3 y sin permisos nuevos en el rol. Namespace
+`Jupiter/Pipeline`, sin dimensiones (cada dimensión sería otra métrica de pago):
+
+| Métrica | Qué es |
+|---|---|
+| `HorasNuevas` | Filas horarias insertadas o corregidas en `calidad_aire_horas_live` |
+| `EstacionesConDatos` | Estaciones con al menos una medición válida (de 24) |
+| `BloquesAnomalos` | Bloques marcados como anómalos por el Isolation Forest |
+| `TasaAnomalias` | `BloquesAnomalos` / bloques procesados, en %. El modelo espera ~1 % (`contamination`) |
+
+Si la API no devuelve registros la línea sale igual, con ceros: así la alarma
+`jupiter-pipeline-sin-datos` se evalúa con dato y el hueco se ve en el panel.
+
+La misma línea lleva tres campos que **no son métricas** (no cuestan): `pct_validas` (% de filas
+con validación `V`), `estaciones_sin_datos` (códigos de las que faltan) y
+`anomalias_por_magnitud` (bloques anómalos por código de magnitud). Se consultan con Logs
+Insights sobre `/aws/lambda/jupiter-pipeline`:
+
+```
+fields @timestamp, HorasNuevas, EstacionesConDatos, TasaAnomalias, pct_validas, @message
+| filter ispresent(HorasNuevas)
+| sort @timestamp desc
+| limit 30
+```
+
+«Preguntas respondidas hoy» no es una métrica nueva: es la estadística `SampleCount` de
+`TiempoRespuestaChat`, que cuenta una muestra por cada 200 en `/api/chat*`. El día es el de UTC.
+
+**Orden al desplegar el cambio:** primero la imagen nueva de la Lambda y una invocación a mano (con
+la RDS encendida) para que exista la métrica `HorasNuevas`; después la pila. Al revés, la alarma
+nueva nace en `ALARM` (sin datos = fallo) y manda un correo hasta la primera ejecución.
 
 **Probar una alarma.** Lo más rápido comprueba que llega el correo (la alarma vuelve sola a su
 estado en el siguiente periodo):

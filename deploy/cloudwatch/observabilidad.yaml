@@ -5,12 +5,14 @@
 #       --parameter-overrides InstanceId=<id de la EC2> [UmbralTokensDia=<tokens>]
 #
 # Grupo de logs, filtros de métricas sobre el log de acceso de nginx, alarmas y panel: todo lo de
-# CloudWatch se crea, se revisa y se borra junto. En una actualización, los parámetros que no se
+# CloudWatch se crea, se revisa y se borra junto. Las métricas de negocio del pipeline
+# (Jupiter/Pipeline) no se crean aquí: las publica la Lambda en formato EMF (deploy/metricas_emf.py). En una actualización, los parámetros que no se
 # pasan conservan su valor anterior.
 # El grupo lo crea esta plantilla y no Docker (awslogs-create-group sigue en false): si existiera
 # antes, CloudFormation no podría crearlo y fallaría la pila.
-# Capa gratuita: 5 métricas propias (3 filtros + 2 del agente de CloudWatch), 10 alarmas con las 2
-# de la Lambda (la de Bedrock usa 2 métricas) y 1 panel.
+# Capa gratuita: 9 métricas propias de 10 (3 filtros + 2 del agente de CloudWatch + 4 de la
+# Lambda), 11 alarmas con las 2 de la Lambda creadas a mano (12 métricas en alarmas: la de Bedrock
+# usa 2; las 2 que pasan de 10 se pagan) y 1 panel.
 AWSTemplateFormatVersion: "2010-09-09"
 Description: Jupiter - logs, alarmas y panel de la aplicacion
 
@@ -221,6 +223,25 @@ Resources:
       TreatMissingData: notBreaching
       AlarmActions: [!Sub "arn:aws:sns:${AWS::Region}:${AWS::AccountId}:jupiter-alertas"]
 
+  # Cierra el fallo silencioso del pipeline: si la API de Madrid no devuelve registros, la Lambda
+  # termina sin excepción (jupiter-pipeline-errores no salta) y publica HorasNuevas = 0.
+  # breaching, al revés que las demás: si la Lambda no llega a publicar (no se ejecuta o falla
+  # antes del final) tampoco hay datos nuevos, y eso sí es un fallo.
+  AlarmaPipelineSinDatos:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: jupiter-pipeline-sin-datos
+      AlarmDescription: El pipeline no ha cargado ninguna hora nueva en 24 h (API de Madrid sin datos o Lambda sin ejecutar o fallida)
+      Namespace: Jupiter/Pipeline
+      MetricName: HorasNuevas
+      Statistic: Sum
+      Period: 86400
+      EvaluationPeriods: 1
+      Threshold: 1
+      ComparisonOperator: LessThanThreshold
+      TreatMissingData: breaching
+      AlarmActions: [!Sub "arn:aws:sns:${AWS::Region}:${AWS::AccountId}:jupiter-alertas"]
+
   # La RDS tiene autoescalado de almacenamiento: por debajo del 10 % libre crece el disco (y el
   # coste) en lugar de llenarse.
   AlarmaRdsEspacio:
@@ -242,8 +263,8 @@ Resources:
       AlarmActions: [!Sub "arn:aws:sns:${AWS::Region}:${AWS::AccountId}:jupiter-alertas"]
 
   # --- Panel ---------------------------------------------------------------------------------
-  # Cuatro filas: Bedrock, borde HTTP, máquina y datos. El detalle de cada pregunta está en
-  # Phoenix. Por modelo con SEARCH: un modelo nuevo aparece sin tocar la plantilla.
+  # Cinco filas: Bedrock, borde HTTP, máquina, datos y negocio. El detalle de cada pregunta está
+  # en Phoenix. Por modelo con SEARCH: un modelo nuevo aparece sin tocar la plantilla.
   Panel:
     Type: AWS::CloudWatch::Dashboard
     Properties:
@@ -255,7 +276,7 @@ Resources:
             {
               "type": "text", "x": 0, "y": 0, "width": 24, "height": 2,
               "properties": {
-                "markdown": "## Jupiter: calidad del aire de Madrid\nBedrock, borde HTTP (log de acceso de nginx), máquina y datos. El detalle de cada pregunta al asistente está en **Phoenix**: `http://<IP de la EC2>/phoenix/` (la IP cambia en cada encendido). Logs en el grupo `${LogsEc2}`."
+                "markdown": "## Jupiter: calidad del aire de Madrid\nBedrock, borde HTTP (log de acceso de nginx), máquina, datos y negocio (lo que carga cada noche el pipeline y cuántas preguntas recibe el asistente). El detalle de cada pregunta al asistente está en **Phoenix**: `http://<IP de la EC2>/phoenix/` (la IP cambia en cada encendido). Logs en el grupo `${LogsEc2}`."
               }
             },
             {
@@ -327,6 +348,7 @@ Resources:
                   "${AlarmaEc2Memoria.Arn}",
                   "${AlarmaEc2Disco.Arn}",
                   "${AlarmaRdsEspacio.Arn}",
+                  "${AlarmaPipelineSinDatos.Arn}",
                   "arn:aws:cloudwatch:${AWS::Region}:${AWS::AccountId}:alarm:jupiter-pipeline-errores",
                   "arn:aws:cloudwatch:${AWS::Region}:${AWS::AccountId}:alarm:jupiter-pipeline-sin-ejecuciones"
                 ]
@@ -395,6 +417,44 @@ Resources:
                   [ "AWS/RDS", "FreeStorageSpace", "DBInstanceIdentifier", "jupiter-postgres", { "stat": "Minimum", "id": "libre", "visible": false } ]
                 ],
                 "annotations": { "horizontal": [ { "value": 2, "label": "Alarma" } ] }
+              }
+            },
+            {
+              "type": "text", "x": 0, "y": 26, "width": 24, "height": 1,
+              "properties": {
+                "markdown": "### Negocio: una ejecución del pipeline cada noche (23:45) y uso del asistente. Detalle de cada ejecución (validez, estaciones que faltan, anomalías por contaminante) en Logs Insights sobre `/aws/lambda/jupiter-pipeline`"
+              }
+            },
+            {
+              "type": "metric", "x": 0, "y": 27, "width": 6, "height": 6,
+              "properties": {
+                "title": "Pipeline: horas cargadas por noche", "region": "${AWS::Region}", "view": "bar", "stat": "Sum", "period": 86400,
+                "metrics": [ [ "Jupiter/Pipeline", "HorasNuevas", { "label": "Filas horarias nuevas o corregidas" } ] ]
+              }
+            },
+            {
+              "type": "metric", "x": 6, "y": 27, "width": 6, "height": 6,
+              "properties": {
+                "title": "Pipeline: estaciones con datos (de 24)", "region": "${AWS::Region}", "view": "gauge", "stat": "Minimum", "period": 86400,
+                "metrics": [ [ "Jupiter/Pipeline", "EstacionesConDatos", { "label": "Última noche" } ] ],
+                "yAxis": { "left": { "min": 0, "max": 24 } },
+                "annotations": { "horizontal": [ { "value": 20, "label": "Faltan 5 o más", "color": "#d62728", "fill": "below" } ] }
+              }
+            },
+            {
+              "type": "metric", "x": 12, "y": 27, "width": 6, "height": 6,
+              "properties": {
+                "title": "Pipeline: bloques anómalos (%)", "region": "${AWS::Region}", "view": "timeSeries", "stat": "Average", "period": 86400,
+                "metrics": [ [ "Jupiter/Pipeline", "TasaAnomalias", { "label": "Tasa de anomalías" } ] ],
+                "yAxis": { "left": { "min": 0 } },
+                "annotations": { "horizontal": [ { "value": 1, "label": "Esperado por el modelo (contamination = 1 %)" } ] }
+              }
+            },
+            {
+              "type": "metric", "x": 18, "y": 27, "width": 6, "height": 6,
+              "properties": {
+                "title": "Asistente: preguntas respondidas hoy (UTC)", "region": "${AWS::Region}", "view": "singleValue", "stat": "SampleCount", "period": 86400,
+                "metrics": [ [ "Jupiter", "TiempoRespuestaChat", { "label": "Preguntas" } ] ]
               }
             }
           ]
