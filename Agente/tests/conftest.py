@@ -6,7 +6,7 @@
 """
 import json
 import sys
-from datetime import date
+from datetime import date, timedelta
 from pathlib import Path
 
 import httpx
@@ -145,6 +145,95 @@ def _validar(peticion: dict) -> dict:
     texto = "\n".join(a["texto"] + " " + "".join(f"[{r}]" for r in a["evidencias"]) for a in afirmaciones)
     return {"valida": True, "mensaje_reparacion": "", "texto": texto, "aviso_sanitario": True,
             "bibliografia": [{"titulo": "Efectos del NO2 en la salud"}]}
+
+
+# ---------------------------------------------------------------------- predicción (servicio fingido)
+
+HERRAMIENTA_PREDICCION = {
+    "type": "function",
+    "function": {
+        "name": "predecir_calidad_aire",
+        "description": "Predice la calidad del aire de Madrid a corto plazo.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "fecha_objetivo": {"type": "string"},
+                "estacion": {"type": "string"},
+                "contaminante": {"type": "string"},
+                "bloque": {"type": "string"},
+            },
+            "required": ["fecha_objetivo"],
+        },
+    },
+}
+
+_BLOQUES_PRED = ("madrugada", "manana", "tarde", "noche")
+_ESTACIONES_PRED = {4: "Plaza de España", 49: "Parque del Retiro"}
+_BASE_PRED = {"NO2": 20.0, "PM10": 15.0, "O3": 70.0}
+
+
+class PrediccionFingida:
+    """Transporte HTTP que imita prediccion.api (ml.api) y guarda las peticiones.
+
+    El ancla por defecto es el 2026-04-30 (víspera de `FECHA_REFERENCIA`), así que una fecha
+    objetivo de hoy = horizonte 1 y de mañana = 2. `caido`: ni /salud responde (la herramienta
+    no se ofrece). `prediccion_caida`: se ofrece, pero cada POST /prediccion agota el timeout.
+    """
+
+    def __init__(self, caido: bool = False, prediccion_caida: bool = False,
+                 ancla: date = date(2026, 4, 30)):
+        self.caido = caido
+        self.prediccion_caida = prediccion_caida
+        self.ancla = ancla
+        self.peticiones: list[dict] = []
+
+    def __call__(self, request: httpx.Request) -> httpx.Response:
+        if self.caido:
+            raise httpx.ConnectError("conexión rechazada", request=request)
+        if request.url.path == "/prediccion/herramienta":
+            return httpx.Response(200, json={"herramienta": HERRAMIENTA_PREDICCION})
+        if request.url.path == "/salud":
+            return httpx.Response(200, json={
+                "estado": "ok", "horizontes": [1, 2],
+                "ultima_fecha_completa": self.ancla.isoformat(),
+                "predecible_hasta": (self.ancla + timedelta(days=2)).isoformat()})
+        if request.url.path == "/prediccion":
+            peticion = json.loads(request.content)
+            self.peticiones.append(peticion)
+            if self.prediccion_caida:
+                raise httpx.ReadTimeout("sin respuesta", request=request)
+            return httpx.Response(200, json=self._predecir(peticion))
+        return httpx.Response(404)
+
+    def _predecir(self, p: dict) -> dict:
+        objetivo = date.fromisoformat(p["fecha_objetivo"])
+        horizonte = (objetivo - self.ancla).days
+        base = {"estado": "ok", "fecha_objetivo": p["fecha_objetivo"],
+                "ultima_fecha_completa": self.ancla.isoformat()}
+        if horizonte <= 0:
+            return {**base, "estado": "ya_medido", "detalle": "ya está medido"}
+        if horizonte > 2:
+            return {**base, "estado": "fuera_de_alcance",
+                    "predecible_hasta": (self.ancla + timedelta(days=2)).isoformat()}
+        filas = [{"estacion": cod, "nombre_estacion": nom, "contaminante": cont, "bloque": b,
+                  "prediccion": round(_BASE_PRED[cont] + horizonte, 1)}
+                 for cod, nom in _ESTACIONES_PRED.items() for cont in _BASE_PRED for b in _BLOQUES_PRED]
+        filas = [f for f in filas if self._coincide(f, p)]
+        if not filas:
+            return {**base, "estado": "sin_datos", "detalle": "sin datos"}
+        return {**base, "horizonte": horizonte, "unidades": "µg/m³", "filas": filas}
+
+    @staticmethod
+    def _coincide(fila: dict, p: dict) -> bool:
+        est = p.get("estacion")
+        if est is not None and str(est) != str(fila["estacion"]) \
+                and str(est).lower() not in fila["nombre_estacion"].lower():
+            return False
+        if p.get("contaminante") and p["contaminante"] != fila["contaminante"]:
+            return False
+        if p.get("bloque") and p["bloque"] != fila["bloque"]:
+            return False
+        return True
 
 
 # ---------------------------------------------------------------------- mediciones (SQLite)

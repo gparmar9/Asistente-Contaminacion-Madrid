@@ -10,7 +10,7 @@ from agente.business.intencion import decidir, interpretar
 from agente.entities.eventos import EventoTexto
 from agente.entities.intencion import Intencion
 from agente.llm.falso import LLMFalso, llamada, texto
-from agente.tools import rag as herramienta_rag, sql_libre
+from agente.tools import prediccion, rag as herramienta_rag, sql_libre
 from agente.tools.base import Herramienta, ResultadoHerramienta
 from agente.tools.rag import HerramientaRag
 from tests.conftest import SALIDA_NO2, TEXTO_NO2, RagFingido, herramienta_datos
@@ -137,12 +137,19 @@ async def test_clasificador_acepta_una_o_dos_intenciones(salida, intenciones):
 
 @pytest.mark.parametrize("intenciones, frase, herramientas, obligadas", [
     ({Intencion.DATOS, Intencion.DOCUMENTAL}, None, {herramienta_rag.NOMBRE, sql_libre.NOMBRE}, (True, True)),
-    ({Intencion.PREDICCION, Intencion.FUERA_DE_ALCANCE}, frases.FRASE_PREDICCION, None, (False, False)),
+    # PREDICCION combinada se difiere a nota (no hay ruta mixta aún): queda la frase de la otra intención.
+    ({Intencion.PREDICCION, Intencion.FUERA_DE_ALCANCE}, frases.FRASE_FUERA_DE_ALCANCE, None, (False, False)),
 ])
 async def test_decision_por_conjunto(intenciones, frase, herramientas, obligadas):
     d = decidir(frozenset(intenciones))
     assert d.frase == frase and (d.herramientas and set(d.herramientas)) == herramientas
     assert (d.busqueda_obligada, d.datos_obligados) == obligadas
+
+
+async def test_prediccion_sola_ofrece_la_herramienta():
+    """PREDICCION como única intención usa la herramienta (no una frase fija)."""
+    d = decidir(frozenset({Intencion.PREDICCION}))
+    assert d.frase is None and d.prediccion_obligada and set(d.herramientas) == {prediccion.NOMBRE}
 
 
 async def test_datos_y_prediccion_responde_los_datos_y_anade_la_nota(bd_mediciones):
