@@ -15,7 +15,15 @@ export type Bloque = components['schemas']['Bloque']
 export type PreguntaChat = components['schemas']['PreguntaChat']
 export type RespuestaChat = components['schemas']['RespuestaChat']
 export type FuenteChat = components['schemas']['FuenteChat']
+export type ValoracionChat = components['schemas']['ValoracionChat']
+export type ValorValoracion = ValoracionChat['valor']
 export type TipoFuente = FuenteChat['tipo']
+export type Kpis = components['schemas']['Kpis']
+export type Distribucion = components['schemas']['Distribucion']
+export type Conteo = components['schemas']['Conteo']
+export type PorRuta = components['schemas']['PorRuta']
+export type Votos = components['schemas']['Votos']
+export type Satisfaccion = components['schemas']['Satisfaccion']
 
 /** Query params de GET /estaciones/{codigo_corto}/series (contaminante obligatorio). */
 export type ParametrosSerie = NonNullable<

@@ -127,6 +127,8 @@ Hilo conductor de la memoria: cómo y por qué cambió el diseño.
 | 2026-10-23 | Trazas del agente en producción | Phoenix solo en local (perfil `observabilidad` del compose) → **Phoenix como quinto contenedor de la EC2**, sin puerto propio, servido por el nginx de la web en `/phoenix/` y **siempre con la contraseña de la web** (403 si no hay contraseña). El agente le envía las trazas por la red interna de Docker. Imagen pública fijada en el compose (`20.19.0`), SQLite en un volumen del disco de la EC2 | Las trazas de cada turno (fases, tiempos, tokens, errores) son la observabilidad del asistente y solo existían en el portátil de quien probaba. Descartados: Phoenix Cloud de Arize (manda a un tercero las preguntas de los usuarios), publicar su puerto 6006 (un segundo puerto sin autenticación), un balanceador con reglas por ruta (unos 16 $/mes `[estimación]`), guardar las trazas en la RDS (ata Phoenix a los horarios de la base y mete un esquema ajeno), copiar la imagen a ECR (un repositorio y un job más para una imagen que no se construye) y la autenticación propia de Phoenix (usuarios y API keys, pero exige un paso manual tras el primer arranque y un secreto más en SSM; no compensa con una sola persona operando) |
 | 2026-10-23 | Acceso a la web de la EC2 | 80 para la IP del equipo y para todo internet, y 443 abierto a todo internet → **solo el 80, abierto a todo internet con contraseña** | La contraseña ya protegía la web y `/phoenix/`, así que la regla de la IP del equipo sobraba. En el 443 no escucha nada: su regla solo servía para que el navegador que prueba HTTPS primero recibiera un rechazo inmediato. Se acepta que ese navegador tarde más en pasar a HTTP a cambio de no tener abierto un puerto sin uso |
 | 2026-10-23 | Alarmas | Dos alarmas, solo de la Lambda → **diez alarmas** que cubren también la web (5xx), Bedrock (errores y tokens al día), la EC2 (estado, créditos de CPU, memoria, disco) y la RDS (espacio), con 3 filtros de métricas sobre el log de nginx y un panel; todo en la plantilla de CloudFormation `jupiter-observabilidad` | Un fallo de la web, del modelo o de la máquina no avisaba a nadie, y un bucle del agente o la web abierta a internet podían disparar el gasto en Bedrock sin que nadie lo viera. Descartados: un script con `put-metric-alarm` por alarma, como el resto de `deploy/aws/` (con ocho alarmas se desvía de lo que hay en AWS sin que nadie lo note), crearlas en la consola (no se revisan en un PR) y métricas propias del agente (Phoenix ya lo mide) |
+| 2026-10-23 | Evaluación del asistente | Solo *offline* (baterías de preguntas con respuesta esperada y LLM juez) → **offline + valoración 👍/👎 de los usuarios** pedida en la web y anotada en Phoenix sobre el span del turno | Las baterías miden lo que el equipo pregunta, no lo que preguntan los usuarios ni si les sirve. Votar en Phoenix deja el voto junto a la traza (ruta, tema, coste) sin tabla nueva. Descartados: una tabla de votos en la RDS (apagada fuera de horario y separa el voto de su traza), un 👍/👎 en cada respuesta y una encuesta abierta (texto libre de usuarios que no se puede versionar) |
+| 2026-10-23 | KPIs de uso del asistente | Script local `kpis_phoenix.py` que leía Phoenix y escribía un informe markdown o HTML → **endpoint `GET /kpis` del agente**, reenviado por api-usuario, para verlos en la web desplegada; **script eliminado** | Ver los KPIs exigía ejecutar el script en un portátil con la contraseña de la web, y el tribunal no lo vería. El cálculo pasa al agente, dueño de la lógica del turno, y comparte con el informe de evaluación el árbol del turno y la tabla de precios. Descartados: mantener el script además del endpoint (dos sitios con la misma lógica), que api-usuario lea Phoenix (duplica el turno) y una página estática regenerada cada hora |
 
 **Decisiones abiertas que alimentarán esta tabla:** modelo del agente en Bedrock (Ministral 14B,
 gpt-oss-120b, Qwen3 Next 80B (2026-10-16) o Nemotron 3 Super 120B (2026-10-18); Claude Haiku 5.5 no está
@@ -1565,11 +1567,150 @@ sin permisos nuevos. Namespace `Jupiter/Pipeline`, sin dimensiones:
   SSM y S3 al importarse. 7 tests nuevos (forma del JSON, rama sin datos, tasa con cero bloques,
   cobertura de estaciones).
 
-Estado (2026-10-23): código, plantilla y tests listos; plantilla validada con `cfn-lint`.
-`[por confirmar: validate-template, despliegue de la imagen y de la pila, que Dimensions: [[]]
-publique las 4 métricas sin dimensión y las cifras de la primera ejecución real]`
+Estado (2026-10-23): desplegado en AWS (imagen de la Lambda y pila). Una invocación manual a las
+14:07 UTC publicó las 4 métricas en `Jupiter/Pipeline` **sin dimensiones** (`Dimensions: [[]]`
+funciona como se esperaba) y la alarma `jupiter-pipeline-sin-datos` pasó a `OK` con 2.568 horas.
+Cifras de esa ejecución: 23 estaciones con datos (falta la 55), 61,8 % de filas válidas, 107
+bloques anómalos de 321 (**33,3 %**). `[por confirmar: que los widgets del pipeline muestren el
+dato en el panel]`
+
+**Hallazgo: la tasa de anomalías depende de la hora de ejecución** (consultas de solo lectura a la
+RDS, 2026-10-23). En la ejecución manual de las 16:07, los 107 anómalos eran los 107 bloques
+`tarde` (13-19 h), con cobertura media 0,28: el bloque estaba a medias y el modelo, que usa la
+`COBERTURA` como *feature*, lo marca siempre. `madrugada` y `mañana`, completos, 0 anómalos. La
+ejecución de la noche reescribe esos bloques, así que ese caso se corrige solo.
+
+El caso que **no** se corrige es el de cada noche. A las 23:45 la hora 24 aún no está medida y el
+bloque `noche` (20-23 h) se guarda con 3 de 4 horas; la API solo da el día en curso, así que
+ninguna ejecución posterior lo completa:
+
+| Bloque | % anómalos, histórico 2025 (cobertura) | % anómalos, últimos 30 días en vivo (cobertura) |
+|---|---|---|
+| madrugada | 0,4 (0,99) | 0,6 (1,00) |
+| mañana | 4,2 (0,96) | 4,0 (0,97) |
+| tarde | 1,2 (0,98) | 1,8 (0,98) |
+| noche | 0,6 (0,99) | **6,8 (0,75)** |
+
+El bloque `noche` en vivo sale unas 11 veces más anómalo que en el histórico, y siempre con
+cobertura 0,75 (3.165 de 3.196 bloques). Con cobertura 0,5 o 0,25 (31 bloques, ejecuciones
+manuales a deshora) sube al 62 % y al 100 %. `mañana` en el 4 % es un rasgo del modelo, presente
+también en el histórico. Consecuencia: unas 200 anomalías de más al mes en la base `[estimación: 3.196 × (6,8 − 0,6) %]` y
+una `TasaAnomalias` nocturna estructuralmente por encima del 1 % esperado. Pendiente de decidir el
+arreglo antes de calibrar la alarma (fase 4).
 
 La retención de los logs se baja a 14 días; por defecto no caducan nunca.
+
+**KPIs de uso del asistente, desde Phoenix.** Los calcula el propio agente y los sirve en
+`GET /kpis?dias=1|7|30` (Phoenix retiene 30 días); api-usuario los reenvía en `GET /kpis` y la web
+los muestra en `/admin/uso` («Uso del asistente», enlace «Administración» en el pie). Camino: web → nginx →
+api-usuario → agente → API REST de Phoenix (`GET /v1/projects/{proyecto}/spans`, paginada) por la
+red interna. En la EC2 el agente no escribe JSONL, así que Phoenix es la única fuente. Coste 0 y
+ninguna métrica de CloudWatch (regla de reparto).
+
+- Capas: `datos/phoenix.py` (lector con `httpx` y adaptador del span de Phoenix al formato del
+  JSONL), `business/trazas.py` (árbol del turno, tokens, coste y tabla de precios; los comparte con
+  el informe de evaluación de §7.3, sin duplicar precios), `business/kpis.py` (cálculo puro y
+  servicio con caché de 60 s por periodo para no releer Phoenix en cada recarga) y
+  `entities/kpis.py` (contrato; api-usuario tiene una copia con el mismo esquema JSON, comprobado).
+- KPIs: preguntas por día; mezcla de intenciones, rutas y temas; resultado del turno (respondida,
+  frase fija, sin evidencia, servicio no disponible, bloqueada, error) y **tasa de resolución** =
+  respondida + frase fija (la frase fija es la respuesta correcta a una intención fuera de
+  alcance); bloqueos por regla; síntesis válida a la primera y respuestas forzadas por el código;
+  **coste por pregunta** (P50, P90, por pregunta resuelta y la lista de costes para el histograma);
+  latencia y **tiempo hasta el primer token** por ruta; fallos de herramienta por causa
+  (`agente.estado`) y preguntas de datos perdidas con la RDS apagada (§8.8).
+- Por sesión (`session.id` en los spans, ver valoración abajo): turnos y duración de sesión y tasa
+  de reformulación tras un rechazo (si el turno siguiente sí se resuelve, el rechazo pudo ser un
+  falso negativo). `null` con los spans anteriores a ese cambio.
+- **Satisfacción** (👍/👎, ver valoración abajo): votos positivos en total, por ruta y por tema, y
+  participación (sesiones con 2 o más respuestas completas que votaron). Los votos se leen de
+  `GET /v1/projects/{proyecto}/span_annotations` (verificado en el OpenAPI de Phoenix 20.19.0),
+  en lotes de 100 ids de span porque van en la URL.
+- **Primer token**: el agente añade el evento `primer_token` al span `turno` cuando el primer texto
+  sale hacia el cliente. Solo existe en el stream y en las rutas que entregan tokens (libre, datos,
+  síntesis forzada); documental, mixta y frases fijas llegan enteras al final, y para ellas la
+  latencia percibida es la del turno.
+- El JSON solo lleva recuentos con su *n* y percentiles (rango más cercano); los porcentajes y las
+  figuras los hace la web. Sin texto de usuarios (ni preguntas, ni respuestas, ni mensajes de
+  error, que pueden llevar literales de la pregunta); un test lo comprueba.
+- **Página `/admin/uso`**: selector de 24 h, 7 o 30 días; seis indicadores (preguntas, tasa de
+  resolución, coste P50, latencia P50, primer token P50 y satisfacción), cada uno con su *n*;
+  embudo intención → ruta → resultado en barras horizontales; histograma del coste por turno con
+  marcas de P50 y P90; satisfacción por ruta (barras 0-100 % con el *n* de cada una); tablas de
+  rutas (latencias), temas, fallos de herramienta, sesiones y satisfacción por tema con la
+  participación. Sin votos, «Sin valoraciones en el periodo» en lugar de 0 %. Las barras y el
+  histograma son HTML y CSS, sin Recharts; la página se carga aparte del bundle principal
+  (11 kB). Lógica pura (porcentajes, cubos del histograma, formato) con 13 tests Vitest.
+- **Rótulo «Solo administradores» sin protección.** La página lo lleva y explica que en producción
+  pediría iniciar sesión con un perfil de administrador; el acceso es el del resto de la web (la
+  contraseña de nginx). La gestión de usuarios está fuera del alcance del TFM, y una clave falsa
+  daría una sensación de seguridad que no existe; el rótulo deja claro el diseño previsto sin
+  simularlo. Exponerla no filtra nada: solo agregados, sin texto de usuarios (§11).
+- Phoenix caído, sin configurar o con un formato inesperado → 503 con mensaje; api-usuario
+  devuelve 503 si el agente no responde y 502 si la respuesta no cumple el contrato.
+- Descartados: `arize-phoenix-client` (una dependencia más para una llamada HTTP paginada; `httpx`
+  ya estaba y permite probar sin red con `MockTransport`), las vistas guardadas en la interfaz de
+  Phoenix (no reproducibles), que api-usuario lea Phoenix directamente (duplicaría la lógica del
+  turno, que es del agente) y una página estática regenerada cada hora (aparte de la web y con
+  datos de hasta una hora). La variable `PHOENIX_URL` del diseño no hizo falta: la raíz de la API
+  se deduce de `PHOENIX_ENDPOINT`, como para la valoración.
+- Esquema de la API comprobado en el código del servidor 20.19.0: devuelve los atributos del span
+  aplanados (`agente.ruta`) y el tipo aparte (`span_kind`); el adaptador los lleva al formato del
+  JSONL. El lector se probó contra el Phoenix local (misma versión) cuando era un script.
+
+Estado (2026-10-23): endpoint en el agente y en api-usuario y página web, con tests. `[por
+confirmar: despliegue y cifras reales con su n]`
+
+**Valoración 👍/👎 de los usuarios, anotada en Phoenix.** Es la única medida de satisfacción real:
+la evaluación del asistente (§7.3) era hasta ahora solo *offline*, con baterías de preguntas.
+
+- El voto se guarda como **anotación de Phoenix sobre el span `turno`** (`valoracion_usuario`,
+  anotador `HUMAN`, etiqueta `positiva`/`negativa`, *score* 1/0), no en una tabla propia: queda
+  junto a la traza del turno que se valora (ruta, tema, coste, tiempos) y el informe de KPIs la lee
+  por la misma API. Coste 0.
+- Phoenix anota por **id de span**, no de traza: el agente devuelve el `span_id` del span `turno`
+  en el evento `done` (y en `/responder`) y la web lo reenvía al votar. Sin estado nuevo en el
+  agente ni búsqueda en Phoenix. Descartado: guardar en el agente qué span corresponde a cada
+  turno (estado en memoria, se pierde al reiniciar) y buscarlo en Phoenix por `traza_id` (una
+  consulta más por voto).
+- Camino: web → `POST /api/chat/valoracion` (api-usuario, valida y reenvía) → `POST /valoracion`
+  (agente) → `POST /v1/span_annotations` de Phoenix. El `identifier` de la anotación es el
+  `session_id`: si la misma sesión vuelve a votar el turno, el voto se sustituye, no se duplica.
+- Se envía en modo asíncrono: Phoenix encola la anotación y la reintenta si el span aún no ha
+  llegado, porque el agente exporta las trazas por lotes y el usuario puede votar antes (comprobado
+  en el código del servidor 20.19.0). Si Phoenix no responde, 503 y el voto se pierde: no se
+  reintenta, la valoración no es crítica.
+- **`session.id`** en todos los spans del turno (`using_session` de OpenInference): Phoenix agrupa
+  los turnos de una conversación en su vista de sesiones y el informe calcula las métricas por
+  sesión.
+- **Cuándo se pide (web):** tras la 2.ª respuesta completa de la conversación, encima del campo de
+  pregunta: «¿Qué tal lo está haciendo el asistente hoy?» con 👍, 👎 y «Ahora no». Una vez al día
+  por navegador (`localStorage`; sin él, una vez por carga), nunca con una pregunta en vuelo y solo
+  con respuestas del agente (las del orquestador no traen `span_id`). Votar o descartar cuentan
+  como respuesta del día. Se valora el último turno. El voto se envía sin esperar: «Gracias» dos
+  segundos y desaparece. Descartados: un 👍/👎 en cada respuesta (más votos, pero ruido visual y
+  votos sobre respuestas sueltas, no sobre la experiencia) y pedirlo tras la 1.ª respuesta (aún no
+  hay conversación que valorar).
+- Revisión local (Codex, 2026-10-23): pendientes de corregir el estado diario del aviso
+  (no se refresca al cambiar de día ni al votar en otra pestaña) y el denominador de
+  participación (cuenta turnos fallidos, aunque la web exige dos respuestas completas).
+  Reproducción sintética: una sesión elegible con voto y otra con una respuesta y un error
+  producen un 50 %; con la regla de la web corresponde un 100 %.
+- La API valida el formato de los identificadores, pero no la pertenencia del span a la
+  sesión y traza recibidas. Un cliente con un span conocido puede enviar una valoración
+  con otra sesión; queda pendiente vincular el voto al turno emitido por el servidor.
+- Limitación (sesgo de respuesta): votan pocos usuarios y no al azar, y el voto juzga la
+  conversación aunque se anote en un turno. La satisfacción se presenta con su *n* y con la tasa de
+  respuesta: en el informe, sesiones con voto entre las que tienen 2 o más respuestas completas (el
+  mismo criterio que la web: los turnos con error o cancelados no cuentan); frente al uso real, votos /
+  `SampleCount` de `TiempoRespuestaChat` en CloudWatch.
+- Tests: 11 del lado servidor (7 del agente con un Phoenix fingido por `MockTransport` y 4 de
+  api-usuario) y una comprobación más en cada contrato, 7 de la regla del aviso (Vitest) y 3 del
+  informe (descarga por lotes, último voto, satisfacción por ruta y tema). Cuerpo de la anotación
+  aceptado por el Phoenix local (20.19.0).
+
+Estado (2026-10-23): agente, api-usuario, web e informe listos; contrato regenerado.
+`[por confirmar: despliegue y prueba con una anotación real en la EC2]`
 
 El asistente se observa con **Phoenix**, no con CloudWatch: cada turno deja una traza OpenTelemetry
 con sus fases, tiempos, tokens y errores. En la EC2 se consulta en `/phoenix/` (§8.9).
@@ -1742,6 +1883,10 @@ la enciende a mano para trabajar o hacer una demo.
 
 - **Flujo de ramas:** `feature/*` → PR a `development` → PR a `main`. Un workflow bloquea cualquier
   PR a `main` que no venga de `development`. Más de 30 pull requests hasta julio de 2026.
+  GitHub guarda el resultado de cada check por **commit**, no por PR: si se abre por error un PR a
+  `main` y se rehace contra `development` con el mismo commit, el nuevo PR sigue mostrando el fallo
+  de la protección. No bloquea el merge (`development` no exige checks) y desaparece con el
+  siguiente commit (PR #93 → #95, 2026-10-23).
 - **Tests:** 16 en `main` (limpieza, features, inferencia, estaciones, ingesta, pipeline e
   integración). Con el RAG reescrito la suite unitaria llega a **96 pruebas** (verificado el
   2026-09-27 en local con todas las dependencias del RAG: 95 pasan por defecto y 1 se salta —
@@ -1760,8 +1905,8 @@ la enciende a mano para trabajar o hacer una demo.
   y `frontend`.
 - **Contrato frontend-backend comprobado en CI.** El job `frontend` exporta el OpenAPI real de
   `ApiUsuario` (`Web/scripts/exportar_openapi.py`), regenera los tipos TypeScript y falla con
-  `git diff --exit-code` si el contrato versionado no coincide; después lint y `npm run build`
-  (`tsc -b` + Vite). Un build roto o una deriva de esquema tumban el PR. Las versiones de FastAPI y
+  `git diff --exit-code` si el contrato versionado no coincide; después lint, `npm test` y
+  `npm run build` (`tsc -b` + Vite). Un build roto o una deriva de esquema tumban el PR. Las versiones de FastAPI y
   pydantic del job están fijadas a las que generaron el fichero, porque el esquema que emiten puede
   cambiar entre versiones.
 - **Observabilidad del agente:** spans OpenTelemetry por turno, visibles en Phoenix y guardados en
@@ -1845,6 +1990,10 @@ la enciende a mano para trabajar o hacer una demo.
   índice si el cálculo falla.
 - **Un identificador derivado de la posición es frágil.** Pasar a `chunk_id` estables
   (`archivo:slug-sección:ordinal`) permite reordenar el corpus sin invalidar las citas emitidas.
+- **La documentación iba por delante del CI.** README, memoria y comentarios describían un job
+  `frontend` que comprobaba el contrato, pero nunca llegó a `tests.yml`: durante tres semanas un
+  cambio de la API podía desincronizar los tipos de la web sin que ningún PR fallase. Al describir
+  un control automático, comprobar que el workflow lo ejecuta (2026-10-23).
 - **Dependencias sin fijar en CI rompen sin tocar código.** El job de integración instalaba
   `sqlalchemy` sin versión; una versión nueva pasó a elegir el driver `psycopg` (v3) para las URL
   `postgresql://` y el job falló con `No module named 'psycopg'` en un PR que no tocaba la base de
@@ -1988,6 +2137,8 @@ la enciende a mano para trabajar o hacer una demo.
 - **Panel y trazas no están enlazados**: la IP de la EC2 cambia en cada encendido, así que el
   panel de CloudWatch no puede llevar un enlace fijo a `/phoenix/`. Lo resolvería una IP elástica
   o un dominio.
+- **La página de KPIs no tiene control de acceso propio** (§8.7): lleva el rótulo «Solo
+  administradores», pero la ve cualquiera con la contraseña de la web. No hay gestión de usuarios.
 
 **Trabajo futuro**
 - **¿Hace falta un modelo de razonamiento para el agente?** En la ruta documental no: el modelo sin
@@ -2014,6 +2165,9 @@ la enciende a mano para trabajar o hacer una demo.
   un criterio de abstención adicional.
 - **Ampliar el juego de casos** y separar casos de calibración y de medida, para que el umbral no
   se ajuste y se mida con las mismas preguntas.
+- **Gestión de usuarios con rol de administrador**: Cognito u OIDC delante de nginx, con un grupo
+  «administradores» que dé acceso a `/admin/` y `/api/kpis`, y HTTPS, sin el que cualquier
+  credencial viaja en claro.
 - **Decidir dónde se despliega el servicio RAG.** El modelo de embeddings (~1,1 GB) y su carga en
   la primera petición no encajan bien en Lambda; habrá que valorar otra opción de cómputo.
 
@@ -2243,7 +2397,15 @@ la enciende a mano para trabajar o hacer una demo.
 | 2026-10-23 | **Logs y métricas de la EC2 en CloudWatch** (Carlos con Claude Code, rama `feature/cloudwatch-logs`): `web`, `api-usuario` y `rag` envían su log a `/jupiter/ec2` con el driver `awslogs` (modo `non-blocking`); `agente` y `phoenix` siguen en la máquina. El agente de CloudWatch publica memoria y disco (2 métricas en `CWAgent`, dimensión `InstanceId`); `arrancar.sh` lo instala si falta y, si falla, avisa y sigue. El grupo de logs lo crea una pila de CloudFormation (`jupiter-observabilidad`) que recogerá también alarmas y panel. Rol de la EC2: escribir solo en ese grupo y métricas solo en `CWAgent`. Probado sin AWS: `docker compose config` (driver por servicio), plantilla validada con `validate-template` y `arrancar.sh` con `aws`, `docker`, `rpm`, `dnf` y el agente simulados en seis casos (primera instalación, ya instalado, un solo servicio, y fallos de `dnf`, de S3 y de la configuración: en los tres avisa y la aplicación arranca). Aplicado el mismo día: pila y permisos del rol, «Desplegar → `phoenix`» (instaló el agente de CloudWatch) y `arrancar.sh rag api-usuario web` por SSM para recrear solo esos tres contenedores, sin apagar la EC2. Verificado: tres *streams*, exactamente 2 métricas en `CWAgent` (memoria ~30 %, disco 23,4 %) y una pregunta al chat en Logs Insights (`POST /api/chat/stream`, 200, 5,6 s). Incidencia: la pila se creó primero en otra cuenta porque la terminal usaba el perfil por defecto; se borró y la guía de despliegue comprueba ahora la cuenta antes de aplicar. `docker compose logs` en la máquina funciona para los cinco servicios. `[por confirmar: arranque completo tras apagar y encender]` |
 | 2026-10-23 | **Alarmas y panel de CloudWatch** (Carlos con Claude Code, rama `feature/cloudwatch-logs`): la pila `jupiter-observabilidad` suma al grupo de logs 3 filtros de métricas sobre el log de nginx, 8 alarmas (web 5xx, errores y tokens de Bedrock, estado, créditos, memoria y disco de la EC2, espacio de la RDS) y el panel `jupiter`. Parámetros: `InstanceId` de la EC2 y `UmbralTokensDia` (provisional 2 M; la cifra la fija quien lleva el coste). Los umbrales se fijaron con consultas de solo lectura a la cuenta, que dieron tres hallazgos: EC2 en modo `unlimited` (los créditos son coste, no lentitud), RDS con autoescalado de disco y métricas de Bedrock solo por modelo o para toda la cuenta. La alarma de errores de Bedrock suma dos métricas: 11 métricas en alarmas, una por encima de la capa gratuita `[estimación: 0,10 $/mes]`. Guía de despliegue con la tabla de alarmas, la prueba de una alarma y el cierre del 443. Validado con `validate-template`, `cfn-lint` y el JSON del panel. Aplicado el mismo día: nueve alarmas en `OK` con datos reales al minuto, prueba de `jupiter-web-5xx` con `set-alarm-state` publicada en SNS y filtros comprobados con `test-metric-filter` sobre una línea real del chat. Grupo de seguridad: cerrados el 443 y la regla de la IP del equipo; queda solo el 80 abierto a todo internet con contraseña. `[por confirmar: 503 reales con el agente parado]` |
 | 2026-10-23 | **Batería de uso contra la EC2** (Carlos con Claude Code): para poblar Phoenix y el panel `jupiter` con uso representativo, 95 peticiones con contraseña en 234 s y 2 en paralelo: 61 turnos de chat sacados de los casos de evaluación del agente (turno, datos, comprobaciones, 5 conversaciones de varios turnos y una muestra del clasificador; 3 de cada 4 por `/api/chat/stream`), 31 consultas de estaciones y series y 3 errores de cliente. Resultado: 61/61 turnos con 200, ningún 5xx, 3 respuestas 422 esperadas; tiempo por turno p50 4,7 s, p90 9,1 s y máximo 22,2 s medido en el cliente. En CloudWatch: 218 invocaciones y unos 245 000 tokens de entrada en Bedrock (un 12 % del umbral diario provisional), `TiempoRespuestaChat` con media de 5,5 s y las diez alarmas en `OK`. En Phoenix, 66 trazas y 597 spans en el proyecto `agente`, mediana de 4,9 s |
-| 2026-10-23 | **Métricas de negocio del pipeline** (Carlos con Claude Code, rama `feature/metricas-pipeline`): la Lambda publica en formato EMF `HorasNuevas`, `EstacionesConDatos`, `BloquesAnomalos` y `TasaAnomalias` (namespace `Jupiter/Pipeline`), también con ceros cuando la API no devuelve registros, más tres campos de detalle que no son métricas (`pct_validas`, `estaciones_sin_datos`, `anomalias_por_magnitud`). Alarma nueva `jupiter-pipeline-sin-datos` (cierra el fallo silencioso del `{"ok": False}`) y fila «Negocio» en el panel, con las preguntas del día como `SampleCount` de `TiempoRespuestaChat`. 9 de 10 métricas gratuitas. Tests unitarios: 125 en verde. `[por confirmar: despliegue en AWS]` |
+| 2026-10-23 | **Métricas de negocio del pipeline** (Carlos con Claude Code, rama `feature/metricas-pipeline`): la Lambda publica en formato EMF `HorasNuevas`, `EstacionesConDatos`, `BloquesAnomalos` y `TasaAnomalias` (namespace `Jupiter/Pipeline`), también con ceros cuando la API no devuelve registros, más tres campos de detalle que no son métricas (`pct_validas`, `estaciones_sin_datos`, `anomalias_por_magnitud`). Alarma nueva `jupiter-pipeline-sin-datos` (cierra el fallo silencioso del `{"ok": False}`) y fila «Negocio» en el panel, con las preguntas del día como `SampleCount` de `TiempoRespuestaChat`. 9 de 10 métricas gratuitas. Tests unitarios: 125 en verde. Desplegado el mismo día: métricas sin dimensiones y alarma en `OK`; la primera ejecución (manual, a media tarde) dio un 33,3 % de bloques anómalos, uno por serie, que apunta al bloque en curso incompleto (§8.7) |
+| 2026-10-23 | **KPIs de uso del asistente desde Phoenix** (Carlos con Claude Code, rama `feature/kpis-phoenix`): script `kpis_phoenix.py` que lee los spans de la API REST de Phoenix y calcula preguntas por día, mezcla de rutas y temas, tasa de resolución, bloqueos, coste por pregunta (P50/P90 y por pregunta resuelta), latencia por ruta, tiempo hasta el primer token y fallos de herramienta por causa, con dos figuras SVG (embudo y coste) y sin texto de usuarios. Sesiones, reformulación y satisfacción, preparados para cuando llegue `session.id`. El agente emite el evento `primer_token` en el span `turno`. Probado contra el Phoenix local; 9 tests nuevos, 152 del agente en verde. `[por confirmar: informe de la EC2]` |
+| 2026-10-23 | **Valoración 👍/👎 de los usuarios, parte de servidor** (Carlos con Claude Code, rama `feature/valoracion-usuario`): el agente devuelve el `span_id` del turno en `done` y en `/responder`, marca todos los spans con `session.id` y expone `POST /valoracion`, que anota el voto en Phoenix sobre el span `turno` (`valoracion_usuario`, `HUMAN`, 1/0). api-usuario lo reenvía desde `POST /chat/valoracion`. 11 tests nuevos; 159 del agente y 26 de api-usuario en verde. `[por confirmar: aviso en la web y despliegue]` |
+| 2026-10-23 | **Valoración 👍/👎 de los usuarios, web e informe** (Carlos con Claude Code, rama `feature/valoracion-usuario`): aviso «¿Qué tal lo está haciendo el asistente hoy?» en el panel y en `/asistente` tras la 2.ª respuesta, una vez al día por navegador; `traza_id` y `span_id` leídos del `done`; contrato OpenAPI regenerado. El informe de KPIs añade satisfacción total, por ruta y por tema con su *n* y la figura de satisfacción por ruta. Tests: 43 de la web, 162 del agente y 26 de api-usuario en verde. `[por confirmar: despliegue y anotación real en la EC2]` |
+| 2026-10-23 | **Revisión local de valoraciones** (Codex): simplificados los comentarios; reproducidos el estado diario obsoleto del aviso y el sesgo del denominador de participación. Detectada por lectura la falta de validación de pertenencia del span. Hallazgos pendientes de corrección (§8). Web: 43 pruebas, lint y compilación correctos. Agente y API: 188 pruebas correctas y 10 omitidas; ejecución fuera del sandbox por bloqueo de TestClient dentro de él. |
+| 2026-10-23 | **PR de la valoración a `development`** (Carlos con Claude Code): PR #95. El primer intento, #93, se abrió contra `main` y la protección falló como debía; al rehacerlo con el mismo commit, el fallo seguía visible en el #95 porque los checks van por commit (§9). Tests de la PR en verde |
+| 2026-10-23 | **KPIs de uso servidos por el agente** (Carlos con Claude Code, rama `feature/kpis-agente`): `GET /kpis` en el agente (últimos 1, 7 o 30 días; lector de Phoenix, cálculo en la capa de negocio, caché de 60 s, 503 sin Phoenix) y `GET /kpis` en api-usuario (404 sin agente, 503 caído, 502 fuera de contrato). Turnos, coste y precios pasan a `agente/business/trazas.py`, compartidos con `informe_trazas.py` sin cambios de cifras. Se elimina el script `kpis_phoenix.py` y sus tests; sus casos pasan al agente. Tests: 171 del agente (10 omitidos) y 34 de api-usuario en verde. `[por confirmar: página web y despliegue]` |
+| 2026-10-23 | **Página «Uso del asistente» en la web** (Carlos con Claude Code, rama `feature/kpis-agente`): `/admin/uso` con rótulo «Solo administradores» sin protección, enlace en el pie, seis indicadores con su *n*, embudo, histograma del coste con P50/P90, satisfacción por ruta y tablas; contrato OpenAPI regenerado. Sin cambios en `compose.yml`: la raíz de Phoenix sale de `PHOENIX_ENDPOINT`. Web: 56 tests Vitest, typecheck, lint y build en verde. `[por confirmar: despliegue y prueba en la EC2]` |
+| 2026-10-23 | **Job `frontend` en CI** (Carlos con Claude Code, rama `feature/kpis-agente`): README, memoria y comentarios daban por hecha la comprobación del contrato web-API, pero el job nunca se había añadido a `tests.yml`. Nuevo sexto job: regenera `openapi.json` desde `ApiUsuario` (FastAPI 0.161.1 y pydantic 2.14.1 fijados) y `schema.d.ts`, falla con `git diff --exit-code` si difieren y pasa lint, tests y build de la web. Comprobado en local: el contrato regenerado coincide byte a byte con el versionado; lint, 56 tests y build en verde. Primera ejecución en GitHub `[por confirmar]` |
 
 ---
 

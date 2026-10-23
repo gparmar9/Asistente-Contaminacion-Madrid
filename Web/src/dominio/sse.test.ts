@@ -62,18 +62,23 @@ describe('interpretarEventoChat', () => {
     const datos = JSON.stringify({
       session_id: 'abc',
       traza_id: 't1',
+      span_id: 's1',
       fuentes: [{ tipo: 'sql', referencia: 'mediciones' }, { tipo: 'otro', referencia: 'x' }, 'basura'],
       advertencia: null,
     })
     expect(interpretarEventoChat({ evento: 'done', datos })).toEqual({
       tipo: 'done',
       sessionId: 'abc',
+      trazaId: 't1',
+      spanId: 's1',
       fuentes: [{ tipo: 'sql', referencia: 'mediciones' }],
       advertencia: null,
     })
     expect(interpretarEventoChat({ evento: 'done', datos: '{}' })).toEqual({
       tipo: 'done',
       sessionId: null,
+      trazaId: null,
+      spanId: null,
       fuentes: [],
       advertencia: null,
     })

@@ -119,3 +119,26 @@ export function mensajeErrorDatos(error: unknown): MensajeError {
       }
   }
 }
+
+/** Mensajes de la página de KPIs: 503 = Phoenix o el agente no responden; 404 = API sin agente. */
+export function mensajeErrorKpis(error: unknown): MensajeError {
+  const e = ErrorApi.desdeExcepcion(error)
+  switch (e.status) {
+    case 503:
+      return {
+        titulo: 'KPIs no disponibles',
+        detalle: 'No se pueden leer las trazas del asistente ahora mismo (Phoenix o el agente no responden). Prueba en unos minutos.',
+      }
+    case 404:
+      return { titulo: 'KPIs no disponibles', detalle: 'La API no tiene el agente configurado, así que no hay trazas que resumir.' }
+    case 502:
+      return { titulo: 'Respuesta inválida del agente', detalle: 'El agente devolvió unos KPIs que no cumplen el contrato.' }
+    case 0:
+      return {
+        titulo: 'Sin conexión con la API',
+        detalle: 'No se pudo contactar con el servidor. Comprueba la conexión o que la API esté levantada.',
+      }
+    default:
+      return { titulo: `Error ${e.status}`, detalle: e.detalle ?? 'La API devolvió un error inesperado al pedir los KPIs.' }
+  }
+}

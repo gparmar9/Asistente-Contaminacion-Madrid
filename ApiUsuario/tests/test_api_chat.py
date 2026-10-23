@@ -143,7 +143,7 @@ def test_chat_con_agente_reenvia_session_id_y_devuelve_traza_id(cliente, con_set
         capturado["json"] = json.loads(peticion.content)
         return httpx.Response(200, json={
             "respuesta": "Hola", "fuentes": [], "advertencia": None,
-            "traza_id": "abc123", "session_id": "sesion-1",
+            "traza_id": "abc123", "span_id": "def456", "session_id": "sesion-1",
         })
 
     _con_agente(monkeypatch, agente)
@@ -155,6 +155,7 @@ def test_chat_con_agente_reenvia_session_id_y_devuelve_traza_id(cliente, con_set
     assert capturado["json"] == {"pregunta": "Hola", "session_id": "sesion-1"}
     assert r.json()["session_id"] == "sesion-1"
     assert r.json()["traza_id"] == "abc123"
+    assert r.json()["span_id"] == "def456"
 
 
 def test_chat_stream_reenvia_el_sse_tal_cual_y_cierra(cliente, con_settings, monkeypatch):
@@ -211,5 +212,40 @@ def test_chat_stream_sin_agente_emite_passthrough_y_done(cliente, con_settings):
     passthrough = json.loads(eventos[0][1].removeprefix("data: "))
     done = json.loads(eventos[1][1].removeprefix("data: "))
     assert passthrough["texto"] == modulo_chat.RESPUESTA_STUB
-    assert done == {"session_id": "s1", "traza_id": None, "fuentes": passthrough["fuentes"],
+    assert done == {"session_id": "s1", "traza_id": None, "span_id": None, "fuentes": passthrough["fuentes"],
                     "advertencia": passthrough["advertencia"]}
+
+
+VOTO = {"session_id": "s1", "traza_id": "0" * 31 + "a", "span_id": "0" * 15 + "b", "valor": "positiva"}
+
+
+def test_valoracion_se_reenvia_al_agente(cliente, con_settings, monkeypatch):
+    capturado = {}
+
+    def agente(peticion):
+        capturado["url"] = str(peticion.url)
+        capturado["json"] = json.loads(peticion.content)
+        return httpx.Response(204)
+
+    _con_agente(monkeypatch, agente)
+    con_settings(agente_url="http://agente:8200")
+    r = cliente.post("/chat/valoracion", json=VOTO)
+
+    assert r.status_code == 204
+    assert capturado == {"url": "http://agente:8200/valoracion", "json": VOTO}
+
+
+def test_valoracion_sin_agente_devuelve_404(cliente, con_settings):
+    con_settings(orchestrator_url="")
+    assert cliente.post("/chat/valoracion", json=VOTO).status_code == 404
+
+
+def test_valoracion_que_el_agente_no_guarda_devuelve_503(cliente, con_settings, monkeypatch):
+    _con_agente(monkeypatch, lambda peticion: httpx.Response(503, json={"detail": "sin Phoenix"}))
+    con_settings(agente_url="http://agente:8200")
+    assert cliente.post("/chat/valoracion", json=VOTO).status_code == 503
+
+
+def test_valoracion_con_valor_desconocido_devuelve_422(cliente, con_settings):
+    con_settings(agente_url="http://agente:8200")
+    assert cliente.post("/chat/valoracion", json={**VOTO, "valor": "regular"}).status_code == 422

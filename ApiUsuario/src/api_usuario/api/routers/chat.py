@@ -5,17 +5,18 @@
   que respeta el mismo contrato. `/chat/stream` lo entrega como un único evento
   `passthrough` + `done`. El `session_id` se devuelve para mantener el contrato, pero
   el orquestador no conserva el contexto de la conversación.
+- `/chat/valoracion` (👍/👎) solo existe con el agente: lo anota en Phoenix. Sin agente, 404.
 """
 import json
 from uuid import uuid4
 
 import httpx
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Response
 from fastapi.responses import StreamingResponse
 from pydantic import ValidationError
 
 from api_usuario.config.settings import Settings, get_settings
-from api_usuario.entities.chat import PreguntaChat, RespuestaChat
+from api_usuario.entities.chat import PreguntaChat, RespuestaChat, ValoracionChat
 
 router = APIRouter(tags=["chat"])
 
@@ -25,6 +26,7 @@ RESPUESTA_STUB = (
     "provisional del esqueleto de la API."
 )
 NO_DISPONIBLE = "El asistente no está disponible en este momento"
+VALORACION_NO_DISPONIBLE = "La valoración no está disponible en este momento"
 CABECERAS_SSE = {"Cache-Control": "no-cache", "X-Accel-Buffering": "no"}
 
 
@@ -68,9 +70,32 @@ async def post_chat_stream(
         metadatos = {"fuentes": [f.model_dump() for f in respuesta.fuentes],
                      "advertencia": respuesta.advertencia}
         yield _sse("passthrough", {"texto": respuesta.respuesta, **metadatos, "traza_id": None})
-        yield _sse("done", {"session_id": respuesta.session_id, "traza_id": None, **metadatos})
+        yield _sse("done", {"session_id": respuesta.session_id, "traza_id": None, "span_id": None,
+                            **metadatos})
 
     return StreamingResponse(fallback(), media_type="text/event-stream", headers=CABECERAS_SSE)
+
+
+@router.post(
+    "/chat/valoracion",
+    status_code=204,
+    response_class=Response,
+    summary="Valoración 👍/👎 del usuario sobre una respuesta del asistente",
+)
+async def post_valoracion(
+    entrada: ValoracionChat, settings: Settings = Depends(get_settings)
+) -> Response:
+    """Se reenvía al agente. 503 si no la guarda: la web no reintenta, la valoración no es crítica."""
+    if not settings.agente_url:
+        raise HTTPException(status_code=404, detail="Sin agente no hay valoración")
+    url = settings.agente_url.rstrip("/") + "/valoracion"
+    try:
+        async with httpx.AsyncClient(timeout=settings.agente_timeout_s) as cliente:
+            respuesta = await cliente.post(url, json=entrada.model_dump())
+        respuesta.raise_for_status()
+    except httpx.HTTPError as exc:
+        raise HTTPException(status_code=503, detail=VALORACION_NO_DISPONIBLE) from exc
+    return Response(status_code=204)
 
 
 async def _preguntar(entrada: PreguntaChat, settings: Settings) -> RespuestaChat:
@@ -88,7 +113,7 @@ async def _preguntar(entrada: PreguntaChat, settings: Settings) -> RespuestaChat
     # El orquestador no tiene sesiones: solo recibe la pregunta.
     url = settings.orchestrator_url.rstrip("/") + "/responder"
     respuesta = await _post_json(url, {"pregunta": entrada.pregunta}, settings.orchestrator_timeout_s)
-    return respuesta.model_copy(update={"session_id": session_id, "traza_id": None})
+    return respuesta.model_copy(update={"session_id": session_id, "traza_id": None, "span_id": None})
 
 
 async def _post_json(url: str, cuerpo: dict, timeout_s: float) -> RespuestaChat:

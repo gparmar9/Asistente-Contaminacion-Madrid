@@ -78,6 +78,30 @@ def test_charla_llega_en_tokens_y_termina_sin_passthrough():
     assert (eventos[-1][1]["fuentes"], eventos[-1][1]["advertencia"]) == ([], None)
 
 
+async def test_el_primer_token_deja_un_evento_en_el_span_turno(spans):
+    llm = LLMFalso(guion=[texto("Hola, te ayudo con la calidad del aire.")], trozos=3)
+    eventos = await _todos(_eventos(Bucle(llm, [], llm_clasificador=LLMFalso(guion=[CHARLA]))))
+
+    assert [t for t, _ in eventos].count("token") == 3
+    terminados = spans.get_finished_spans()
+    turno = next(s for s in terminados if s.name == "turno")
+    bucle = next(s for s in terminados if s.name == "bucle")
+    marcas = [e for e in turno.events if e.name == "primer_token"]
+    assert len(marcas) == 1  # uno por turno, no uno por token
+    assert bucle.start_time < marcas[0].timestamp < turno.end_time  # tras clasificar, dentro del turno
+
+
+async def test_sin_tokens_no_hay_evento_primer_token(spans):
+    llm = LLMFalso(guion=[llamada("buscar_evidencias", {"pregunta": PREGUNTA}), texto("Texto libre."),
+                          texto(json.dumps(SALIDA_NO2))])
+    rag = HerramientaRag("http://rag:8010", transport=httpx.MockTransport(RagFingido()))
+    eventos = await _todos(_eventos(Bucle(llm, [rag])))
+
+    assert "passthrough" in [t for t, _ in eventos]
+    turno = next(s for s in spans.get_finished_spans() if s.name == "turno")
+    assert [e.name for e in turno.events if e.name == "primer_token"] == []
+
+
 async def test_datos_en_tokens_lleva_las_fuentes_sql_en_done(bd_mediciones):
     pregunta = "¿Qué estación tuvo más NO2 el 30 de abril de 2026?"
     sintesis = "El 30 de abril de 2026 el NO2 más alto fue el de Plaza Elíptica (45,0 µg/m³)."

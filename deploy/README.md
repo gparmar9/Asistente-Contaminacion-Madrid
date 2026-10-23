@@ -382,6 +382,12 @@ en `http://<ip>/phoenix/`.
   pasar por nginx ni por el prefijo. La dirección está fija en `compose.yml` (`PHOENIX_ENDPOINT`),
   sin parámetro de SSM. El agente no depende de Phoenix para arrancar: si no está, pierde las trazas
   y sigue respondiendo. Van al proyecto `agente`.
+- **KPIs en la web**: `http://<ip>/admin/uso` (enlace «Administración» en el pie) muestra los KPIs
+  que el agente calcula leyendo la API REST de Phoenix por la misma red interna (raíz deducida de
+  `PHOENIX_ENDPOINT`, sin variable nueva): web → `/api/kpis` → api-usuario → `agente:8200/kpis`.
+  Solo agregados, sin texto de usuarios; caché de 60 s en el agente. Con Phoenix parado la página
+  avisa del error (503) y el resto de la web sigue igual. Lleva el rótulo «Solo administradores»
+  pero no tiene más protección que la contraseña de la web: el proyecto no tiene gestión de usuarios.
 - **Datos**: SQLite en el volumen Docker `phoenix_data` (disco de la EC2): sobrevive a apagar y
   encender, se pierde si se recrea la máquina. Retención de 30 días, pero la purga corre los
   domingos a las 00:00 UTC y con la EC2 apagada a esa hora no se ejecuta: las trazas crecen.

@@ -105,6 +105,46 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/chat/valoracion": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Valoración 👍/👎 del usuario sobre una respuesta del asistente
+         * @description Se reenvía al agente. 503 si no la guarda: la web no reintenta, la valoración no es crítica.
+         */
+        post: operations["post_valoracion_chat_valoracion_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/kpis": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * KPIs de uso del asistente en los últimos días
+         * @description Devuelve 503 si el servicio falla y 502 si la respuesta no cumple el contrato.
+         */
+        get: operations["get_kpis_kpis_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -114,11 +154,92 @@ export interface components {
          * @enum {string}
          */
         Bloque: "madrugada" | "manana" | "tarde" | "noche";
+        /** Calidad */
+        Calidad: {
+            /** Sintesis Documentales */
+            sintesis_documentales: number;
+            /** Validas A La Primera */
+            validas_a_la_primera: number;
+            /** Reparaciones Medias */
+            reparaciones_medias: number | null;
+            /** Busquedas Forzadas */
+            busquedas_forzadas: number;
+            /** Consultas Forzadas */
+            consultas_forzadas: number;
+            /**
+             * Sintesis Forzadas
+             * @description Cerradas por el código al agotar las vueltas
+             */
+            sintesis_forzadas: number;
+        };
+        /** Comprobaciones */
+        Comprobaciones: {
+            /** Turnos Bloqueados */
+            turnos_bloqueados: number;
+            /** Reglas */
+            reglas: components["schemas"]["Regla"][];
+        };
         /**
          * Contaminante
          * @enum {string}
          */
         Contaminante: "NO" | "NO2" | "NOx" | "O3" | "PM10" | "PM2.5";
+        /** Conteo */
+        Conteo: {
+            /** Categoria */
+            categoria: string;
+            /** N */
+            n: number;
+        };
+        /** Coste */
+        Coste: {
+            /** Turnos Con Coste */
+            turnos_con_coste: number;
+            /** Total Usd */
+            total_usd: number;
+            /**
+             * Por Resuelta Usd
+             * @description Coste total / turnos resueltos con coste
+             */
+            por_resuelta_usd: number | null;
+            /** Modelos */
+            modelos: string[];
+            /**
+             * Valores Usd
+             * @description Coste de cada turno, para el histograma
+             */
+            valores_usd: number[];
+        };
+        /** Dia */
+        Dia: {
+            /**
+             * Dia
+             * Format: date
+             * @description Día en hora de Madrid
+             */
+            dia: string;
+            /** Preguntas */
+            preguntas: number;
+            /** Resueltas */
+            resueltas: number;
+        };
+        /**
+         * Dias
+         * @description Periodos que se pueden pedir. Phoenix retiene 30 días.
+         * @enum {integer}
+         */
+        Dias: 1 | 7 | 30;
+        /** Distribucion */
+        Distribucion: {
+            /** N */
+            n: number;
+            /** P50 */
+            p50?: number | null;
+            /** P90 */
+            p90?: number | null;
+            /** P95 */
+            p95?: number | null;
+        };
         /** Estacion */
         Estacion: {
             /** Codigo Corto */
@@ -143,6 +264,18 @@ export interface components {
              */
             contaminantes_medidos: string[];
         };
+        /** FalloHerramienta */
+        FalloHerramienta: {
+            /** Herramienta */
+            herramienta: string;
+            /**
+             * Causa
+             * @description `agente.estado` del span, o `vetada`
+             */
+            causa: string;
+            /** Fallos */
+            fallos: number;
+        };
         /**
          * FuenteChat
          * @description De dónde salió la información: consulta SQL o documento del corpus RAG.
@@ -160,6 +293,86 @@ export interface components {
         HTTPValidationError: {
             /** Detail */
             detail?: components["schemas"]["ValidationError"][];
+        };
+        /** Herramientas */
+        Herramientas: {
+            /** Llamadas */
+            llamadas: number;
+            /** Fallos */
+            fallos: components["schemas"]["FalloHerramienta"][];
+            /** Preguntas De Datos */
+            preguntas_de_datos: number;
+            /**
+             * Datos No Disponibles
+             * @description Preguntas de datos sin base (decisión `datos_no_disponibles`)
+             */
+            datos_no_disponibles: number;
+        };
+        /** Kpis */
+        Kpis: {
+            periodo: components["schemas"]["Periodo"];
+            /**
+             * Precios
+             * @description Fecha y origen de la tabla de precios
+             */
+            precios: string;
+            /**
+             * Huerfanas
+             * @description Trazas sin span `turno` (turno cortado o fuera del intervalo)
+             */
+            huerfanas: number;
+            resumen: components["schemas"]["Resumen"];
+            /** Por Dia */
+            por_dia: components["schemas"]["Dia"][];
+            /** Intenciones */
+            intenciones: components["schemas"]["Conteo"][];
+            /** Rutas */
+            rutas: components["schemas"]["Conteo"][];
+            /** Temas */
+            temas: components["schemas"]["Conteo"][];
+            /**
+             * Resultados
+             * @description respondida, frase_fija, sin_evidencia, servicio_no_disponible, bloqueada, error
+             */
+            resultados: components["schemas"]["Conteo"][];
+            coste: components["schemas"]["Coste"] | null;
+            /** Latencia Por Ruta */
+            latencia_por_ruta: components["schemas"]["PorRuta"][];
+            /** Primer Token Por Ruta */
+            primer_token_por_ruta: components["schemas"]["PorRuta"][];
+            calidad: components["schemas"]["Calidad"];
+            comprobaciones: components["schemas"]["Comprobaciones"];
+            herramientas: components["schemas"]["Herramientas"];
+            /** @description null si los spans no llevan `session.id` */
+            sesiones: components["schemas"]["Sesiones"] | null;
+            /** @description null si no hay votos en el periodo */
+            satisfaccion: components["schemas"]["Satisfaccion"] | null;
+        };
+        /** Periodo */
+        Periodo: {
+            /** Dias */
+            dias: number;
+            /**
+             * Desde
+             * Format: date-time
+             */
+            desde: string;
+            /**
+             * Hasta
+             * Format: date-time
+             */
+            hasta: string;
+            /**
+             * Generado
+             * Format: date-time
+             */
+            generado: string;
+        };
+        /** PorRuta */
+        PorRuta: {
+            /** Ruta */
+            ruta: string;
+            ms: components["schemas"]["Distribucion"];
         };
         /** PreguntaChat */
         PreguntaChat: {
@@ -203,6 +416,18 @@ export interface components {
             /** Is Anomaly */
             is_anomaly?: boolean | null;
         };
+        /** Regla */
+        Regla: {
+            /** Regla */
+            regla: string;
+            /**
+             * Turnos
+             * @description Turnos con algún hallazgo de la regla
+             */
+            turnos: number;
+            /** Bloqueados */
+            bloqueados: number;
+        };
         /** RespuestaChat */
         RespuestaChat: {
             /** Respuesta */
@@ -221,6 +446,49 @@ export interface components {
              * @description Traza del turno en el agente; null sin agente
              */
             traza_id?: string | null;
+            /**
+             * Span Id
+             * @description Span del turno en el agente, el que recibe la valoración; null sin agente
+             */
+            span_id?: string | null;
+        };
+        /** Resumen */
+        Resumen: {
+            /**
+             * Preguntas
+             * @description Turnos del periodo
+             */
+            preguntas: number;
+            /** Dias Con Uso */
+            dias_con_uso: number;
+            /**
+             * Resueltas
+             * @description Respondidas o con frase fija del código (respuesta correcta por diseño)
+             */
+            resueltas: number;
+            latencia_ms: components["schemas"]["Distribucion"];
+            /** @description Solo turnos en streaming con el texto en tokens */
+            primer_token_ms: components["schemas"]["Distribucion"];
+            /** @description Solo turnos con tokens completos y modelo con precio */
+            coste_usd: components["schemas"]["Distribucion"];
+        };
+        /** Satisfaccion */
+        Satisfaccion: {
+            /** Votos */
+            votos: number;
+            /** Positivos */
+            positivos: number;
+            /** Por Ruta */
+            por_ruta: components["schemas"]["Votos"][];
+            /** Por Tema */
+            por_tema: components["schemas"]["Votos"][];
+            /**
+             * Sesiones Elegibles
+             * @description Sesiones con 2 o más respuestas completas: pueden ver el aviso
+             */
+            sesiones_elegibles: number;
+            /** Sesiones Con Voto */
+            sesiones_con_voto: number;
         };
         /** SerieBloques */
         SerieBloques: {
@@ -241,6 +509,34 @@ export interface components {
             /** Puntos */
             puntos: components["schemas"]["PuntoSerie"][];
         };
+        /** Sesiones */
+        Sesiones: {
+            /** Sesiones */
+            sesiones: number;
+            /** Turnos Mediana */
+            turnos_mediana: number;
+            /** Turnos Maximo */
+            turnos_maximo: number;
+            /** De Un Turno */
+            de_un_turno: number;
+            /** @description Sesiones con 2 o más turnos */
+            duracion_s: components["schemas"]["Distribucion"];
+            /**
+             * Turnos Con Previo
+             * @description Turnos que no abren su sesión
+             */
+            turnos_con_previo: number;
+            /**
+             * Tras Rechazo
+             * @description Turnos tras un rechazo (reformulación)
+             */
+            tras_rechazo: number;
+            /**
+             * Resueltos Tras Rechazo
+             * @description De ellos, resueltos: el rechazo pudo ser evitable
+             */
+            resueltos_tras_rechazo: number;
+        };
         /** ValidationError */
         ValidationError: {
             /** Location */
@@ -253,6 +549,32 @@ export interface components {
             input?: unknown;
             /** Context */
             ctx?: Record<string, never>;
+        };
+        /**
+         * ValoracionChat
+         * @description 👍/👎 del usuario sobre un turno del agente, con los ids que devolvió ese turno.
+         */
+        ValoracionChat: {
+            /** Session Id */
+            session_id: string;
+            /** Traza Id */
+            traza_id: string;
+            /** Span Id */
+            span_id: string;
+            /**
+             * Valor
+             * @enum {string}
+             */
+            valor: "positiva" | "negativa";
+        };
+        /** Votos */
+        Votos: {
+            /** Grupo */
+            grupo: string;
+            /** Positivos */
+            positivos: number;
+            /** Votos */
+            votos: number;
         };
     };
     responses: never;
@@ -397,6 +719,69 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    post_valoracion_chat_valoracion_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ValoracionChat"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_kpis_kpis_get: {
+        parameters: {
+            query?: {
+                /** @description Días hacia atrás */
+                dias?: components["schemas"]["Dias"];
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Kpis"];
+                };
             };
             /** @description Validation Error */
             422: {
