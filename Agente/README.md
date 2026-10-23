@@ -229,8 +229,8 @@ responde, el SDK lo avisa en el log y el turno sigue igual: los spans se envían
 segundo plano.
 
 En la EC2, Phoenix es un contenedor más y se abre en `http://<ip>/phoenix/` con el usuario y la
-contraseña de la web. El agente le envía las trazas por la red interna con
-`/jupiter/agente/phoenix_endpoint = http://phoenix:6006/v1/traces` (sin el prefijo `/phoenix`).
+contraseña de la web. El agente le envía las trazas por la red interna a
+`http://phoenix:6006/v1/traces` (sin el prefijo `/phoenix`), fijado en `deploy/ec2/compose.yml`.
 Detalle en [`deploy/README.md`](../deploy/README.md#trazas-del-agente-en-phoenix).
 
 Informe agregado desde los JSONL (solo biblioteca estándar): turnos por ruta e intención,

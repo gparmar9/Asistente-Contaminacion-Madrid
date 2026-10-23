@@ -1581,8 +1581,10 @@ la enciende a mano para trabajar o hacer una demo.
   `api-usuario` al arrancar y `arrancar.sh` reiniciaba `web` tras redesplegarla; ya no hace falta, y
   `web` arranca aunque Phoenix no exista (502 en `/phoenix/`).
 - **Phoenix (trazas del agente):** el agente las envía a `http://phoenix:6006/v1/traces` por la red
-  interna (sin el prefijo `/phoenix`, que solo vale a través de nginx) si existe
-  `/jupiter/agente/phoenix_endpoint`; no depende de Phoenix para arrancar. Datos en SQLite en un
+  interna (sin el prefijo `/phoenix`, que solo vale a través de nginx), con la dirección fija en
+  el compose; no depende de Phoenix para arrancar. Criterio de configuración del agente: en SSM
+  solo lo secreto (`database_url`) o lo que se cambia sin tocar código (los modelos); lo fijo de la
+  máquina (proveedor, región, URL del RAG y de Phoenix) en el compose, que manda sobre SSM. Datos en SQLite en un
   volumen del disco de la EC2: sobreviven a apagar y encender. Retención de 30 días configurada,
   pero Phoenix purga los domingos a las 00:00 UTC y la EC2 está apagada a esa hora: en la práctica
   las trazas crecen (aceptado; lo vigilará una alarma de disco). Memoria: unos 450-500 MB en
@@ -1751,6 +1753,11 @@ la enciende a mano para trabajar o hacer una demo.
   de acceso con `satisfy all` heredaba el `deny all` de la web y respondía 403 incluso con la
   contraseña correcta; y la redirección absoluta perdía el puerto. Los tres salieron en una prueba
   con contenedores reales antes de tocar AWS.
+- **La configuración fija va junto al servicio al que apunta** (2026-10-23). Con Phoenix ya en la
+  EC2 y su interfaz accesible, no llegaba ninguna traza: el envío dependía de un parámetro de SSM
+  que nadie había creado, y su ausencia no da ningún error (el agente funciona igual, sin trazas).
+  La dirección es fija y no es secreta, así que pasó al compose, al lado del contenedor `phoenix`.
+  SSM queda para secretos y valores que se cambian sin desplegar código.
 
 **Seguridad**
 - En abril la contraseña de la base de datos quedó **escrita en el código y commiteada**. Se corrigió
@@ -2100,6 +2107,7 @@ la enciende a mano para trabajar o hacer una demo.
 | 2026-10-23 | **Phoenix detrás de la web, en local** (Carlos con Claude Code, rama `feature/phoenix-prefijo`): primer paso para llevar Phoenix a la EC2 bajo `/phoenix`, detrás del nginx de la web y con su contraseña. Antes, medición en la EC2: 1279 MB usados de 3835 con los cuatro contenedores y el modelo del RAG cargado (562 MB en reposo), y Phoenix 20.19.0 ocupa unos 450-500 MB en reposo: cabe sin cambiar de instancia. El `nginx.conf` de la web resuelve los nombres en cada petición (DNS de Docker y destinos en variables): `web` arranca sin Phoenix (502 en `/phoenix`) y deja de depender de la IP de `api-usuario`. `/phoenix` tiene su propio fichero de acceso, abierto en local; en la EC2 exigirá la contraseña siempre. Log de acceso en JSON, preparado para CloudWatch. Probado con la imagen real, un `api-usuario` simulado y Phoenix: rutas de `/api` (con query y caracteres codificados), estáticos, GraphQL y una traza por la red interna; con contraseña, 401 sin credenciales o con una errónea y 200 con la buena; sin contraseña, 403 en `/phoenix` y la web abierta. La retención de 30 días de Phoenix purga los domingos a las 00:00 UTC, con la EC2 apagada: se acepta que las trazas crezcan |
 | 2026-10-23 | **Phoenix en la EC2** (Carlos con Claude Code, rama `feature/phoenix-prefijo`): `phoenix` pasa a ser el quinto contenedor del compose de producción, con imagen pública fijada (`20.19.0`), volumen propio y healthcheck con el Python de la imagen (no trae `curl` ni `wget`). `arrancar.sh` genera el acceso a `/phoenix/` (contraseña de la web siempre o 403 sin ella), no busca versión de Phoenix en SSM y deja de reiniciar `web` al redesplegar `api-usuario`. Hallazgo: al relanzar `web` con la misma imagen, compose no recrea el contenedor aunque cambien los ficheros de acceso que monta, así que poner o quitar la contraseña no se aplicaba hasta el siguiente encendido; ahora `arrancar.sh` recarga nginx cuando actualiza `web`. «Desplegar» gana el componente `phoenix`, sin tests ni build. Probado sin AWS: `arrancar.sh` con `aws` y `docker` simulados en seis casos (nunca pide la versión de Phoenix; con permiso denegado se detiene sin generar el acceso) y Phoenix real levantado con el compose de producción (sano en 16 s) detrás de nginx con los ficheros generados: con contraseña, 401 sin credenciales o con una errónea, 200 con la buena y 401 desde la propia máquina; estáticos y GraphQL con prefijo; una traza enviada a `http://phoenix:6006/v1/traces` aparece en su proyecto; sin contraseña, 403 en `/phoenix/` y la web abierta. Pendiente de aplicar en AWS |
 | 2026-10-23 | **Arreglo del arranque de la EC2** (Carlos con Claude Code, rama `fix/arranque-ec2`): dos ejecuciones de «Encender entorno» fallaron porque la EC2 ejecutaba el `arrancar.sh` de su disco, anterior a Phoenix, con el `compose.yml` nuevo de S3 (§8.9). `jupiter.service` trae ahora `arrancar.sh` de S3 antes de ejecutarlo; `arrancar.sh` reinstala `jupiter.service` si cambió y borra los directorios que Docker crea en lugar de los ficheros de acceso; «Encender entorno» reintenta el arranque una vez. Sintaxis de `arrancar.sh` y del comando del workflow comprobada con `bash -n`, y `arrancar.sh` probado con `aws`, `docker` y `systemctl` simulados y el fichero de acceso convertido en directorio. EC2 recuperada a mano por SSM el mismo día (borrar el directorio, `arrancar.sh` y `jupiter.service` de S3, reiniciar el servicio): cinco contenedores sanos y 401 sin credenciales en `/`, `/api/health` y `/phoenix/`. `[por confirmar: encendido tras desplegar con la máquina apagada, con el arreglo ya en S3]` |
+| 2026-10-23 | **Trazas de Phoenix en la EC2: dirección en el compose** (Carlos con Claude Code, rama `fix/arranque-ec2`): con Phoenix en marcha en `/phoenix/` no llegaban trazas porque no existía `/jupiter/agente/phoenix_endpoint` en SSM (comprobado en AWS: solo `database_url`, `llm_modelo` y `llm_modelo_clasificador`). La imagen activa del agente (`fcfe855`) ya traía el exportador. `PHOENIX_ENDPOINT` pasa a estar fijo en el `environment` del agente en `compose.yml`; se revisaron los demás parámetros del agente y siguen en SSM por ser secretos o cambiables sin desplegar. Pendiente de aplicar: **Desplegar → `phoenix`** (sube el compose a S3) y recrear el agente `[por confirmar: trazas visibles en el proyecto agente]` |
 
 ---
 
