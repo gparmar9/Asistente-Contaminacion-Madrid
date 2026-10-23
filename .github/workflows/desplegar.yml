@@ -12,6 +12,8 @@
 #   api-usuario  → versión activa en SSM (/jupiter/versiones/<componente>) → si la EC2 está
 #   agente       encendida, actualiza solo ese contenedor por SSM Run Command y espera a que
 #   rag          esté sano. Si está apagada, usará esta versión al encenderse.
+#   phoenix      usa la imagen pública fijada en deploy/ec2/compose.yml, sin tests ni build.
+#                Sube los ficheros de arranque a S3 y actualiza Phoenix si la EC2 está encendida.
 # Para añadir uno nuevo: sumarlo a `options` y a un job con `if:` (y lo mismo en rollback.yml).
 #
 # Autenticación por OIDC: GitHub entrega un token firmado y AWS lo cambia por credenciales
@@ -35,6 +37,7 @@ on:
           - api-usuario
           - agente
           - rag
+          - phoenix
 
 permissions:
   contents: read
@@ -50,8 +53,9 @@ env:
   AWS_REGION: eu-west-1
 
 jobs:
-  # Los mismos tests que en cada push (unitarios + integración contra PostgreSQL).
+  # Tests unitarios y de integración con PostgreSQL. Se omiten para la imagen pública de Phoenix.
   tests:
+    if: inputs.componente != 'phoenix'
     uses: ./.github/workflows/tests.yml
 
   lambda:
@@ -148,7 +152,7 @@ jobs:
   contenedor:
     name: ${{ inputs.componente }} · build, push y despliegue en la EC2
     needs: tests
-    if: inputs.componente != 'lambda'
+    if: inputs.componente != 'lambda' && inputs.componente != 'phoenix'
     runs-on: ubuntu-latest
     env:
       COMPONENTE: ${{ inputs.componente }}
@@ -254,6 +258,67 @@ jobs:
             echo "| Imagen | \`$ECR_REPOSITORY:$TAG\` |"
             echo "| Digest | \`$DIGEST\` |"
             echo "| Versión anterior | \`$ANTERIOR\` |"
+            echo "| EC2 | $EC2_RESULTADO |"
+            echo "| Lanzado por | @$GITHUB_ACTOR |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  # Phoenix usa una imagen de Docker Hub: publicamos los ficheros de arranque y actualizamos
+  # el contenedor. Para volver atrás, revertir el commit y desplegar de nuevo.
+  phoenix:
+    name: phoenix · despliegue en la EC2
+    if: inputs.componente == 'phoenix'
+    runs-on: ubuntu-latest
+    env:
+      BUCKET: jupiter-calidad-aire-madrid
+    steps:
+      - name: Checkout repositorio
+        uses: actions/checkout@v4
+
+      - name: Avisar si no se despliega desde main
+        if: github.ref_name != 'main'
+        run: echo "::warning::Se está desplegando la rama '${GITHUB_REF_NAME}', no main. La EC2 usará su compose.yml."
+
+      - name: Versión de la imagen
+        run: |
+          IMAGEN=$(grep -oE 'arizephoenix/phoenix:[^[:space:]]+' deploy/ec2/compose.yml) \
+            || { echo "::error::No se encuentra la imagen de Phoenix en deploy/ec2/compose.yml"; exit 1; }
+          echo "IMAGEN=$IMAGEN" >> "$GITHUB_ENV"
+
+      - name: Credenciales de AWS (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::${{ secrets.AWS_ACCOUNT_ID }}:role/jupiter-github-actions-deploy
+          role-session-name: despliegue-${{ github.run_id }}
+          aws-region: ${{ env.AWS_REGION }}
+          mask-aws-account-id: true
+
+      - name: Publicar los ficheros de arranque en S3
+        run: aws s3 cp deploy/ec2/ "s3://$BUCKET/ec2/" --recursive --only-show-errors
+
+      # Si la EC2 está apagada, arrancar.sh aplicará el cambio al encenderla.
+      - name: Actualizar el contenedor en la EC2
+        run: |
+          EC2=$(bash .github/scripts/ec2.sh instancia)   # si la consulta falla, el paso falla
+          read -r INSTANCIA ESTADO <<< "$EC2"
+          if [ "${ESTADO:-}" != "running" ]; then
+            echo "EC2_RESULTADO=EC2 ${ESTADO:-inexistente}: arrancará esta versión al encenderse" >> "$GITHUB_ENV"
+            echo "La EC2 no está encendida (${ESTADO:-no existe}): no se actualiza ahora."
+            exit 0
+          fi
+          bash .github/scripts/ec2.sh ejecutar \
+            "aws s3 cp s3://$BUCKET/ec2/arrancar.sh /opt/jupiter/arrancar.sh --region $AWS_REGION --only-show-errors && chmod 700 /opt/jupiter/arrancar.sh && /opt/jupiter/arrancar.sh phoenix"
+          echo "EC2_RESULTADO=actualizado y sano en $INSTANCIA" >> "$GITHUB_ENV"
+
+      - name: Resumen
+        run: |
+          {
+            echo "### \`phoenix\` desplegado"
+            echo
+            echo "| | |"
+            echo "|---|---|"
+            echo "| Rama | \`$GITHUB_REF_NAME\` |"
+            echo "| Commit | \`$GITHUB_SHA\` |"
+            echo "| Imagen | \`$IMAGEN\` |"
             echo "| EC2 | $EC2_RESULTADO |"
             echo "| Lanzado por | @$GITHUB_ACTOR |"
           } >> "$GITHUB_STEP_SUMMARY"
