@@ -123,7 +123,7 @@ Hilo conductor de la memoria: cómo y por qué cambió el diseño.
 | 2026-10-09 | Modelo de referencia para SQL | MiniMax M2.5 → **sin modelo de referencia en los siguientes lotes** | Logró 2/11 aciertos en datos frente a 4/11 del mejor modelo barato, con mayor coste por lote: 0,085 $ frente a 0,023–0,043 $. Se prioriza corregir el diseño |
 | 2026-10-13 | Servicios de la EC2 | `api-usuario` + `orquestador` + `rag`, con `api-usuario` publicado en el 8000 y el LLM por `/jupiter/llm/{base_url,model,api_key}` → **`web` + `api-usuario` + `agente` + `rag`**: solo `web` (nginx) publica puerto (80); el agente usa **Bedrock con el rol de la EC2** (sin claves) y lee su configuración de **todo `/jupiter/agente/`** en SSM (cada parámetro, una variable de entorno) | El equipo sustituyó el orquestador por el `Agente` (2026-10-08) y la web ya tiene imagen. Un solo origen para el navegador (nginx hace de proxy de `/api/*`), como en local. Leer la ruta entera evita tocar `arrancar.sh` cada vez que el agente añade una variable. Descartado: mantener el orquestador desplegado (código sin uso) y una clave de API del LLM en SSM (Bedrock no la necesita con el rol de la máquina) |
 | 2026-10-21 | Acceso a la web de la EC2 | Puerto 80 abierto solo a las IP del equipo → **IP del equipo o, para demos, abierto a todo internet con usuario y contraseña** (autenticación básica de nginx, contraseña cifrada en SSM) | La demo la presentan compañeros desde redes cuya IP pública no se conoce de antemano y puede cambiar. Descartados: una contraseña fija en el código (el repositorio es público), abrirlo sin contraseña (la API no tiene autenticación y el chat cuesta dinero), *port forwarding* con Session Manager (cada presentador necesita la CLI de AWS y su plugin) y un balanceador con Cognito o CloudFront con HTTPS (exigen dominio y certificado; demasiado para la víspera de la demo) |
-| 2026-10-22 | Frecuencia de ingesta | Una carga al día a las 23:45 con la RDS encendida de 22:00 a 01:30 → **una carga al cierre de cada franja**: 07:45, 13:45, 20:45 y 23:45 (`cron(45 7,13,20,23 * * ? *)`), escribiendo **solo los bloques cerrados**, **con la RDS siempre encendida** `[pendiente de aplicar en AWS]` | Datos del día disponibles durante la jornada y cada bloque evaluado completo, sin los falsos positivos del bloque abierto (§6.5). El minuto 45 sale de producción: 36/36 noches con la hora 22 publicada a las 23:45. El ahorro deja de ser prioritario. Descartado: cada hora (evalúa bloques a medias), cada 20 min (diseño inicial), 08:15/14:15/21:15 (primera propuesta: 30 min más de espera sin necesidad) y decidir el cierre por lo publicado en vez de por el reloj (si la API se retrasa, la última carga del día no escribiría la noche) |
+| 2026-10-22 | Frecuencia de ingesta | Una carga al día a las 23:45 con la RDS encendida de 22:00 a 01:30 → **una carga al cierre de cada franja**: 07:45, 13:45, 20:45 y 23:45 (`cron(45 7,13,20,23 * * ? *)`), escribiendo **solo los bloques cerrados**, **con la RDS siempre encendida** (aplicado en AWS el 2026-10-23) | Datos del día disponibles durante la jornada y cada bloque evaluado completo, sin los falsos positivos del bloque abierto (§6.5). El minuto 45 sale de producción: 36/36 noches con la hora 22 publicada a las 23:45. El ahorro deja de ser prioritario. Descartado: cada hora (evalúa bloques a medias), cada 20 min (diseño inicial), 08:15/14:15/21:15 (primera propuesta: 30 min más de espera sin necesidad) y decidir el cierre por lo publicado en vez de por el reloj (si la API se retrasa, la última carga del día no escribiría la noche) |
 | 2026-10-23 | Cobertura del bloque de noche en tiempo real | Sobre 4 horas (20–23) → **sobre las 3 que publica la API (20–22)** | La hora 23 no llega nunca (§11): con 4, todas las noches tenían cobertura 0,75 y el detector marcaba el 7,19 % (0,44 % en el histórico). Simulado en el histórico: 8,69 % con 4 y 0,49 % con 3. Descartado: reentrenar con la noche en 20–22 (cambia el modelo y el histórico por una hora) y una segunda fuente para la hora 23 (no se ha localizado una publicación diaria `[por confirmar]`) |
 | 2026-10-23 | Logs y métricas de la EC2 | Logs de los contenedores solo en el disco de la máquina (`json-file`) y sin métricas de memoria ni disco → logs de `web`, `api-usuario` y `rag` en CloudWatch Logs y memoria y disco con el agente de CloudWatch; `agente` y `phoenix` siguen en la máquina | Depurar exigía entrar por Session Manager y los fallos de la EC2 no avisaban a nadie. Base para las alarmas. Descartados: Grafana + Loki en la misma EC2 (3-4 contenedores más en 4 GB y duplica Phoenix y CloudWatch), Amazon Managed Grafana (9 $ por usuario y mes), métricas propias del agente con EMF (unos 5-8 $/mes `[estimación]` y repiten Phoenix) y enviar también los logs del agente (duplican sus trazas) |
 | 2026-10-23 | Trazas del agente en producción | Phoenix solo en local (perfil `observabilidad` del compose) → **Phoenix como quinto contenedor de la EC2**, sin puerto propio, servido por el nginx de la web en `/phoenix/` y **siempre con la contraseña de la web** (403 si no hay contraseña). El agente le envía las trazas por la red interna de Docker. Imagen pública fijada en el compose (`20.19.0`), SQLite en un volumen del disco de la EC2 | Las trazas de cada turno (fases, tiempos, tokens, errores) son la observabilidad del asistente y solo existían en el portátil de quien probaba. Descartados: Phoenix Cloud de Arize (manda a un tercero las preguntas de los usuarios), publicar su puerto 6006 (un segundo puerto sin autenticación), un balanceador con reglas por ruta (unos 16 $/mes `[estimación]`), guardar las trazas en la RDS (ata Phoenix a los horarios de la base y mete un esquema ajeno), copiar la imagen a ECR (un repositorio y un job más para una imagen que no se construye) y la autenticación propia de Phoenix (usuarios y API keys, pero exige un paso manual tras el primer arranque y un secreto más en SSM; no compensa con una sola persona operando) |
@@ -399,8 +399,22 @@ limitación permanente ya documentada — no un resto del bug.
   | Horas 20–22, sobre 3 (arreglo) | **0,49 %** | 0,18 % |
 
   El arreglo coincide con el cálculo de 4 horas en el 99,65 % de los bloques; quitar la hora 23
-  apenas mueve el z-score (+0,02 de media). Los días ya cargados se rehacen con `--reprocesar`
-  `[pendiente de ejecutar]`.
+  apenas mueve el z-score (+0,02 de media).
+- **Comprobado en producción (2026-10-23):** `--reprocesar 2026-09-16` reescribió 15.869 bloques
+  con el cálculo nuevo. Del 16-09 al 22-10 (consulta de solo lectura a la RDS):
+
+  | Bloque | Marcados antes (16-09 a 21-10) | Marcados tras reprocesar (16-09 a 22-10) | Cobertura media |
+  |---|---|---|---|
+  | noche | 7,19 % | **0,74 %** (29 de 3.944) | 0,75 → **0,989** |
+  | mañana | 4,13 % | 4,22 % (166 de 3.936) | 0,967 |
+  | tarde | 1,48 % | 2,20 % (87 de 3.947) | 0,976 |
+  | madrugada | 0,68 % | 0,66 % (26 de 3.934) | 0,996 |
+
+  En total, 308 de 15.761 bloques (1,95 %, frente al 3,4 %). Las marcas de noche que la web
+  presenta como anomalías (cobertura ≥ 0,7) bajan de 250 a **11**. La noche queda en el nivel del
+  histórico (0,44 %, 0,49 % en la simulación). La mañana en torno al 4 % es un rasgo del modelo,
+  también presente en el histórico (§8.7). La subida de la tarde no está explicada `[por
+  confirmar]`; el periodo incluye un día más.
 
 ### 6.6 Limitaciones del detector
 
@@ -1834,8 +1848,8 @@ TiempoRespuestaChat]`
 ### 8.8 Encendido programado de la base de datos (2026-10-01 a 2026-10-23)
 
 **Sustituido por la RDS siempre encendida** al pasar a una carga por franja (§2): las dos
-programaciones se desactivan, no se borran, y «Apagar entorno» ya solo apaga la EC2
-`[pendiente de aplicar en AWS]`. Las ventanas de copias y mantenimiento no coinciden con ninguna
+programaciones se desactivaron el 2026-10-23 (no se borran) y «Apagar entorno» ya solo apaga
+la EC2. Para la entrega también se desactivó el apagado nocturno de la EC2 (§8.9). Las ventanas de copias y mantenimiento no coinciden con ninguna
 de las cuatro cargas. Se conserva el diseño porque explica decisiones y fallos de §8 y §12.
 
 La RDS solo estaba encendida cuando hacía falta: cada noche alrededor de la carga, y cuando el
@@ -1876,8 +1890,10 @@ equipo la encendía a mano para trabajar o hacer una demo.
 
 - **Máquina:** EC2 `t3.medium` (2 vCPU, 4 GB, x86) con Amazon Linux 2023 y 30 GB de disco. x86
   y no Graviton (`t4g`, algo más barata) para construir las imágenes en los runners de GitHub, que
-  son x86, sin emular ARM para compilar torch. Encendida solo para trabajar o hacer demos y apagada
-  cada noche, como la RDS: ~2,5 $/mes de disco más ~0,045 $ por hora encendida `[estimación]`.
+  son x86, sin emular ARM para compilar torch. ~2,5 $/mes de disco más ~0,045 $ por hora encendida
+  `[estimación]`. Se apagaba cada noche a la 01:30 (`jupiter-ec2-apagar`); **desde el 2026-10-23,
+  encendida siempre** para la entrega, con esa programación desactivada (no borrada). Unos
+  32 $/mes más mientras dure `[estimación: 0,045 $/h × 720 h]`.
 - **Un contenedor por servicio** (`web`, `api-usuario`, `agente`, `rag`), con las imágenes de ECR
   y la versión activa de cada uno en SSM (`/jupiter/versiones/<servicio>`): se despliega o se
   vuelve atrás una pieza sin tocar las demás. La máquina no construye nada. El `LLMOrchestrator`
@@ -2491,6 +2507,7 @@ equipo la encendía a mano para trabajar o hacer una demo.
 | 2026-10-23 | **Página «Uso del asistente» en la web** (Carlos con Claude Code, rama `feature/kpis-agente`): `/admin/uso` con rótulo «Solo administradores» sin protección, enlace en el pie, seis indicadores con su *n*, embudo, histograma del coste con P50/P90, satisfacción por ruta y tablas; contrato OpenAPI regenerado. Sin cambios en `compose.yml`: la raíz de Phoenix sale de `PHOENIX_ENDPOINT`. Web: 56 tests Vitest, typecheck, lint y build en verde. `[por confirmar: despliegue y prueba en la EC2]` |
 | 2026-10-23 | **Job `frontend` en CI** (Carlos con Claude Code, rama `feature/kpis-agente`): README, memoria y comentarios daban por hecha la comprobación del contrato web-API, pero el job nunca se había añadido a `tests.yml`. Nuevo sexto job: regenera `openapi.json` desde `ApiUsuario` (FastAPI 0.161.1 y pydantic 2.14.1 fijados) y `schema.d.ts`, falla con `git diff --exit-code` si difieren y pasa lint, tests y build de la web. Comprobado en local: el contrato regenerado coincide byte a byte con el versionado; lint, 56 tests y build en verde. Primera ejecución en GitHub `[por confirmar]` |
 | 2026-10-23 | **Ingesta al cierre de cada franja y bloque de noche sobre 3 horas** (Guille con Claude Code, rama `feature/ingesta-por-franjas`): el pipeline solo escribe bloques cerrados y mide la noche sobre las 3 horas que publica la API; `--reprocesar` rehace los días ya cargados. Simulado en el histórico: noche marcada 8,69 % → 0,49 % (0,44 % con las 4 horas). Horario elegido: 07:45, 13:45, 20:45 y 23:45. «Apagar entorno» ya no apaga la RDS. Tests unitarios y del agente en verde. Pendiente en AWS: desactivar las programaciones de la RDS, desplegar la Lambda, cambiar el horario y reprocesar |
+| 2026-10-23 | **Ingesta por franjas aplicada en AWS** (Guille con Claude Code): desactivadas `jupiter-rds-encender`, `jupiter-rds-apagar` y, para la entrega, `jupiter-ec2-apagar`; RDS y EC2 quedan siempre encendidas. Lambda desplegada desde `main` y `jupiter-pipeline-diario` cambiada a `cron(45 7,13,20,23 * * ? *)`. `--reprocesar 2026-09-16`: 15.869 bloques reescritos; la noche pasa del 7,19 % al **0,74 %** de bloques marcados y su cobertura media de 0,75 a 0,989 (§6.5 bis). Invocación manual a media tarde: 214 bloques (madrugada y mañana; la tarde, abierta, no se escribe), 0 anomalías, 23 estaciones, frente a las 107 anomalías de la tarde a medias en la prueba de las 16:07 |
 
 ---
 
