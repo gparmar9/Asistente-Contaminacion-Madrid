@@ -228,6 +228,11 @@ respuesta HTTP y la línea `turno traza=...` de los logs llevan al mismo turno. 
 responde, el SDK lo avisa en el log y el turno sigue igual: los spans se envían por lotes en
 segundo plano.
 
+En la EC2, Phoenix es un contenedor más y se abre en `http://<ip>/phoenix/` con el usuario y la
+contraseña de la web. El agente le envía las trazas por la red interna con
+`/jupiter/agente/phoenix_endpoint = http://phoenix:6006/v1/traces` (sin el prefijo `/phoenix`).
+Detalle en [`deploy/README.md`](../deploy/README.md#trazas-del-agente-en-phoenix).
+
 Informe agregado desde los JSONL (solo biblioteca estándar): turnos por ruta e intención,
 latencia por fase (mediana con n; p95 solo descriptivo), tokens y coste con precios fechados en
 el script, síntesis válidas a la primera, reparaciones, búsquedas forzadas y decisiones. Un turno

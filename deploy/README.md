@@ -154,7 +154,7 @@ Pestaña **Actions → Desplegar → Run workflow**, eligiendo:
   es `main`; con otra rama el workflow avisa). No hay que indicar ninguna imagen: el workflow la
   construye. Elegir una versión anterior es cosa del rollback.
 - **El componente** en el desplegable: `lambda` o uno de los servicios de la EC2 (`web`,
-  `api-usuario`, `agente`, `rag`; ver [La aplicación en la EC2](#la-aplicación-en-la-ec2)).
+  `api-usuario`, `agente`, `rag`, `phoenix`; ver [La aplicación en la EC2](#la-aplicación-en-la-ec2)).
 
 Dos despliegues del **mismo** componente nunca coinciden (el segundo espera); de componentes
 distintos, sí. Para la Lambda, el workflow:
@@ -280,22 +280,24 @@ aws rds describe-db-instances --db-instance-identifier jupiter-postgres --query 
 > punta a punta.
 
 Una EC2 `t3.medium` (x86, 30 GB) con Amazon Linux 2023 ejecuta con Docker Compose los cuatro
-servicios de la aplicación, cada uno con su imagen de ECR:
+servicios de la aplicación, cada uno con su imagen de ECR, y Phoenix para las trazas del agente
+(imagen pública, ver [Trazas del agente en `/phoenix/`](#trazas-del-agente-en-phoenix)):
 
 ```
 navegador ──:80──▶ web (nginx: SPA + proxy /api/*) ──▶ api-usuario ──▶ agente ──▶ rag
-                                                          │              │  └──▶ Bedrock (rol de la EC2)
-                                                          └──── RDS ─────┘  (agente: rol agente_lectura)
+                    │                                     │              │  └──▶ Bedrock (rol de la EC2)
+                    │                                     └──── RDS ─────┘  (agente: rol agente_lectura)
+                    └── proxy /phoenix/* ──▶ phoenix ◀── trazas OTLP ── agente
 ```
 
-Solo `web` publica puerto (80, abierto solo a las IP del equipo); `api-usuario`, `agente` y `rag`
-no tienen autenticación y quedan en la red interna de Docker. El `LLMOrchestrator` no se despliega:
+Solo `web` publica puerto (80, abierto solo a las IP del equipo); `api-usuario`, `agente`, `rag` y
+`phoenix` no tienen autenticación y quedan en la red interna de Docker. El `LLMOrchestrator` no se despliega:
 el equipo lo sustituyó por el `Agente` (ver `docs/notas_memoria.md` §2).
 
 | Fichero ([`ec2/`](ec2/)) | Qué hace |
 |---|---|
-| [`compose.yml`](ec2/compose.yml) | Los servicios con imágenes de ECR (`jupiter-web`, `jupiter-api-usuario`, `jupiter-agente`, `jupiter-rag`). Sin base de datos: usa RDS |
-| [`arrancar.sh`](ec2/arrancar.sh) | Lee de SSM qué versión de cada servicio está activa y la configuración, inicia sesión en ECR y levanta los contenedores. Con un argumento (`arrancar.sh rag`) actualiza solo ese servicio. Si actualiza `api-usuario`, reinicia también `web`: nginx guarda la IP del contenedor al arrancar |
+| [`compose.yml`](ec2/compose.yml) | Los servicios con imágenes de ECR (`jupiter-web`, `jupiter-api-usuario`, `jupiter-agente`, `jupiter-rag`) y `phoenix` (Docker Hub, versión fijada aquí). Sin base de datos: usa RDS |
+| [`arrancar.sh`](ec2/arrancar.sh) | Lee de SSM qué versión de cada servicio está activa y la configuración, inicia sesión en ECR y levanta los contenedores. Con un argumento (`arrancar.sh rag`) actualiza solo ese servicio. nginx resuelve los nombres de los contenedores en cada petición, así que recrear `api-usuario` o `phoenix` no obliga a reiniciar `web` |
 | [`jupiter.service`](ec2/jupiter.service) | Servicio de systemd: ejecuta `arrancar.sh` en cada arranque de la máquina |
 | [`user-data.sh`](ec2/user-data.sh) | Primer arranque: instala Docker y Compose y deja instalado lo anterior |
 
@@ -307,7 +309,8 @@ De dónde sale cada cosa (todo con el rol de la máquina, `jupiter-ec2-api`, sin
 | SSM `/jupiter/versiones/<servicio>` | Qué imagen está activa (tag = commit). La escribe el despliegue |
 | SSM `/jupiter/database_url` | La misma cadena de conexión que usa la Lambda (la usa `api-usuario`) |
 | SSM `/jupiter/agente/<variable>` | Configuración del agente: cada parámetro se convierte en una variable de entorno (`/jupiter/agente/llm_modelo` → `LLM_MODELO`). Una variable nueva del agente se da de alta creando el parámetro, sin tocar ningún script |
-| SSM `/jupiter/web/contrasena` (SecureString, opcional) | Contraseña de la web, usuario `demo` (ver [Usuario y contraseña de la web](#usuario-y-contraseña-de-la-web)) |
+| SSM `/jupiter/web/contrasena` (SecureString, opcional) | Contraseña de la web y de `/phoenix/`, usuario `demo` (ver [Usuario y contraseña de la web](#usuario-y-contraseña-de-la-web)) |
+| Docker Hub `arizephoenix/phoenix` | Imagen pública de Phoenix; la versión está en `compose.yml`, no en SSM |
 
 Parámetros del agente que hacen falta (los demás, como en [`Agente/.env.example`](../Agente/.env.example), son opcionales):
 
@@ -316,6 +319,8 @@ Parámetros del agente que hacen falta (los demás, como en [`Agente/.env.exampl
 | `/jupiter/agente/llm_modelo` | `mistral.ministral-3-14b-instruct` | `/chat` responde 503 |
 | `/jupiter/agente/llm_modelo_clasificador` | `openai.gpt-oss-120b-1:0` | El clasificador usa `llm_modelo` |
 | `/jupiter/agente/database_url` (SecureString) | `postgresql://agente_lectura:…@<RDS>:5432/postgres` | Las preguntas de datos reciben la frase de datos no disponibles |
+| `/jupiter/agente/phoenix_endpoint` | `http://phoenix:6006/v1/traces` | El agente no envía trazas (Phoenix se ve vacío) |
+| `/jupiter/agente/phoenix_proyecto` (opcional) | `produccion` | Las trazas van al proyecto `agente` |
 
 El proveedor (`LLM_PROVEEDOR=bedrock`) y la región están fijos en el compose: Bedrock se usa con el
 rol de la máquina, sin claves. La `database_url` del agente usa el rol de solo lectura
@@ -338,13 +343,13 @@ cualquier red (una demo, el tribunal con sus móviles) se le pone usuario y cont
 puerto a todo internet:
 
 - `arrancar.sh` lee la contraseña de `/jupiter/web/contrasena`, calcula su hash con `openssl` y
-  escribe `web-acceso.conf` y `web.htpasswd`, que `compose.yml` monta en el contenedor `web`. En el
-  disco solo queda el hash. nginx pide usuario (`demo`) y contraseña en toda la web, también en
-  `/api/*`, salvo a la propia máquina (el healthcheck entra por 127.0.0.1). No hace falta
-  reconstruir la imagen.
-- Sin el parámetro, los dos ficheros quedan vacíos y la web funciona como antes. Si el parámetro
-  existe pero no se puede leer (permisos), el arranque **se detiene**: mejor sin web que abierta sin
-  contraseña.
+  escribe `web-acceso.conf`, `web.htpasswd` y `phoenix-acceso.conf`, que `compose.yml` monta en el
+  contenedor `web`. En el disco solo queda el hash. nginx pide usuario (`demo`) y contraseña en toda
+  la web, también en `/api/*`, salvo a la propia máquina (el healthcheck entra por 127.0.0.1). En
+  `/phoenix/` la pide siempre, también desde la propia máquina. No hace falta reconstruir la imagen.
+- Sin el parámetro, los ficheros de la web quedan vacíos y la web funciona como antes; `/phoenix/`
+  responde **403**. Si el parámetro existe pero no se puede leer (permisos), el arranque **se
+  detiene**: mejor sin web que abierta sin contraseña.
 - **La web va por HTTP**: la contraseña viaja sin cifrar. Usa una contraseña exclusiva para esto,
   nunca una que se use en otro sitio. **Nunca en el repositorio**: es público.
 
@@ -358,6 +363,32 @@ Se aplica al encenderse la EC2 o con **Desplegar → `web`** si ya está encendi
 `aws ssm delete-parameter --name /jupiter/web/contrasena` y volver a desplegar `web`, cerrando antes
 el puerto 80 a todo internet.
 
+### Trazas del agente en `/phoenix/`
+
+[Phoenix](https://docs.arize.com/phoenix) recibe las trazas OpenTelemetry del agente (cascada de
+cada turno: clasificación, llamadas al LLM, RAG y SQL, con tiempos, tokens y errores) y las enseña
+en `http://<ip>/phoenix/`.
+
+- **Acceso**: usuario `demo` y la contraseña de la web, **siempre**. Sin `/jupiter/web/contrasena`
+  responde 403, aunque la web esté abierta: guarda las preguntas y respuestas de los usuarios y no
+  tiene autenticación propia.
+- **Envío**: el agente manda las trazas a `http://phoenix:6006/v1/traces` por la red interna, sin
+  pasar por nginx ni por el prefijo. Se activa con el parámetro `/jupiter/agente/phoenix_endpoint`;
+  sin él el agente funciona igual, sin trazas. El agente no depende de Phoenix para arrancar.
+- **Datos**: SQLite en el volumen Docker `phoenix_data` (disco de la EC2): sobrevive a apagar y
+  encender, se pierde si se recrea la máquina. Retención de 30 días, pero la purga corre los
+  domingos a las 00:00 UTC y con la EC2 apagada a esa hora no se ejecuta: las trazas crecen.
+- **Versión**: fijada en `compose.yml` (`arizephoenix/phoenix:version-20.19.0`, la misma que en
+  local). Cambiarla = commit + **Desplegar → `phoenix`**; volver atrás = revertir el commit y
+  desplegar otra vez. No pasa por ECR ni por el rollback.
+
+Activarlo (una vez; luego **Desplegar → `agente`** o apagar y encender para que lo lea):
+
+```powershell
+aws ssm put-parameter --name /jupiter/agente/phoenix_endpoint --type String --value "http://phoenix:6006/v1/traces"
+aws ssm put-parameter --name /jupiter/agente/phoenix_proyecto --type String --value "produccion"   # opcional
+```
+
 ### Operarla desde GitHub Actions
 
 Todo se hace con los mismos workflows que la Lambda; nadie entra en la máquina.
@@ -365,7 +396,8 @@ Todo se hace con los mismos workflows que la Lambda; nadie entra en la máquina.
 | Workflow | Qué hace con la EC2 |
 |---|---|
 | **Desplegar** → `web`, `api-usuario`, `agente` o `rag` | Construye la imagen del código de la rama elegida (normalmente `main`), la sube a ECR con el commit como tag, publica `ec2/` en S3 y guarda la versión en SSM con quién y desde dónde. Si la EC2 está encendida, actualiza **solo ese contenedor** y espera a que esté sano; si está apagada, la usará al encenderse |
-| **Rollback** → mismo componente | Sin versión: tabla de imágenes en ECR, la activa y el historial de cambios. Con versión (commit corto) y motivo: la vuelve a activar sin reconstruir nada |
+| **Desplegar** → `phoenix` | Sin tests ni build: publica `ec2/` en S3 y, si la EC2 está encendida, recrea solo `phoenix` con la versión de `compose.yml` |
+| **Rollback** → mismo componente | Sin versión: tabla de imágenes en ECR, la activa y el historial de cambios. Con versión (commit corto) y motivo: la vuelve a activar sin reconstruir nada. No aplica a `phoenix` |
 | **Encender entorno** | Enciende la RDS y la EC2 a la vez, espera a que los servicios estén sanos y muestra la dirección de la web (la IP cambia en cada encendido) |
 | **Apagar entorno** | Apaga la EC2 y después la RDS. Entre las 22:00 y las 00:00 solo la EC2 (la RDS hace falta para la carga) |
 
