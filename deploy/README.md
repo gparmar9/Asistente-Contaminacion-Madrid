@@ -42,6 +42,7 @@ apagado a demanda en [`encender_entorno.yml`](../.github/workflows/encender_ento
 | **Systems Manager Automation** | `AWS-StartRdsInstance` / `AWS-StopRdsInstance` | Runbooks de AWS que encienden o apagan la RDS solo si hace falta |
 | **SSM Parameter Store** | `/jupiter/database_url` | La cadena de conexión, cifrada |
 | **CloudWatch + SNS** | `jupiter-alertas` | Logs y avisos por correo |
+| **CloudFormation** | `jupiter-observabilidad` | Logs de la EC2, filtros de métricas, alarmas y el panel `jupiter` |
 
 Flujo de una ejecución:
 
@@ -290,7 +291,7 @@ navegador ──:80──▶ web (nginx: SPA + proxy /api/*) ──▶ api-usuar
                     └── proxy /phoenix/* ──▶ phoenix ◀── trazas OTLP ── agente
 ```
 
-Solo `web` publica puerto (80, abierto solo a las IP del equipo); `api-usuario`, `agente`, `rag` y
+Solo `web` publica puerto (80, abierto a todo internet con usuario y contraseña); `api-usuario`, `agente`, `rag` y
 `phoenix` no tienen autenticación y quedan en la red interna de Docker. El `LLMOrchestrator` no se despliega:
 el equipo lo sustituyó por el `Agente` (ver `docs/notas_memoria.md` §2).
 
@@ -338,9 +339,9 @@ Los ficheros de `ec2/` llevan finales de línea LF aunque se trabaje en Windows
 
 ### Usuario y contraseña de la web
 
-Por defecto el puerto 80 solo está abierto a las IP del equipo. Para enseñar la web desde
-cualquier red (una demo, el tribunal con sus móviles) se le pone usuario y contraseña y se abre el
-puerto a todo internet:
+El puerto 80 está abierto a todo internet y la web pide usuario y contraseña: así se enseña desde
+cualquier red (una demo, el tribunal con sus móviles) sin mantener una lista de IP. No hay regla
+para el 443:
 
 - `arrancar.sh` lee la contraseña de `/jupiter/web/contrasena`, calcula su hash con `openssl` y
   escribe `web-acceso.conf`, `web.htpasswd` y `phoenix-acceso.conf`, que `compose.yml` monta en el
@@ -362,6 +363,11 @@ aws ssm put-parameter --name /jupiter/web/contrasena --type SecureString --overw
 Se aplica al encenderse la EC2 o con **Desplegar → `web`** si ya está encendida. Para quitarla:
 `aws ssm delete-parameter --name /jupiter/web/contrasena` y volver a desplegar `web`, cerrando antes
 el puerto 80 a todo internet.
+
+**El 443 está cerrado**: no hay HTTPS y nginx solo escucha en el 80. Un navegador que intenta
+primero `https://` espera hasta agotar el tiempo antes de pasar a `http://` (con el puerto abierto
+recibía un rechazo inmediato). Si la web tarda en abrir desde un móvil, se escribe `http://`
+delante de la IP.
 
 ### Trazas del agente en `/phoenix/`
 
@@ -403,16 +409,18 @@ Lo del asistente se mira en Phoenix; CloudWatch recoge el resto: el borde HTTP y
   algo falla, avisa en el log y la aplicación arranca igual.
 - **El grupo de logs** lo crea la pila de CloudFormation `jupiter-observabilidad`
   ([`cloudwatch/observabilidad.yaml`](cloudwatch/observabilidad.yaml)), no Docker ni un comando
-  suelto: si existiera antes, la pila no podría crearlo. Ahí irán también los filtros, las
-  alarmas y el panel.
+  suelto: si existiera antes, la pila no podría crearlo. La misma pila crea los filtros, las
+  alarmas y el panel ([Alarmas y panel](#alarmas-y-panel)).
 
 Activarlo (una vez, en este orden):
 
 ```powershell
 # 0. Comprobar que la sesión apunta a la cuenta del máster (con varios perfiles, AWS_PROFILE)
 aws sts get-caller-identity --query Account --output text
-# 1. El grupo de logs (crea o actualiza la pila; no toca nada más)
-aws cloudformation deploy --template-file deploy/cloudwatch/observabilidad.yaml --stack-name jupiter-observabilidad
+# 1. Logs, filtros, alarmas y panel (crea o actualiza la pila). Necesita el ID de la EC2:
+#    al recrear la máquina con 2_crear_ec2.ps1 hay que volver a ejecutarlo.
+$Ec2 = aws ec2 describe-instances --filters "Name=tag:Name,Values=jupiter-api" "Name=instance-state-name,Values=pending,running,stopping,stopped" --query "Reservations[0].Instances[0].InstanceId" --output text
+aws cloudformation deploy --template-file deploy/cloudwatch/observabilidad.yaml --stack-name jupiter-observabilidad --parameter-overrides InstanceId=$Ec2
 # 2. Los permisos nuevos del rol de la EC2 (sustituye la política en línea por la del repositorio)
 aws iam put-role-policy --role-name jupiter-ec2-api --policy-name ec2-api --policy-document file://deploy/iam/permisos-ec2-api.json
 ```
@@ -512,14 +520,61 @@ aws rds start-db-instance --db-instance-identifier jupiter-postgres
 > programación de las 22:00 lo evita; no desactives `jupiter-rds-encender` sin desactivar también
 > la carga.
 
-## Alarmas
+## Alarmas y panel
+
+Todas avisan por correo a través del tema SNS `jupiter-alertas`. Las dos de la Lambda se crearon a
+mano; las otras ocho las crea la pila `jupiter-observabilidad`
+([`cloudwatch/observabilidad.yaml`](cloudwatch/observabilidad.yaml)).
 
 | Alarma | Salta cuando | Por qué importa |
 |---|---|---|
 | `jupiter-pipeline-errores` | La función lanza una excepción | El fallo evidente |
 | `jupiter-pipeline-sin-ejecuciones` | No hay ninguna invocación en 24 h | **El fallo silencioso**: si el disparador deja de funcionar no hay ningún error que contar, y el hueco en los datos se descubriría semanas después |
+| `jupiter-web-5xx` | 5 o más respuestas 5xx en 5 min | API, agente o proxy rotos. Si el agente cae, `api-usuario` responde 503: cubre también el chat caído |
+| `jupiter-bedrock-errores` | 3 o más errores de cliente o llamadas limitadas en 15 min | Modelo retirado, cuota agotada o permisos |
+| `jupiter-bedrock-tokens-dia` | Más de `UmbralTokensDia` tokens de entrada en 24 h | Freno de coste: un bucle o la web abierta al mundo |
+| `jupiter-ec2-status` | La EC2 falla sus comprobaciones de estado 10 min | Máquina rota |
+| `jupiter-ec2-creditos-cpu` | Menos de 20 créditos de CPU | La EC2 está en modo `unlimited`: no se frena, pero empieza a pagar CPU extra |
+| `jupiter-ec2-memoria` | Memoria > 90 % durante 10 min | Cinco contenedores en 4 GB |
+| `jupiter-ec2-disco` | Disco `/` > 85 % | Imágenes, logs locales y trazas de Phoenix, que no se purgan con la EC2 apagada |
+| `jupiter-rds-espacio` | Menos de 2 GB libres en la RDS | La RDS tiene autoescalado de disco: antes de llenarse crece, y cuesta más |
 
-Ambas avisan por correo a través del tema SNS `jupiter-alertas`.
+- Las ocho de la pila usan `notBreaching`: con la EC2 o la RDS apagadas no hay datos y eso no es
+  un fallo. Solo `jupiter-pipeline-sin-ejecuciones` trata la falta de datos como fallo, a propósito.
+- **Bedrock se mide para toda la cuenta**, no por aplicación: las evaluaciones de modelos del equipo
+  también cuentan para los errores y los tokens.
+- **Umbral de tokens**: parámetro `UmbralTokensDia` de la plantilla, provisional en 2 M (el día con
+  más consumo medido fueron 1,23 M, en una campaña de evaluación). Cambiarlo no toca nada más: los
+  parámetros que no se pasan conservan su valor.
+
+  ```powershell
+  aws cloudformation deploy --template-file deploy/cloudwatch/observabilidad.yaml --stack-name jupiter-observabilidad --parameter-overrides UmbralTokensDia=<tokens>
+  ```
+
+**Filtros de métricas** sobre el log de acceso de nginx (namespace `Jupiter`, sin dimensiones):
+
+| Métrica | Filtro |
+|---|---|
+| `Peticiones5xx` | `{ $.status >= 500 }` |
+| `Peticiones4xx` | `{ $.status >= 400 && $.status < 500 && $.status != 401 }`: sin 401, que con la contraseña piden los robots y el primer acceso de cada navegador |
+| `TiempoRespuestaChat` | `{ $.uri = "/api/chat*" && $.status = 200 }`, valor `request_time`. En el streaming es el tiempo hasta el último evento |
+
+**Panel [`jupiter`](https://eu-west-1.console.aws.amazon.com/cloudwatch/home?region=eu-west-1#dashboards/dashboard/jupiter)** (la URL sale también en las salidas de la pila): Bedrock por modelo (invocaciones,
+latencia, tokens y errores), borde HTTP (4xx/5xx, tiempo de `/api/chat` y el estado de las diez
+alarmas), máquina (CPU, créditos, memoria y disco) y datos (ejecuciones de la Lambda, CPU,
+conexiones y espacio de la RDS). El detalle de cada pregunta al asistente está en `/phoenix/`.
+
+**Probar una alarma.** Lo más rápido comprueba que llega el correo (la alarma vuelve sola a su
+estado en el siguiente periodo):
+
+```powershell
+aws cloudwatch set-alarm-state --alarm-name jupiter-web-5xx --state-value ALARM --state-reason "Prueba"
+```
+
+La prueba completa fuerza la condición real: con la EC2 encendida, parar el agente por Session
+Manager (`cd /opt/jupiter && docker compose --env-file versiones.env -f compose.yml stop agente`),
+hacer cinco preguntas en el chat (503) y esperar el correo de `jupiter-web-5xx` en unos 5-10 min.
+Después, `... start agente` o apagar y encender.
 
 ## Coste
 
