@@ -266,6 +266,7 @@ Con cargas también de día, **la RDS está siempre encendida** (desde el 2026-1
 programaciones `jupiter-rds-encender` (22:00) y `jupiter-rds-apagar` (01:30) quedan
 **desactivadas**, no borradas: se pueden reactivar si se vuelve a una sola carga nocturna.
 «Apagar entorno» apaga solo la EC2; «Encender entorno» enciende la RDS si la encuentra parada.
+Para la entrega, también la EC2 se queda encendida: `jupiter-ec2-apagar` está desactivada.
 
 Ventanas de RDS (solo admite UTC): copias **21:10–21:40 UTC** y mantenimiento **domingo
 22:00–22:30 UTC**; ninguna coincide con una carga, ni en verano ni en invierno.
@@ -481,7 +482,8 @@ Con credenciales de AWS en la sesión y desde la raíz del repositorio:
    `aws ssm put-parameter --name /jupiter/agente/database_url --type SecureString --value "postgresql://agente_lectura:<clave>@<endpoint>:5432/postgres"`.
    Se puede hacer también después: sin él, el chat funciona salvo las preguntas de datos.
 4. **`pwsh deploy/aws/2_crear_ec2.ps1`**: crea la EC2 (comprueba antes que estén las 4 versiones) y
-   su apagado a la 01:30 (`jupiter-ec2-apagar`, con el rol `jupiter-scheduler-ec2`). Al crearse
+   su apagado a la 01:30 (`jupiter-ec2-apagar`, con el rol `jupiter-scheduler-ec2`; **desactivado
+   desde el 2026-10-23** para la entrega, y volver a ejecutar el script lo reactiva). Al crearse
    instala Docker y levanta la aplicación; el script muestra su dirección.
 
 Para cambiar de modelo: `aws ssm put-parameter --name /jupiter/agente/llm_modelo --overwrite --value <id>`
