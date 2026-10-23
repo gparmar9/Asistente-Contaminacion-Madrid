@@ -6,6 +6,7 @@
 #
 # Todo sale de AWS con el rol de la máquina, sin claves en disco más allá de este script:
 #   s3://jupiter-calidad-aire-madrid/ec2/compose.yml   compose de producción (del repositorio)
+#   s3://jupiter-calidad-aire-madrid/ec2/jupiter.service  servicio de systemd
 #   SSM /jupiter/versiones/<servicio>                 qué imagen está activa (tag = commit)
 #   SSM /jupiter/database_url                         cadena de conexión a RDS de la API (cifrada)
 #   SSM /jupiter/agente/<variable>                    configuración del agente (opcional): cada
@@ -57,6 +58,15 @@ cd "$DIR"
 log "Descargando compose.yml de s3://$BUCKET/ec2/"
 aws s3 cp "s3://$BUCKET/ec2/compose.yml" compose.yml --only-show-errors
 
+# Actualiza jupiter.service desde S3 para el próximo arranque, sin recrear la EC2.
+aws s3 cp "s3://$BUCKET/ec2/jupiter.service" jupiter.service.tmp --only-show-errors
+if ! cmp -s jupiter.service.tmp /etc/systemd/system/jupiter.service; then
+    install -m 644 jupiter.service.tmp /etc/systemd/system/jupiter.service
+    systemctl daemon-reload
+    log "jupiter.service actualizado desde S3"
+fi
+rm -f jupiter.service.tmp
+
 log "Leyendo versiones de SSM"
 CUENTA=$(aws sts get-caller-identity --query Account --output text)
 REGISTRO="$CUENTA.dkr.ecr.$REGION.amazonaws.com"
@@ -104,6 +114,13 @@ fi
 # Phoenix guarda preguntas de usuarios: exige contraseña incluso desde 127.0.0.1.
 # Siempre se crean los ficheros que monta compose. Si no existe el parámetro de contraseña,
 # los de la web quedan vacíos y Phoenix devuelve 403. Cualquier otro error detiene el arranque.
+# Elimina los directorios que Docker creó al faltar estos ficheros: impiden arrancar web.
+for f in web.htpasswd web-acceso.conf phoenix-acceso.conf; do
+    if [ -d "$f" ]; then
+        log "$f es un directorio (lo creó Docker en un arranque fallido): se elimina"
+        rm -rf "$f"
+    fi
+done
 if CONTRASENA=$(aws ssm get-parameter --name /jupiter/web/contrasena --with-decryption \
                     --query Parameter.Value --output text 2>&1); then
     # En el disco solo queda el hash. Por stdin: la contraseña no aparece en la lista de procesos.

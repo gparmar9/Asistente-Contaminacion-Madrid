@@ -1548,7 +1548,10 @@ la enciende a mano para trabajar o hacer una demo.
   con IMDSv2 y 2 saltos: el contenedor del agente necesita llegar a las credenciales del rol.
   Apagado a la 01:30 con el destino universal de EventBridge Scheduler (`ec2:StopInstances`).
 - **Ficheros de arranque por S3** (`s3://…/ec2/`): lo que corre en la máquina sale del repositorio
-  y el despliegue lo puede actualizar, sin acceder a la máquina.
+  y el despliegue lo puede actualizar, sin acceder a la máquina. En cada arranque la EC2 trae de S3
+  `compose.yml`, `arrancar.sh` (lo descarga el propio servicio de systemd antes de ejecutarlo) y
+  `jupiter.service` (lo reinstala `arrancar.sh` si cambió): los tres salen siempre del mismo commit,
+  aunque se desplegara con la máquina apagada.
 - **Seguridad:** solo `web` (nginx: SPA y proxy de `/api/*`) publica puerto, el 80, abierto solo a
   las IP del equipo (la API no tiene autenticación y cada pregunta al chat cuesta dinero). Desde el
   2026-10-21, **usuario y contraseña opcionales** (autenticación básica de nginx, contraseña cifrada en SSM
@@ -1594,6 +1597,14 @@ la enciende a mano para trabajar o hacer una demo.
   solo autoriza la ruta `parameter/jupiter/agente`: la consulta fallaba y el servicio no levantaba.
   El workflow solo mostraba `failed`; ahora «Encender entorno» imprime el log del servicio si no
   arranca. La simulación local no lo detectó porque el `aws` simulado no comprueba permisos.
+- **Arranque fallido tras llevar Phoenix a la EC2** (2026-10-23): se desplegó `web` con la EC2
+  apagada y al encenderla `web` no arrancaba (dos ejecuciones de «Encender entorno» en rojo). La
+  máquina descargaba de S3 el `compose.yml` nuevo, que monta `phoenix-acceso.conf`, pero ejecutaba
+  el `arrancar.sh` antiguo de su disco, que no lo genera. Docker crea un directorio vacío en la ruta
+  de un montaje que no existe, y montarlo sobre un fichero de nginx falla. Corregido: el servicio
+  trae `arrancar.sh` de S3 antes de ejecutarlo y `arrancar.sh` reinstala `jupiter.service` si cambió
+  y borra esos directorios si los encuentra. «Encender entorno» reintenta el arranque una vez si
+  falla: antes, con la EC2 ya encendida, relanzarlo solo volvía a mostrar el error anterior.
 - **Probado sin AWS:** `arrancar.sh` se ejecutó en local con `aws` y `docker` simulados (todo, un
   solo servicio, `api-usuario` con reinicio de `web`, sin configuración del agente, servicio
   inválido y versión ausente) y `docker compose config` valida el compose de producción. En la
@@ -1762,6 +1773,12 @@ la enciende a mano para trabajar o hacer una demo.
   AWS aceptó la política sin avisar; se detectó revisando la documentación antes del primer
   despliegue y se corrigió a `sub` (2026-09-27). Lección: una *trust policy* válida
   sintácticamente no es una *trust policy* que funcione.
+- **Lo que se despliega junto tiene que llegar junto** (2026-10-23). `compose.yml` se descargaba de
+  S3 en cada arranque, pero `arrancar.sh` y `jupiter.service` solo cuando la EC2 estaba encendida
+  al desplegar. Un despliegue con la máquina apagada dejó un compose nuevo con un script viejo, y
+  `web` no arrancó (§8.9). Además, Docker convierte un montaje de un fichero que no existe en un
+  directorio y deja el error para el siguiente arranque. Lección: todos los ficheros de una versión
+  se actualizan por el mismo camino.
 - **Hora local y UTC en la misma planificación** (2026-10-01). El primer horario propuesto para
   encender la RDS (una hora por la noche) era correcto en hora de Madrid, pero las ventanas de copias
   y mantenimiento de RDS solo admiten UTC: con el cambio de hora de octubre la franja encendida se
@@ -2082,6 +2099,7 @@ la enciende a mano para trabajar o hacer una demo.
 | 2026-10-21 | **Usuario y contraseña en la web** (Guille con Claude Code, rama `feature/web-contrasena`): para la demo, que presentan compañeros desde redes cuya IP no se conoce. `arrancar.sh` lee la contraseña de SSM, calcula su hash y genera la configuración de nginx y `compose.yml` la monta en `web`, sin reconstruir la imagen. Probado en local: `arrancar.sh` con `aws` simulado (con contraseña, sin parámetro y con permiso denegado, que detiene el arranque; la contraseña en claro no queda en ningún fichero) y nginx real con el `nginx.conf` de la web (401 sin credenciales o con una errónea, 200 con la buena, también en `/api/*`, healthcheck interno sano; sin parámetro, 200 como antes). Aplicado en AWS el mismo día: permiso de lectura del parámetro en el rol de la EC2, puerto 80 abierto a todo internet y «Desplegar → `web`» con la EC2 encendida (el log muestra «Web protegida»). Desde una IP fuera de la lista del equipo: 401 en la web, `/api/*` y `/api/chat` sin credenciales o con una errónea; con ellas, 24 estaciones, datos de NO₂ hasta el día de la prueba, una pregunta de datos por SQL (7,2 s) y una documental con citas `[Dn]` (23,4 s) |
 | 2026-10-23 | **Phoenix detrás de la web, en local** (Carlos con Claude Code, rama `feature/phoenix-prefijo`): primer paso para llevar Phoenix a la EC2 bajo `/phoenix`, detrás del nginx de la web y con su contraseña. Antes, medición en la EC2: 1279 MB usados de 3835 con los cuatro contenedores y el modelo del RAG cargado (562 MB en reposo), y Phoenix 20.19.0 ocupa unos 450-500 MB en reposo: cabe sin cambiar de instancia. El `nginx.conf` de la web resuelve los nombres en cada petición (DNS de Docker y destinos en variables): `web` arranca sin Phoenix (502 en `/phoenix`) y deja de depender de la IP de `api-usuario`. `/phoenix` tiene su propio fichero de acceso, abierto en local; en la EC2 exigirá la contraseña siempre. Log de acceso en JSON, preparado para CloudWatch. Probado con la imagen real, un `api-usuario` simulado y Phoenix: rutas de `/api` (con query y caracteres codificados), estáticos, GraphQL y una traza por la red interna; con contraseña, 401 sin credenciales o con una errónea y 200 con la buena; sin contraseña, 403 en `/phoenix` y la web abierta. La retención de 30 días de Phoenix purga los domingos a las 00:00 UTC, con la EC2 apagada: se acepta que las trazas crezcan |
 | 2026-10-23 | **Phoenix en la EC2** (Carlos con Claude Code, rama `feature/phoenix-prefijo`): `phoenix` pasa a ser el quinto contenedor del compose de producción, con imagen pública fijada (`20.19.0`), volumen propio y healthcheck con el Python de la imagen (no trae `curl` ni `wget`). `arrancar.sh` genera el acceso a `/phoenix/` (contraseña de la web siempre o 403 sin ella), no busca versión de Phoenix en SSM y deja de reiniciar `web` al redesplegar `api-usuario`. Hallazgo: al relanzar `web` con la misma imagen, compose no recrea el contenedor aunque cambien los ficheros de acceso que monta, así que poner o quitar la contraseña no se aplicaba hasta el siguiente encendido; ahora `arrancar.sh` recarga nginx cuando actualiza `web`. «Desplegar» gana el componente `phoenix`, sin tests ni build. Probado sin AWS: `arrancar.sh` con `aws` y `docker` simulados en seis casos (nunca pide la versión de Phoenix; con permiso denegado se detiene sin generar el acceso) y Phoenix real levantado con el compose de producción (sano en 16 s) detrás de nginx con los ficheros generados: con contraseña, 401 sin credenciales o con una errónea, 200 con la buena y 401 desde la propia máquina; estáticos y GraphQL con prefijo; una traza enviada a `http://phoenix:6006/v1/traces` aparece en su proyecto; sin contraseña, 403 en `/phoenix/` y la web abierta. Pendiente de aplicar en AWS |
+| 2026-10-23 | **Arreglo del arranque de la EC2** (Carlos con Claude Code, rama `fix/arranque-ec2`): dos ejecuciones de «Encender entorno» fallaron porque la EC2 ejecutaba el `arrancar.sh` de su disco, anterior a Phoenix, con el `compose.yml` nuevo de S3 (§8.9). `jupiter.service` trae ahora `arrancar.sh` de S3 antes de ejecutarlo; `arrancar.sh` reinstala `jupiter.service` si cambió y borra los directorios que Docker crea en lugar de los ficheros de acceso; «Encender entorno» reintenta el arranque una vez. Sintaxis de `arrancar.sh` y del comando del workflow comprobada con `bash -n`, y `arrancar.sh` probado con `aws`, `docker` y `systemctl` simulados y el fichero de acceso convertido en directorio. EC2 recuperada a mano por SSM el mismo día (borrar el directorio, `arrancar.sh` y `jupiter.service` de S3, reiniciar el servicio): cinco contenedores sanos y 401 sin credenciales en `/`, `/api/health` y `/phoenix/`. `[por confirmar: encendido tras desplegar con la máquina apagada, con el arreglo ya en S3]` |
 
 ---
 
