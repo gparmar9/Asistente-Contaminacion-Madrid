@@ -1,6 +1,6 @@
 """Exporta el esquema OpenAPI de `ApiUsuario` a `Web/openapi.json`.
 
-Es la única fuente de los tipos del frontend: `npm run generar:tipos` convierte
+Es la única fuente de los tipos del frontend: `npm run contrato:tipos` convierte
 este JSON en `src/api/schema.d.ts` con openapi-typescript. Así un cambio de
 contrato en el backend se detecta al compilar, no en producción.
 

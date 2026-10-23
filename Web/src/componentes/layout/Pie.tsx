@@ -1,3 +1,5 @@
+import { Link } from 'react-router-dom'
+
 import { useSalud } from '../../api/consultas'
 
 export function Pie() {
@@ -15,8 +17,11 @@ export function Pie() {
           Trabajo Fin de Máster · Datos abiertos del Ayuntamiento de Madrid · Demo académica, no es consejo médico ni
           un aviso oficial.
         </span>
-        <span className="tabular" aria-live="polite">
-          API: {estadoApi}
+        <span className="pie-enlaces">
+          <Link to="/admin/uso">Administración</Link>
+          <span className="tabular" aria-live="polite">
+            API: {estadoApi}
+          </span>
         </span>
       </div>
     </footer>

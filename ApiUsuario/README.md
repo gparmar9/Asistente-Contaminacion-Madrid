@@ -17,6 +17,7 @@ solo se reenvía.
 | POST | `/chat` | Respuesta del asistente. Sin `AGENTE_URL` ni `ORCHESTRATOR_URL`, responde un stub con el mismo contrato |
 | POST | `/chat/stream` | La misma respuesta como Server-Sent Events (ver abajo) |
 | POST | `/chat/valoracion` | 👍/👎 sobre una respuesta: `{session_id, traza_id, span_id, valor: positiva\|negativa}` → 204. Se reenvía al agente, que la anota en Phoenix. Sin `AGENTE_URL`, 404; si el agente no la guarda, 503 |
+| GET | `/kpis?dias=7` | KPIs de uso del asistente de los últimos 1, 7 o 30 días: se reenvían del agente, que los calcula con los spans de Phoenix (contrato en `entities/kpis.py`, copia del del agente; solo agregados, sin texto de usuarios). Sin comprobación de permisos: la web los muestra bajo el rótulo «Solo administradores», pero no hay gestión de usuarios. Sin `AGENTE_URL`, 404; agente o Phoenix caídos, 503; respuesta fuera de contrato, 502 |
 
 Documentación interactiva en `/docs` (OpenAPI autogenerada).
 

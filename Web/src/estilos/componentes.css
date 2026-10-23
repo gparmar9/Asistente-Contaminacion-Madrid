@@ -128,6 +128,16 @@
   color: var(--apagado);
 }
 
+.pie-enlaces {
+  display: inline-flex;
+  gap: var(--e-4);
+  flex-wrap: wrap;
+}
+
+.pie a {
+  color: inherit;
+}
+
 /* ---------- Tarjeta ---------- */
 .tarjeta {
   background: var(--superficie);
@@ -1154,6 +1164,129 @@ th[aria-sort] .tabla-orden {
     right: 12px;
     bottom: 12px;
   }
+}
+
+/* ---------- Uso del asistente (/admin/uso) ---------- */
+.etiqueta-admin {
+  align-self: flex-start;
+  border-color: var(--warning);
+  color: var(--tinta-1);
+  font-weight: 600;
+}
+
+.barras-titulo {
+  font-size: var(--t-s);
+  font-weight: 600;
+  color: var(--tinta-2);
+  margin-bottom: var(--e-2);
+}
+
+.barras ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 6px;
+}
+
+.barras-fila {
+  display: grid;
+  grid-template-columns: minmax(90px, 9rem) 1fr auto;
+  align-items: center;
+  gap: var(--e-2);
+  font-size: var(--t-s);
+}
+
+.barras-etiqueta {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.barras-pista {
+  height: 10px;
+  border-radius: var(--radio-xs);
+  background: var(--dato-suave);
+  overflow: hidden;
+}
+
+.barras-pista > i {
+  display: block;
+  height: 100%;
+  background: var(--dato);
+}
+
+.barras-valor {
+  color: var(--tinta-2);
+  white-space: nowrap;
+}
+
+.histograma-barras {
+  position: relative;
+  display: flex;
+  align-items: flex-end;
+  gap: 2px;
+  height: 160px;
+  border-bottom: 1px solid var(--linea-base);
+}
+
+.histograma-cubo {
+  flex: 1;
+  height: 100%;
+  display: flex;
+  align-items: flex-end;
+}
+
+.histograma-cubo > i {
+  display: block;
+  width: 100%;
+  min-height: 1px;
+  background: var(--dato);
+  border-radius: var(--radio-xs) var(--radio-xs) 0 0;
+}
+
+.histograma-marca {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  border-left: 2px dashed var(--tinta-1);
+  pointer-events: none;
+}
+
+.histograma-marca > span {
+  position: absolute;
+  top: 0;
+  left: 4px;
+  font-size: var(--t-xs);
+  font-weight: 600;
+  color: var(--tinta-1);
+  background: var(--superficie);
+  padding: 0 2px;
+}
+
+.histograma-eje {
+  display: flex;
+  justify-content: space-between;
+  font-size: var(--t-xs);
+  color: var(--apagado);
+  margin-top: 4px;
+}
+
+.datos-clave {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: var(--e-3);
+  margin: 0;
+}
+
+.datos-clave dt {
+  font-size: var(--t-xs);
+  color: var(--apagado);
+}
+
+.datos-clave dd {
+  margin: 0;
+  font-weight: 600;
 }
 
 /* ---------- Mapa de estaciones (Leaflet) ---------- */

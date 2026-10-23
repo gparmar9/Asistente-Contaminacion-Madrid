@@ -6,6 +6,7 @@ from fastapi import FastAPI
 from api_usuario.api.routers.chat import router as chat_router
 from api_usuario.api.routers.estaciones import router as estaciones_router
 from api_usuario.api.routers.health import router as health_router
+from api_usuario.api.routers.kpis import router as kpis_router
 from api_usuario.config.settings import get_settings
 
 logger = logging.getLogger("api_usuario")
@@ -32,4 +33,5 @@ app = FastAPI(
 app.include_router(health_router)
 app.include_router(estaciones_router)
 app.include_router(chat_router)
+app.include_router(kpis_router)
 

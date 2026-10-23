@@ -17,6 +17,7 @@ Decisiones de diseño, alternativas descartadas y estado por fases:
 | POST | `/responder` | `{pregunta, session_id?}` → `{respuesta, fuentes[{tipo, referencia}], advertencia, traza_id, span_id, session_id}` (mismo contrato que reenvía `ApiUsuario` desde `/chat`; `traza_id` sirve para buscar el turno en las trazas y `span_id` es el span `turno`, el que recibe la valoración) |
 | POST | `/responder/stream` | La misma entrada; respuesta en Server-Sent Events (ver abajo). `ApiUsuario` la reenvía desde `/chat/stream` |
 | POST | `/valoracion` | `{session_id, traza_id, span_id, valor: positiva\|negativa}` → 204. Anotación `valoracion_usuario` (`HUMAN`, *score* 1/0) en Phoenix sobre el span `turno`; un segundo voto de la sesión al mismo turno lo sustituye. Sin Phoenix, 503 (no se reintenta). `ApiUsuario` la reenvía desde `/chat/valoracion` |
+| GET | `/kpis?dias=7` | KPIs de uso de los últimos 1, 7 o 30 días, calculados con los spans de Phoenix (ver [KPIs de uso](#kpis-de-uso-del-asistente-desplegado)). Sin Phoenix, 503. `ApiUsuario` lo reenvía desde `/kpis` |
 
 Documentación interactiva en `/docs`.
 
@@ -206,7 +207,7 @@ disponible) quedan como eventos `decision` en el span en curso. Los tokens que n
 proveedor no aparecen (nunca valen cero). En el stream, el primer texto que sale hacia el
 cliente deja el evento `primer_token` en el span `turno` (latencia percibida en el chat). Todos los
 spans del turno llevan `session.id`: Phoenix agrupa los turnos de una conversación en su vista de
-sesiones. La raíz de Phoenix para anotar la valoración se deduce de `PHOENIX_ENDPOINT`.
+sesiones. La raíz de Phoenix para anotar la valoración y leer los KPIs se deduce de `PHOENIX_ENDPOINT`.
 
 | Variable | Por defecto | Para qué |
 |-|-|-|
@@ -259,21 +260,22 @@ su coste. Lleva la pregunta y la respuesta de cada turno (no los mensajes al LLM
 las trazas, fuera de git. El `.json` es el conjunto de datos que dibuja la página; una futura web
 de análisis podría servirlo desde un endpoint y reutilizar la plantilla.
 
-KPIs de uso del sistema desplegado, leídos de Phoenix por su API REST (`evaluacion/kpis_phoenix.py`,
-solo `httpx`): preguntas por día, intención, ruta, tema y resultado del turno, tasa de resolución,
-bloqueos, coste por pregunta (P50, P90 y por pregunta resuelta), latencia por ruta, tiempo hasta el
-primer token y fallos de herramienta por causa; sesiones y reformulación cuando los spans lleven
-`session.id`; satisfacción por ruta y tema con las anotaciones `valoracion_usuario` (👍/👎, solo
-desde Phoenix). La salida no lleva preguntas ni respuestas y se puede versionar en
-`evaluacion/resultados/`. Con `.md`, las tres figuras (embudo, coste y satisfacción) se escriben
-como SVG al lado.
+### KPIs de uso del asistente desplegado
+
+`GET /kpis` lee los spans del proyecto con la API REST de Phoenix (`datos/phoenix.py`, con `httpx`)
+y los calcula en `business/kpis.py`: preguntas por día; intención, ruta, tema y resultado del turno;
+tasa de resolución; bloqueos por regla; reparaciones y respuestas forzadas por el código; coste por
+pregunta (P50, P90, por pregunta resuelta y la lista para el histograma); latencia y primer token
+por ruta; fallos de herramienta por causa; sesiones y reformulación tras un rechazo (`session.id`);
+satisfacción por ruta y tema (anotaciones `valoracion_usuario`). Los turnos, el coste y la tabla de
+precios son los de `business/trazas.py`, los mismos que usa `informe_trazas.py`.
+
+La respuesta solo lleva agregados y recuentos con su *n* (contrato en `entities/kpis.py`): ni
+preguntas, ni respuestas, ni mensajes de error. Se guarda 60 s por periodo para no releer Phoenix
+en cada recarga. Es lo que mostrará la página de administración de la web (`/admin/uso`).
 
 ```bash
-# EC2: nginx protege /phoenix/ con la contraseña de la web (en PHOENIX_CONTRASENA, o la pide)
-.venv/bin/python evaluacion/kpis_phoenix.py --phoenix http://<ip>/phoenix --desde 2026-10-23 \
-    --salida evaluacion/resultados/kpis_20261023.md
-.venv/bin/python evaluacion/kpis_phoenix.py --phoenix http://localhost:6006 --usuario "" --detalle  # local
-.venv/bin/python evaluacion/kpis_phoenix.py --jsonl trazas/*.jsonl --salida kpis.html               # sin Phoenix
+curl -s 'localhost:8200/kpis?dias=30' | python -m json.tool   # con PHOENIX_ENDPOINT en .env
 ```
 
 ## Tests

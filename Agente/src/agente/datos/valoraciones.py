@@ -9,16 +9,12 @@ import logging
 
 import httpx
 
+from agente.datos.phoenix import VALORACION, PhoenixNoDisponible
 from agente.entities.chat import Valoracion
 
 logger = logging.getLogger("agente.valoraciones")
 
-NOMBRE = "valoracion_usuario"
 PUNTUACION = {"positiva": 1, "negativa": 0}
-
-
-class PhoenixNoDisponible(RuntimeError):
-    """Phoenix no respondió o rechazó la anotación."""
 
 
 class AnotadorPhoenix:
@@ -31,7 +27,7 @@ class AnotadorPhoenix:
     async def anotar(self, valoracion: Valoracion) -> None:
         anotacion = {
             "span_id": valoracion.span_id,
-            "name": NOMBRE,
+            "name": VALORACION,
             "annotator_kind": "HUMAN",
             "result": {"label": valoracion.valor, "score": PUNTUACION[valoracion.valor]},
             "identifier": valoracion.session_id,
