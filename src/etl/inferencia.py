@@ -41,8 +41,9 @@ def puntuar(bloques_feat: pd.DataFrame, bundle: dict) -> pd.DataFrame:
     return df
 
 
-def detectar(largo: pd.DataFrame, baseline: pd.DataFrame, bundle: dict) -> pd.DataFrame:
+def detectar(largo: pd.DataFrame, baseline: pd.DataFrame, bundle: dict,
+             horas_por_bloque: dict | None = None) -> pd.DataFrame:
     """Pipeline completo: horario válido -> bloques -> features -> puntuación."""
-    bloques = a_bloques(largo)
+    bloques = a_bloques(largo, horas_por_bloque)
     feat = anadir_features(bloques, baseline)
     return puntuar(feat, bundle)

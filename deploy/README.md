@@ -34,11 +34,11 @@ apagado a demanda en [`encender_entorno.yml`](../.github/workflows/encender_ento
 | Servicio | Nombre | Para qué |
 |---|---|---|
 | **S3** | `jupiter-calidad-aire-madrid` | Modelo entrenado, histórico y parquet |
-| **RDS PostgreSQL** | `jupiter-postgres` | La base de datos del proyecto (`db.t4g.micro`). Encendida solo de noche y a demanda |
+| **RDS PostgreSQL** | `jupiter-postgres` | La base de datos del proyecto (`db.t4g.micro`). Siempre encendida |
 | **ECR** | `jupiter-pipeline` | Registro de la imagen de la función |
 | **Lambda** | `jupiter-pipeline` | Ejecuta el pipeline (imagen, x86_64, 1024 MB, timeout 300 s) |
-| **EventBridge Scheduler** | `jupiter-pipeline-diario` | Lo dispara a las 23:45 (`Europe/Madrid`) |
-| **EventBridge Scheduler** | `jupiter-rds-encender` / `jupiter-rds-apagar` | Enciende la RDS a las 22:00 y la apaga a la 01:30 (`Europe/Madrid`) |
+| **EventBridge Scheduler** | `jupiter-pipeline-diario` | Lo dispara al cierre de cada franja: 07:45, 13:45, 20:45 y 23:45 (`Europe/Madrid`) |
+| **EventBridge Scheduler** | `jupiter-rds-encender` / `jupiter-rds-apagar` | **Desactivadas** desde el 2026-10-23: encendían la RDS a las 22:00 y la apagaban a la 01:30 |
 | **Systems Manager Automation** | `AWS-StartRdsInstance` / `AWS-StopRdsInstance` | Runbooks de AWS que encienden o apagan la RDS solo si hace falta |
 | **SSM Parameter Store** | `/jupiter/database_url` | La cadena de conexión, cifrada |
 | **CloudWatch + SNS** | `jupiter-alertas` | Logs, métricas de negocio del pipeline (`Jupiter/Pipeline`) y avisos por correo |
@@ -47,7 +47,7 @@ apagado a demanda en [`encender_entorno.yml`](../.github/workflows/encender_ento
 Flujo de una ejecución:
 
 ```
-Scheduler (23:45) ──▶ Lambda ──▶ API de Madrid
+Scheduler (cierre de franja) ──▶ Lambda ──▶ API de Madrid
                         │  ├─ lee el secreto de SSM
                         │  └─ descarga el modelo de S3 (lo cachea en /tmp)
                         └──▶ RDS: calidad_aire_horas_live + resumen_datos_ml
@@ -235,41 +235,45 @@ versiones que apunten a ellas dejarán de poder recuperarse.
 
 Deshacer un rollback es otro rollback (a la versión que se retiró) o un despliegue nuevo.
 
-## Encendido y apagado de la base de datos
+## Horario de las cargas
 
-La RDS **solo está encendida cuando hace falta**. Parada solo se paga el disco, no la instancia.
+La Lambda carga **al cierre de cada franja**, cuando la API ya ha publicado su última hora (la API
+publica cada hora con menos de 45 min de retraso). Una sola programación,
+`cron(45 7,13,20,23 * * ? *)` en `Europe/Madrid`:
 
-| Hora (Madrid) | Qué pasa |
-|---|---|
-| 22:00 | `jupiter-rds-encender` enciende la RDS |
-| 23:45 | `jupiter-pipeline-diario` lanza la carga (la Lambda) |
-| 01:30 | `jupiter-rds-apagar` la apaga, **también si alguien la encendió a mano y se olvidó** |
+| Hora (Madrid) | Franja que se cierra | Última hora publicada |
+|---|---|---|
+| 07:45 | madrugada (0–6 h) | 6 |
+| 13:45 | mañana (7–12 h) | 12 |
+| 20:45 | tarde (13–19 h) | 19 |
+| 23:45 | noche (20–23 h) | 22: la hora 23 no llega nunca |
 
-**Para trabajar o hacer una demo de día:** **Actions → Encender entorno → Run workflow**. Si ya está
-encendida, termina bien sin hacer nada; si está parada, la enciende y espera a que esté lista
-(unos minutos).
+Cada ejecución recalcula **todos los bloques cerrados del día** con lo que la API haya publicado y
+**no escribe los que siguen abiertos**: un bloque a medias tiene poca cobertura y el detector lo
+marcaría como anomalía. Si una hora llega tarde, la carga siguiente la incorpora. El bloque de
+noche se mide sobre las 3 horas que la API publica (20–22): con la cobertura sobre 4, el detector
+lo marcaba unas 20 veces más que en el histórico (ver la §6.5 bis de las notas de la memoria).
 
-**Al terminar:** **Actions → Apagar entorno → Run workflow** para no pagar horas de más. Es
-opcional, porque se apaga sola a la 01:30. Si ya está apagada, no hace nada; si se está
-encendiendo, espera a que esté lista y la apaga. **Entre las 22:00 y las 00:00 se niega a
-apagarla**, porque la carga de las 23:45 la necesita encendida.
-
-Cómo está montado:
-
-- Las programaciones no llaman a RDS directamente: lanzan los runbooks de AWS
-  `AWS-StartRdsInstance` / `AWS-StopRdsInstance`, que **primero consultan el estado** y no hacen
-  nada si la base ya está como se pide. Así no hay errores si alguien la encendió o apagó antes.
-- Pocos reintentos (3, como mucho durante 30 min): un fallo de noche no debe acabar encendiéndola
-  por la mañana.
-- Las ventanas de RDS están dentro de la franja encendida, en verano y en invierno: copias
-  **21:10–21:40 UTC** y mantenimiento **domingo 22:00–22:30 UTC**. RDS solo admite UTC; por eso la
-  franja encendida es de 3,5 h y no de una (ver la §8.8 de las notas de la memoria).
-
-Ver qué ha hecho cada noche:
+Para rehacer los bloques ya guardados (p. ej., tras cambiar cómo se calculan), sin llamar a la API:
 
 ```powershell
-# Últimas ejecuciones de los runbooks (encender/apagar) y su resultado
-aws ssm describe-automation-executions --filters Key=DocumentNamePrefix,Values=AWS-StartRdsInstance,AWS-StopRdsInstance --max-results 6 --query "AutomationExecutionMetadataList[].[DocumentName,AutomationExecutionStatus,ExecutionStartTime]" --output table
+python src/etl/pipeline_tiempo_real.py --reprocesar 2026-09-16   # usa DATABASE_URL del .env
+```
+
+## Base de datos siempre encendida
+
+Con cargas también de día, **la RDS está siempre encendida** (desde el 2026-10-23). Las
+programaciones `jupiter-rds-encender` (22:00) y `jupiter-rds-apagar` (01:30) quedan
+**desactivadas**, no borradas: se pueden reactivar si se vuelve a una sola carga nocturna.
+«Apagar entorno» apaga solo la EC2; «Encender entorno» enciende la RDS si la encuentra parada.
+
+Ventanas de RDS (solo admite UTC): copias **21:10–21:40 UTC** y mantenimiento **domingo
+22:00–22:30 UTC**; ninguna coincide con una carga, ni en verano ni en invierno.
+
+```powershell
+# Estado de las programaciones de la RDS (deben estar DISABLED)
+aws scheduler get-schedule --name jupiter-rds-apagar --query State --output text
+aws scheduler get-schedule --name jupiter-rds-encender --query State --output text
 
 # Estado actual de la base de datos
 aws rds describe-db-instances --db-instance-identifier jupiter-postgres --query "DBInstances[0].DBInstanceStatus" --output text
@@ -453,7 +457,7 @@ Todo se hace con los mismos workflows que la Lambda; nadie entra en la máquina.
 | **Desplegar** → `phoenix` | Sin tests ni build: publica `ec2/` en S3 y, si la EC2 está encendida, recrea solo `phoenix` con la versión de `compose.yml` |
 | **Rollback** → mismo componente | Sin versión: tabla de imágenes en ECR, la activa y el historial de cambios. Con versión (commit corto) y motivo: la vuelve a activar sin reconstruir nada. No aplica a `phoenix` |
 | **Encender entorno** | Enciende la RDS y la EC2 a la vez, espera a que los servicios estén sanos y muestra la dirección de la web (la IP cambia en cada encendido). Si el arranque falla, muestra el log y lo reintenta una vez: con la EC2 ya encendida, relanzarlo tras corregir la causa vuelve a levantar la aplicación |
-| **Apagar entorno** | Apaga la EC2 y después la RDS. Entre las 22:00 y las 00:00 solo la EC2 (la RDS hace falta para la carga) |
+| **Apagar entorno** | Apaga solo la EC2: la RDS se queda siempre encendida para las cargas de cada franja |
 
 Los workflows localizan la máquina por su etiqueta `Name=jupiter-api` y le ejecutan comandos
 con *SSM Run Command* ([`.github/scripts/ec2.sh`](../.github/scripts/ec2.sh)). Los roles solo pueden
@@ -516,15 +520,13 @@ Get-Content "$env:TEMP\respuesta.json"
 # Estado de la programación
 aws scheduler get-schedule --name jupiter-pipeline-diario --query "{estado:State,expresion:ScheduleExpression,zona:ScheduleExpressionTimezone}"
 
-# Parar / arrancar la base de datos a mano (lo normal es el workflow "Encender entorno"
-# y dejar que la programación la apague a la 01:30)
-aws rds stop-db-instance  --db-instance-identifier jupiter-postgres
+# Arrancar la base de datos a mano si estuviera parada (o el workflow "Encender entorno")
 aws rds start-db-instance --db-instance-identifier jupiter-postgres
 ```
 
-> Si la base de datos está parada a las 23:45, **la ejecución de esa noche falla**. La
-> programación de las 22:00 lo evita; no desactives `jupiter-rds-encender` sin desactivar también
-> la carga.
+> Si la base de datos está parada, **las cargas fallan** y las franjas de ese rato se pierden (la
+> API solo sirve el día en curso). Nada la apaga ya de forma automática: si alguien la para a mano,
+> hay que volver a encenderla.
 
 ## Alarmas y panel
 
@@ -623,9 +625,10 @@ Después, `... start agente` o apagar y encender.
 
 ## Coste
 
-Prácticamente todo el coste es la instancia de RDS. Encendida 24 h eran unos **15,5 $/mes** sin
-capa gratuita; con el encendido programado (unas 3,5 h por noche más el uso a demanda) la
-estimación baja a **4–5 $/mes**, pendiente de confirmar con la factura. Lambda, S3, ECR,
+Prácticamente todo el coste es la instancia de RDS, que ahora está siempre encendida (la capa
+gratuita no aplica a la cuenta): ~12,4 $/mes de instancia, ~2,3 $ de disco y ~1 $ de copias
+`[estimación]`. Con el encendido programado de antes (3,5 h por noche) costaba 4,67 $ del 1 al 22
+de octubre. Las IPv4 públicas son el segundo gasto. Lambda, S3, ECR,
 EventBridge, SSM, CloudWatch y SNS caen dentro de capas gratuitas a este volumen. Detalle en [`docs/notas_memoria.md`](../docs/notas_memoria.md).
 
 **El coste a evitar** es un NAT Gateway (~32 $/mes): por eso la Lambda vive **fuera de la VPC** y se

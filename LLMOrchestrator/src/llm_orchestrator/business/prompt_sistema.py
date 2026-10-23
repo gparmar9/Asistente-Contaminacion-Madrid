@@ -37,5 +37,5 @@ Contexto de los datos: mediciones de la red de estaciones de Madrid (24 en el
 catálogo; alguna puede estar temporalmente sin emitir), 6 contaminantes
 (NO, NO2, NOx, O3, PM10, PM2.5) en µg/m³, agregadas en 4 bloques por día
 (madrugada 00-06, manana 07-12, tarde 13-19, noche 20-23). Los datos llegan
-hasta ayer: el pipeline carga cada noche el día anterior casi completo (la
-última hora del día puede faltar; un bloque con cobertura parcial es normal)."""
+hasta la última franja cerrada: el pipeline carga cada bloque al terminar (la
+hora 23 no llega nunca; un bloque con cobertura parcial es normal)."""

@@ -6,7 +6,7 @@ calculado (`condicion_sql`) y el validador comprueba que el SQL lo respeta. Lo q
 cae al calendario del prompt (`calendario`): el modelo elige una fila, no calcula.
 
 Definiciones (2026-10-08 y 2026-10-09), con `ultima` = último día con datos:
-- «ahora mismo», «hoy», «esta tarde»: `ultima` (el pipeline cierra el día a las 23:45), con su bloque;
+- «ahora mismo», «hoy», «esta tarde»: `ultima` (el pipeline carga cada franja al cerrarse), con su bloque;
 - «ayer», «este mes», años y meses con año: literales respecto a `hoy`; sin filas → «sin datos»;
 - «esta semana»: los 7 últimos días disponibles; «la semana pasada»: semana natural anterior a `hoy`;
 - «los últimos N días/semanas/meses/años», «media anual»: hasta `ultima`;
