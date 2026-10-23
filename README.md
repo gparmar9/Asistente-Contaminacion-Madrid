@@ -51,6 +51,7 @@ CSV histórico 2018-2026 ──▶ Notebooks 01/02/03 (en local) ──▶ model
 data/rag/*.md ──▶ rag.indexar (embeddings e5) ──▶ ChromaDB: corpus_rag ──▶ rag.api: evidencias D1..Dn   (Fase 2)
 
 Usuario ──▶ Web (nginx: SPA React + proxy /api/*) ──▶ ApiUsuario (FastAPI) ──▶ RDS: /estaciones, /series   (Fase 4)
+              └── /phoenix/* ──▶ Phoenix: trazas de cada turno del asistente (siempre con contraseña)
                                                           └── /chat ──▶ LLMOrchestrator ──▶ LLM hospedado (OpenAI-compatible)
                                                                               ├── query_sql ─────────▶ RDS PostgreSQL   (Fase 3)
                                                                               └── buscar_evidencias ─▶ servicio RAG (rag.api, HTTP)
@@ -381,6 +382,7 @@ La Fase 1 ya no depende de ningún ordenador: **se ejecuta sola en AWS todas las
 | **Lambda + EventBridge Scheduler** | Ejecuta el pipeline cada noche |
 | **SSM Parameter Store** | La cadena de conexión, cifrada |
 | **CloudWatch + SNS** | Logs y aviso por correo si algo falla |
+| **EC2 + Docker Compose** | La web, la API, el agente, el RAG y Phoenix (trazas del agente en `/phoenix/`) |
 
 Comprobar que se ejecutó anoche:
 

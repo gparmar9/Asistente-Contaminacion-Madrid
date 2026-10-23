@@ -123,6 +123,7 @@ Hilo conductor de la memoria: cómo y por qué cambió el diseño.
 | 2026-10-09 | Modelo de referencia para SQL | MiniMax M2.5 → **sin modelo de referencia en los siguientes lotes** | Logró 2/11 aciertos en datos frente a 4/11 del mejor modelo barato, con mayor coste por lote: 0,085 $ frente a 0,023–0,043 $. Se prioriza corregir el diseño |
 | 2026-10-13 | Servicios de la EC2 | `api-usuario` + `orquestador` + `rag`, con `api-usuario` publicado en el 8000 y el LLM por `/jupiter/llm/{base_url,model,api_key}` → **`web` + `api-usuario` + `agente` + `rag`**: solo `web` (nginx) publica puerto (80); el agente usa **Bedrock con el rol de la EC2** (sin claves) y lee su configuración de **todo `/jupiter/agente/`** en SSM (cada parámetro, una variable de entorno) | El equipo sustituyó el orquestador por el `Agente` (2026-10-08) y la web ya tiene imagen. Un solo origen para el navegador (nginx hace de proxy de `/api/*`), como en local. Leer la ruta entera evita tocar `arrancar.sh` cada vez que el agente añade una variable. Descartado: mantener el orquestador desplegado (código sin uso) y una clave de API del LLM en SSM (Bedrock no la necesita con el rol de la máquina) |
 | 2026-10-21 | Acceso a la web de la EC2 | Puerto 80 abierto solo a las IP del equipo → **IP del equipo o, para demos, abierto a todo internet con usuario y contraseña** (autenticación básica de nginx, contraseña cifrada en SSM) | La demo la presentan compañeros desde redes cuya IP pública no se conoce de antemano y puede cambiar. Descartados: una contraseña fija en el código (el repositorio es público), abrirlo sin contraseña (la API no tiene autenticación y el chat cuesta dinero), *port forwarding* con Session Manager (cada presentador necesita la CLI de AWS y su plugin) y un balanceador con Cognito o CloudFront con HTTPS (exigen dominio y certificado; demasiado para la víspera de la demo) |
+| 2026-10-23 | Trazas del agente en producción | Phoenix solo en local (perfil `observabilidad` del compose) → **Phoenix como quinto contenedor de la EC2**, sin puerto propio, servido por el nginx de la web en `/phoenix/` y **siempre con la contraseña de la web** (403 si no hay contraseña). El agente le envía las trazas por la red interna de Docker. Imagen pública fijada en el compose (`20.19.0`), SQLite en un volumen del disco de la EC2 | Las trazas de cada turno (fases, tiempos, tokens, errores) son la observabilidad del asistente y solo existían en el portátil de quien probaba. Descartados: Phoenix Cloud de Arize (manda a un tercero las preguntas de los usuarios), publicar su puerto 6006 (un segundo puerto sin autenticación), un balanceador con reglas por ruta (unos 16 $/mes `[estimación]`), guardar las trazas en la RDS (ata Phoenix a los horarios de la base y mete un esquema ajeno), copiar la imagen a ECR (un repositorio y un job más para una imagen que no se construye) y la autenticación propia de Phoenix (usuarios y API keys, pero exige un paso manual tras el primer arranque y un secreto más en SSM; no compensa con una sola persona operando) |
 
 **Decisiones abiertas que alimentarán esta tabla:** modelo del agente en Bedrock (Ministral 14B,
 gpt-oss-120b, Qwen3 Next 80B (2026-10-16) o Nemotron 3 Super 120B (2026-10-18); Claude Haiku 5.5 no está
@@ -187,6 +188,7 @@ Usuario ─▶ Web (nginx: SPA React + proxy /api/*) ─▶ ApiUsuario (FastAPI)
                                                          ├─ buscar_evidencias ─▶ rag.api (HTTP)   (Fase 3, en construcción)
                                                          └─ consultar_datos ─▶ redactor SQL (LLM) ─▶ validador
                                                                              ─▶ PostgreSQL: vista mediciones_bloques (solo lectura)
+                    └─ /phoenix/* ──▶ Phoenix ◀── trazas OpenTelemetry de cada turno ── Agente
 ```
 
 `LLMOrchestrator` (primer agente, con `query_sql`) sigue en el repositorio pero está descartado
@@ -208,7 +210,7 @@ mediante *tool use*.
 **Stack actual:** Python 3.12 · pandas · NumPy · scikit-learn · PostgreSQL 18 (RDS) · SQLAlchemy ·
 pyarrow · ChromaDB · sentence-transformers (`multilingual-e5-base`) · FastAPI · pytest ·
 GitHub Actions · AWS (Lambda, S3, RDS, EventBridge, CloudWatch) · React 19 + TypeScript (Vite) ·
-TanStack Query · Recharts · nginx · Docker Compose.
+TanStack Query · Recharts · nginx · Docker Compose · OpenTelemetry + Arize Phoenix (trazas del agente).
 
 ---
 
@@ -1488,6 +1490,9 @@ no salta nada y el hueco en los datos se descubriría semanas después.
 
 La retención de los logs se baja a 14 días; por defecto no caducan nunca.
 
+El asistente se observa con **Phoenix**, no con CloudWatch: cada turno deja una traza OpenTelemetry
+con sus fases, tiempos, tokens y errores. En la EC2 se consulta en `/phoenix/` (§8.9).
+
 ### 8.8 Encendido programado de la base de datos — estado actual
 
 La RDS solo está encendida cuando hace falta: cada noche alrededor de la carga, y cuando el equipo
@@ -1533,7 +1538,8 @@ la enciende a mano para trabajar o hacer una demo.
 - **Un contenedor por servicio** (`web`, `api-usuario`, `agente`, `rag`), con las imágenes de ECR
   y la versión activa de cada uno en SSM (`/jupiter/versiones/<servicio>`): se despliega o se
   vuelve atrás una pieza sin tocar las demás. La máquina no construye nada. El `LLMOrchestrator`
-  no se despliega (descartado, §2).
+  no se despliega (descartado, §2). Desde el 2026-10-23, un quinto contenedor, `phoenix`, con
+  imagen pública de Docker Hub y la versión fijada en el compose (sin SSM ni ECR).
 - **Arranque autónomo:** un servicio de systemd ejecuta `arrancar.sh` en cada encendido, que lee
   versiones y configuración de SSM con el rol de la máquina y levanta los contenedores. Encender la
   EC2 basta para tener la aplicación.
@@ -1548,7 +1554,9 @@ la enciende a mano para trabajar o hacer una demo.
   2026-10-21, **usuario y contraseña opcionales** (autenticación básica de nginx, contraseña cifrada en SSM
   `/jupiter/web/contrasena`; en el disco de la EC2 solo queda su hash) para abrir el 80 a todo internet en demos: las IP del equipo cambian y
   quien presenta no tiene por qué saber añadirlas. Si el parámetro existe pero no se puede leer, el
-  arranque se detiene: mejor sin web que abierta sin contraseña. Limitación: es HTTP, la contraseña
+  arranque se detiene: mejor sin web que abierta sin contraseña. `/phoenix/` exige siempre esa
+  contraseña, también desde la propia máquina, y sin contraseña configurada responde 403: guarda
+  las preguntas y respuestas de los usuarios y no tiene autenticación propia. Limitación: es HTTP, la contraseña
   viaja sin cifrar; HTTPS exigiría dominio y certificado. Verificado en AWS el mismo día desde una IP fuera de la
   lista del equipo (§12). Sin SSH:
   acceso con *Session Manager*. Secretos en ficheros de solo root y repartidos: `api-usuario`
@@ -1558,15 +1566,26 @@ la enciende a mano para trabajar o hacer una demo.
   `/jupiter/agente/` (`llm_modelo` → `LLM_MODELO`): una variable nueva se da de alta en SSM, sin
   tocar scripts. Sin `llm_modelo`, todo funciona salvo `/chat`, que responde 503.
 - **CI/CD solo por GitHub Actions:** «Desplegar» y «Rollback» suman `web`, `api-usuario`, `agente`
-  y `rag`; si la EC2 está encendida actualizan solo ese contenedor por *SSM Run Command* y esperan
+  y `rag` («Desplegar» también `phoenix`, sin tests ni build: publica el compose y recrea el
+  contenedor; su vuelta atrás es revertir el commit); si la EC2 está encendida actualizan solo ese contenedor por *SSM Run Command* y esperan
   a que pase su healthcheck (`docker compose up --wait`), así un despliegue roto falla en GitHub. La
   versión activa se guarda en SSM con descripción (quién, qué y desde qué rama) y su historial sirve
   de registro de despliegues y rollbacks. «Encender/Apagar entorno» gestionan también la EC2. Los
   roles solo actúan sobre instancias con la etiqueta `Name=jupiter-api`. Cada despliegue construye
   la imagen con el código del momento: los cambios futuros del agente se publican con un clic.
-- **Detalle de nginx:** resuelve el nombre `api-usuario` al arrancar y guarda la IP. Si se
-  redespliega `api-usuario`, el contenedor puede cambiar de IP y el proxy quedaría roto, así que
-  `arrancar.sh` reinicia también `web` en ese caso.
+- **Detalle de nginx:** resuelve los nombres de `api-usuario` y `phoenix` en cada petición (DNS de
+  Docker, caché de 10 s, destinos en variables). Hasta el 2026-10-23 guardaba la IP de
+  `api-usuario` al arrancar y `arrancar.sh` reiniciaba `web` tras redesplegarla; ya no hace falta, y
+  `web` arranca aunque Phoenix no exista (502 en `/phoenix/`).
+- **Phoenix (trazas del agente):** el agente las envía a `http://phoenix:6006/v1/traces` por la red
+  interna (sin el prefijo `/phoenix`, que solo vale a través de nginx) si existe
+  `/jupiter/agente/phoenix_endpoint`; no depende de Phoenix para arrancar. Datos en SQLite en un
+  volumen del disco de la EC2: sobreviven a apagar y encender. Retención de 30 días configurada,
+  pero Phoenix purga los domingos a las 00:00 UTC y la EC2 está apagada a esa hora: en la práctica
+  las trazas crecen (aceptado; lo vigilará una alarma de disco). Memoria: unos 450-500 MB en
+  reposo, medidos en local; con los cuatro contenedores y el modelo del RAG cargado la EC2 usaba
+  1279 MB de 3835, así que cabe sin cambiar de instancia `[estimación: suma de medidas]`.
+  **Pendiente de aplicar en AWS** `[por confirmar]`.
 - **Verificado en AWS (2026-10-13):** web (200), `/estaciones` desde RDS y chat de punta a punta
   con Bedrock: pregunta documental con cita `[D1]` validada por el RAG (18 s) y pregunta de datos
   por SQL con el rol `agente_lectura` (5,6 s; media de NO₂ en Plaza de España, 29,3 µg/m³ en 27
@@ -1580,7 +1599,9 @@ la enciende a mano para trabajar o hacer una demo.
   inválido y versión ausente) y `docker compose config` valida el compose de producción. En la
   primera versión (05-10), la prueba destapó que el mensaje de error de una versión ausente se
   escribía dentro de `versiones.env` en vez de en la terminal; corregido enviando los mensajes a
-  stderr.
+  stderr. La prueba se repitió el 2026-10-23 con Phoenix (todo, solo `phoenix`, `api-usuario` sin
+  reinicio de `web`, con contraseña, sin ella y con permiso denegado) y con Phoenix real levantado
+  desde el compose de producción detrás de nginx con los ficheros generados.
 
 ---
 
@@ -1713,6 +1734,12 @@ la enciende a mano para trabajar o hacer una demo.
   previas concatenadas se diseñó para los seguimientos («¿Y en niños?»), pero en ningún lote llegó
   a ejecutarse: los dos modelos reformulan solos la búsqueda con el contexto. Sigue siendo una red
   de seguridad, pero sin medir. §7.3.1.
+- **Probar la configuración del proxy, no solo su sintaxis** (2026-10-23). Al preparar Phoenix
+  bajo `/phoenix`, el diseño de nginx tenía tres errores que `nginx -t` no detecta: con el destino
+  en una variable, `proxy_pass $phoenix/;` no quita el prefijo sino que manda todo a `/`; un bloque
+  de acceso con `satisfy all` heredaba el `deny all` de la web y respondía 403 incluso con la
+  contraseña correcta; y la redirección absoluta perdía el puerto. Los tres salieron en una prueba
+  con contenedores reales antes de tocar AWS.
 
 **Seguridad**
 - En abril la contraseña de la base de datos quedó **escrita en el código y commiteada**. Se corrigió
@@ -2053,7 +2080,8 @@ la enciende a mano para trabajar o hacer una demo.
 | 2026-10-16 | **Dos modelos más para el agente** (Guille con Claude Code, rama `feature/evaluacion-haiku-qwen`): candidatos elegidos con la API de precios de AWS y la tabla de regiones: Claude Haiku 5.5 y Qwen3 Next 80B A3B. Haiku no está disponible en la cuenta (nadie ha enviado el formulario de caso de uso de Anthropic, así que no hay acuerdo de Marketplace). Qwen3 Next pasa por las baterías de Carlos (clasificador, 12 turnos, conversaciones, adversario, 16 de datos y los 28 nuevos con SQL libre y catálogo) contra una copia local de sus datos: 16/20 en datos no vistos con SQL libre (empata con gpt-oss), 10/20 como selector del catálogo, 0 mixtas y copia literal del prompt de sistema. Unos 0,14 $. Coste real de la campaña de Carlos en Cost Explorer: 1,21 $. Precio de Qwen3 Next añadido al informe de trazas y comparativa visual (`docs/agente/presentacion/comparativa_modelos.html`) ampliada a los tres modelos, con los resultados SQL. Veredictos pendientes de revisión humana |
 | 2026-10-18 | **Nemotron 3 Super en las baterías del agente** (Guille con Claude Code, rama `feature/evaluacion-haiku-qwen`): con Haiku 5.5 aún bloqueado, se evalúa Nemotron 3 Super 120B con las mismas baterías y los mismos datos. Clasificador 31/31, conversaciones 11/11, 16/20 en datos no vistos con SQL libre y 14/20 con el catálogo (el mejor selector), turno documental de 4,9 s; copia literal del prompt de sistema e inventa datos de Getafe con el catálogo. Unos 0,14 $. Precio en el informe de trazas y cuarta serie en la comparativa visual. Veredictos pendientes de revisión humana |
 | 2026-10-21 | **Usuario y contraseña en la web** (Guille con Claude Code, rama `feature/web-contrasena`): para la demo, que presentan compañeros desde redes cuya IP no se conoce. `arrancar.sh` lee la contraseña de SSM, calcula su hash y genera la configuración de nginx y `compose.yml` la monta en `web`, sin reconstruir la imagen. Probado en local: `arrancar.sh` con `aws` simulado (con contraseña, sin parámetro y con permiso denegado, que detiene el arranque; la contraseña en claro no queda en ningún fichero) y nginx real con el `nginx.conf` de la web (401 sin credenciales o con una errónea, 200 con la buena, también en `/api/*`, healthcheck interno sano; sin parámetro, 200 como antes). Aplicado en AWS el mismo día: permiso de lectura del parámetro en el rol de la EC2, puerto 80 abierto a todo internet y «Desplegar → `web`» con la EC2 encendida (el log muestra «Web protegida»). Desde una IP fuera de la lista del equipo: 401 en la web, `/api/*` y `/api/chat` sin credenciales o con una errónea; con ellas, 24 estaciones, datos de NO₂ hasta el día de la prueba, una pregunta de datos por SQL (7,2 s) y una documental con citas `[Dn]` (23,4 s) |
-
+| 2026-10-23 | **Phoenix detrás de la web, en local** (Carlos con Claude Code, rama `feature/phoenix-prefijo`): primer paso para llevar Phoenix a la EC2 bajo `/phoenix`, detrás del nginx de la web y con su contraseña. Antes, medición en la EC2: 1279 MB usados de 3835 con los cuatro contenedores y el modelo del RAG cargado (562 MB en reposo), y Phoenix 20.19.0 ocupa unos 450-500 MB en reposo: cabe sin cambiar de instancia. El `nginx.conf` de la web resuelve los nombres en cada petición (DNS de Docker y destinos en variables): `web` arranca sin Phoenix (502 en `/phoenix`) y deja de depender de la IP de `api-usuario`. `/phoenix` tiene su propio fichero de acceso, abierto en local; en la EC2 exigirá la contraseña siempre. Log de acceso en JSON, preparado para CloudWatch. Probado con la imagen real, un `api-usuario` simulado y Phoenix: rutas de `/api` (con query y caracteres codificados), estáticos, GraphQL y una traza por la red interna; con contraseña, 401 sin credenciales o con una errónea y 200 con la buena; sin contraseña, 403 en `/phoenix` y la web abierta. La retención de 30 días de Phoenix purga los domingos a las 00:00 UTC, con la EC2 apagada: se acepta que las trazas crezcan |
+| 2026-10-23 | **Phoenix en la EC2** (Carlos con Claude Code, rama `feature/phoenix-prefijo`): `phoenix` pasa a ser el quinto contenedor del compose de producción, con imagen pública fijada (`20.19.0`), volumen propio y healthcheck con el Python de la imagen (no trae `curl` ni `wget`). `arrancar.sh` genera el acceso a `/phoenix/` (contraseña de la web siempre o 403 sin ella), no busca versión de Phoenix en SSM y deja de reiniciar `web` al redesplegar `api-usuario`. Hallazgo: al relanzar `web` con la misma imagen, compose no recrea el contenedor aunque cambien los ficheros de acceso que monta, así que poner o quitar la contraseña no se aplicaba hasta el siguiente encendido; ahora `arrancar.sh` recarga nginx cuando actualiza `web`. «Desplegar» gana el componente `phoenix`, sin tests ni build. Probado sin AWS: `arrancar.sh` con `aws` y `docker` simulados en seis casos (nunca pide la versión de Phoenix; con permiso denegado se detiene sin generar el acceso) y Phoenix real levantado con el compose de producción (sano en 16 s) detrás de nginx con los ficheros generados: con contraseña, 401 sin credenciales o con una errónea, 200 con la buena y 401 desde la propia máquina; estáticos y GraphQL con prefijo; una traza enviada a `http://phoenix:6006/v1/traces` aparece en su proyecto; sin contraseña, 403 en `/phoenix/` y la web abierta. Pendiente de aplicar en AWS |
 
 ---
 

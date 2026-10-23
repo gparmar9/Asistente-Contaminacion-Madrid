@@ -80,28 +80,45 @@ contrato versionado no coincide con el código del backend. Así una deriva de e
 detecta en el PR, no en producción. Las versiones de FastAPI/pydantic del job están fijadas a
 las que generaron el fichero.
 
-## Despliegue: dos contenedores, un solo origen
+## Despliegue: un solo origen
 
 ```
-navegador ──► web (nginx :80)  ── /          → build estático (SPA)
-                               ── /api/*     → api:8000/*      (proxy_read_timeout 60 s)
-                               ── /api/chat  → api:8000/chat   (proxy_read_timeout 180 s)
+navegador ──► web (nginx :80)  ── /           → build estático (SPA)
+                               ── /api/*      → api-usuario:8000/*     (proxy_read_timeout 60 s)
+                               ── /api/chat   → api-usuario:8000/chat  (proxy_read_timeout 180 s)
+                               ── /phoenix/*  → phoenix:6006/*         (trazas del agente)
 ```
 
 - `Dockerfile`: build multi-stage `node:22-alpine` → `nginx:1.27-alpine`.
-- `nginx.conf`: proxy de `/api/*` quitando el prefijo; `/api/chat` con `proxy_read_timeout 180s`
-  porque una respuesta del asistente puede tardar ~120 s y el valor por defecto (60 s) la cortaría.
-- `docker-compose.yml` (raíz): servicios `db`, `api` (imagen de `ApiUsuario/Dockerfile`) y `web`.
+- `nginx.conf`:
+  - Proxy de `/api/*` quitando el prefijo; `/api/chat` con `proxy_read_timeout 180s` porque una
+    respuesta del asistente puede tardar ~120 s y el valor por defecto (60 s) la cortaría.
+  - Proxy de `/phoenix/*` hacia Phoenix, que arranca con `PHOENIX_HOST_ROOT_PATH=/phoenix`.
+  - Los destinos van en variables con `resolver 127.0.0.11` (DNS de Docker): nginx resuelve el
+    nombre en cada petición, así que `web` arranca aunque no exista el contenedor `phoenix`
+    (`/phoenix` responde 502) y no hay que reiniciarlo cuando `api-usuario` cambia de IP. Con
+    variable, el prefijo se quita con `rewrite`, no con la barra final de `proxy_pass`.
+  - Log de acceso en JSON (`status`, `request_time`, `upstream_response_time`, `uri`...), una
+    línea por petición.
+- `phoenix-acceso.conf`: control de acceso de `/phoenix`, incluido dentro de su `location`. En la
+  imagen no tiene directivas (abierto, para local); en la EC2 se monta encima uno que exige la
+  contraseña de la web, o `return 403;` si no hay contraseña: las trazas guardan las preguntas de
+  los usuarios y nunca quedan abiertas.
+- `docker-compose.yml` (raíz): perfil `api` (`rag`, `orquestador`, `api-usuario`, `web`) y perfil
+  `observabilidad` (`phoenix`).
 
 ```bash
-docker compose up -d --build     # http://localhost:8080  (WEB_PORT en .env para cambiarlo)
+docker compose --profile api up -d --build     # http://localhost:8080  (WEB_PORT en .env para cambiarlo)
+
+# Con Phoenix detrás de la web, como en la EC2: http://localhost:8080/phoenix/
+PHOENIX_HOST_ROOT_PATH=/phoenix docker compose --profile api --profile observabilidad up -d --build
 ```
 
 ## Estructura
 
 ```
 Web/
-├── Dockerfile · nginx.conf · openapi.json · scripts/exportar_openapi.py
+├── Dockerfile · nginx.conf · phoenix-acceso.conf · openapi.json · scripts/exportar_openapi.py
 └── src/
     ├── api/          cliente tipado (openapi-fetch), hooks de TanStack Query, errores por código HTTP
     ├── dominio/      constantes, regla de cobertura y estados, fechas, formato, citas [Dn]
