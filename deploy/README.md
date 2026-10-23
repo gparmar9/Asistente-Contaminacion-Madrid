@@ -351,6 +351,12 @@ Para la corrección del TFM, la web está **abierta a todo internet sin contrase
 `/phoenix/` responde **403** a todo el mundo, porque guarda las preguntas de los usuarios. Lo deja
 así [`aws/3_web_publica.ps1`](aws/3_web_publica.ps1), seguido de **Desplegar → `web`**:
 
+**Dirección: http://madrid-respira.duckdns.org/** (o http://108.132.195.84/). El subdominio es de
+[DuckDNS](https://www.duckdns.org), gratuito: un registro DNS que apunta a la IP elástica, dado de
+alta a mano en su web con la cuenta de un miembro del equipo. No hay nada instalado en la EC2: el
+script de DuckDNS que actualiza la IP es para IP que cambian, y esta no cambia. Si algún día se
+libera la IP elástica, hay que poner la nueva en DuckDNS.
+
 1. Crea la IP elástica con la etiqueta `Name=jupiter-api` y la asocia a la EC2. Sustituye a la IP
    automática, que cambiaba en cada encendido; cuesta lo mismo (0,005 $/h), también con la EC2
    apagada. Si se recrea la EC2, volver a ejecutar el script la asocia a la nueva.
