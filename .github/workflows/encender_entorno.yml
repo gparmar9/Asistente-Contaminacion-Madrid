@@ -109,13 +109,28 @@ jobs:
       - name: Esperar a la base de datos
         run: aws rds wait db-instance-available --db-instance-identifier "$DB_INSTANCE"
 
-      # jupiter.service ejecuta arrancar.sh en cada encendido; termina en "active" cuando los
-      # contenedores pasan su healthcheck, o en "failed" si algo va mal.
+      # jupiter.service queda "active" si los contenedores pasan el healthcheck, o "failed" si falla.
+      # El workflow reintenta una vez: systemd no repite el arranque si la EC2 ya está encendida.
       - name: Esperar a que la API esté lista
         if: env.INSTANCIA != ''
         run: |
-          bash .github/scripts/ec2.sh ejecutar \
-            "timeout 900 bash -c 'until systemctl is-active -q jupiter.service || systemctl is-failed -q jupiter.service; do sleep 5; done'; if systemctl is-active -q jupiter.service; then docker compose --env-file /opt/jupiter/versiones.env -f /opt/jupiter/compose.yml ps; else echo 'jupiter.service no arrancó. Últimas líneas de su log:'; journalctl -u jupiter.service -n 40 --no-pager; exit 1; fi"
+          bash .github/scripts/ec2.sh ejecutar "$(cat <<'EOF'
+          timeout 900 bash -c 'until systemctl is-active -q jupiter.service || systemctl is-failed -q jupiter.service; do sleep 5; done'
+          if systemctl is-failed -q jupiter.service; then
+            echo 'jupiter.service falló. Últimas líneas de su log:'
+            journalctl -u jupiter.service -n 40 --no-pager
+            echo 'Reintentando el arranque...'
+            systemctl restart jupiter.service || true
+          fi
+          if systemctl is-active -q jupiter.service; then
+            docker compose --env-file /opt/jupiter/versiones.env -f /opt/jupiter/compose.yml ps
+          else
+            echo 'jupiter.service no arrancó. Últimas líneas de su log:'
+            journalctl -u jupiter.service -n 40 --no-pager
+            exit 1
+          fi
+          EOF
+          )"
 
       - name: Resumen
         run: |

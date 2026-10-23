@@ -1,11 +1,11 @@
 """Informe agregado de los turnos del agente a partir de los JSONL de trazas (un span por línea).
 
-Solo biblioteca estándar. Agrupa los spans por `trace_id` (un turno), reconstruye el árbol por
-`parent_id` y saca tablas markdown por lote (`agente.etiqueta` del span `turno`):
+Solo biblioteca estándar. Agrupa los spans por `trace_id` (un turno) y genera tablas markdown
+por lote (`agente.etiqueta` del span `turno`):
 
 - turnos por ruta e intención;
 - latencia del turno y por fase: **mediana con n**; el p95 es solo descriptivo (muestras pequeñas);
-- tokens y coste por turno con la tabla de precios de abajo. Si a una llamada al LLM le faltan
+- tokens y coste por turno con la tabla de precios de `agente.business.trazas`. Si a una llamada al LLM le faltan
   los tokens (o su modelo no tiene precio), el turno queda **incompleto**: no cuenta en las
   medianas de tokens y su coste no se suma. Ausente nunca es cero;
 - síntesis válida a la primera (/rag/validar), reparaciones, búsquedas y síntesis forzadas, herramientas vetadas,
@@ -31,51 +31,20 @@ import math
 import statistics
 import sys
 from collections import Counter, defaultdict
-from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 
-# USD por millón de tokens (entrada, salida). Bedrock bajo demanda, región Irlanda (eu-west-1),
-# tarifa estándar regional según la API de precios de AWS, consultada el 2026-10-08 (Ministral
-# bajó de 0,24 a 0,23). Clave = ID que recibe Bedrock (con el prefijo del perfil si lo lleva).
-# Un modelo que no esté aquí deja el coste incompleto.
-PRECIOS_FECHA = "2026-10-08, Bedrock eu-west-1"
-PRECIOS = {
-    "mistral.ministral-3-14b-instruct": (0.23, 0.23),
-    "openai.gpt-oss-120b-1:0": (0.18, 0.70),
-    "openai.gpt-oss-20b-1:0": (0.08, 0.35),
-    "qwen.qwen3-coder-30b-a3b-v1:0": (0.18, 0.70),
-    "eu.anthropic.claude-haiku-5-5": (0.11, 0.55),  # confirmado el 2026-10-16 (AWS Marketplace)
-    "minimax.minimax-m2.5": (0.36, 1.44),  # consultado el 2026-10-09
-    "qwen.qwen3-next-80b-a3b": (0.168, 1.44),  # consultado el 2026-10-16
-    "nvidia.nemotron-super-3-120b": (0.18, 0.78),  # consultado el 2026-10-16
-}
+RAIZ = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(RAIZ / "src"))
+
+# Reexportados para los scripts de evaluación que los importan desde aquí.
+from agente.business.trazas import PRECIOS, PRECIOS_FECHA, Turno, coste_llamada, turnos  # noqa: E402
 
 # Orden de las fases en la tabla de latencias; el resto de spans van detrás, por nombre.
 FASES = ("clasificar", "bucle", "busqueda_forzada", "consulta_forzada", "sintesis_documental", "sintesis_datos",
          "sintesis_forzada", "validar")
 
 PLANTILLA_HTML = Path(__file__).with_name("plantilla_informe.html")
-
-
-@dataclass
-class Turno:
-    trace_id: str
-    spans: list[dict]                 # todos los spans de la traza, en orden de inicio
-    raiz: dict                        # span `turno`
-    etiqueta: str
-    ruta: str
-    intencion: str
-    duracion_ms: float
-    error: bool
-    cancelado: bool                   # el cliente del stream se fue: el turno no tiene ruta
-    modelos: set[str] = field(default_factory=set)
-    tokens_entrada: int | None = None  # None = incompleto
-    tokens_salida: int | None = None
-    coste_usd: float | None = None     # None = incompleto o modelo sin precio
-
-    def atributo(self, clave: str, defecto=None):
-        return self.raiz["attributes"].get(clave, defecto)
 
 
 # ---------------------------------------------------------------------- lectura
@@ -86,64 +55,6 @@ def cargar(rutas: list[Path]) -> list[dict]:
         with ruta.open(encoding="utf-8") as f:
             spans.extend(json.loads(linea) for linea in f if linea.strip())
     return spans
-
-
-def turnos(spans: list[dict]) -> tuple[list[Turno], int]:
-    """Turnos completos y número de trazas sin span `turno` (proceso cortado a mitad)."""
-    por_traza: dict[str, list[dict]] = defaultdict(list)
-    for s in spans:
-        por_traza[s["trace_id"]].append(s)
-    resultado, huerfanas = [], 0
-    for trace_id, propios in por_traza.items():
-        propios.sort(key=lambda s: s["start"] or "")
-        raiz = next((s for s in propios if s["name"] == "turno" and not s["parent_id"]), None)
-        if raiz is None:
-            huerfanas += 1
-            continue
-        a = raiz["attributes"]
-        cancelado = bool(a.get("agente.cancelado"))
-        turno = Turno(trace_id=trace_id, spans=propios, raiz=raiz,
-                      etiqueta=a.get("agente.etiqueta") or "sin_etiqueta",
-                      ruta=a.get("agente.ruta", "cancelado" if cancelado else "error"),
-                      intencion=a.get("agente.intencion", "?"),
-                      duracion_ms=raiz["duracion_ms"], error=raiz["status"] == "ERROR", cancelado=cancelado)
-        _tokens_y_coste(turno)
-        resultado.append(turno)
-    resultado.sort(key=lambda t: t.raiz["start"] or "")
-    return resultado, huerfanas
-
-
-def _tokens_y_coste(turno: Turno) -> None:
-    entrada = salida = 0
-    coste = 0.0
-    completo, con_precio = True, True
-    for s in turno.spans:
-        if s["kind"] != "LLM":
-            continue
-        a = s["attributes"]
-        modelo = a.get("llm.model_name") or "?"
-        turno.modelos.add(modelo)
-        e, o = a.get("llm.token_count.prompt"), a.get("llm.token_count.completion")
-        if not (isinstance(e, int) and isinstance(o, int)):
-            completo = False
-            continue
-        entrada, salida = entrada + e, salida + o
-        coste_llamada = _coste(modelo, e, o)
-        if coste_llamada is None:
-            con_precio = False
-        else:
-            coste += coste_llamada
-    if completo:
-        turno.tokens_entrada, turno.tokens_salida = entrada, salida
-        if con_precio:
-            turno.coste_usd = coste
-
-
-def _coste(modelo: str, entrada: int, salida: int) -> float | None:
-    if modelo not in PRECIOS:
-        return None
-    precio_e, precio_s = PRECIOS[modelo]
-    return (entrada * precio_e + salida * precio_s) / 1e6
 
 
 # ---------------------------------------------------------------------- informe
@@ -350,7 +261,7 @@ def _datos_turno(turno: Turno) -> dict:
             completos = isinstance(e, int) and isinstance(o, int)
             registro.update(modelo=a.get("llm.model_name"), tokens_entrada=e if completos else None,
                             tokens_salida=o if completos else None,
-                            coste_usd=_coste(a.get("llm.model_name") or "?", e, o) if completos else None)
+                            coste_usd=coste_llamada(a.get("llm.model_name") or "?", e, o) if completos else None)
         spans.append(registro)
     return {
         "id": turno.trace_id, "lote": turno.etiqueta, "modelos": sorted(turno.modelos),

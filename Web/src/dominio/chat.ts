@@ -10,7 +10,8 @@
  * el agente y la API los reenvía tal cual): status | token | passthrough |
  * error | done. El texto llega de UNA de dos formas: como fragmentos `token`
  * que se concatenan o como un único `passthrough` con el texto entero. Las
- * fuentes y la advertencia definitivas van siempre en `done`.
+ * fuentes y la advertencia definitivas van siempre en `done`, junto con los ids
+ * del turno (`traza_id`, `span_id`) que necesita la valoración 👍/👎.
  */
 import type { FuenteChat, RespuestaChat } from '../api/tipos'
 import type { EventoSSE } from './sse'
@@ -34,7 +35,14 @@ export type EventoChat =
   | { tipo: 'status'; fase: string; herramienta: string | null }
   | { tipo: 'token'; texto: string }
   | { tipo: 'passthrough'; texto: string; fuentes: FuenteChat[]; advertencia: string | null }
-  | { tipo: 'done'; sessionId: string | null; fuentes: FuenteChat[]; advertencia: string | null }
+  | {
+      tipo: 'done'
+      sessionId: string | null
+      trazaId: string | null
+      spanId: string | null
+      fuentes: FuenteChat[]
+      advertencia: string | null
+    }
   | { tipo: 'error'; detalle: string | null }
 
 /** Un evento SSE del stream del chat, validado. Tipos desconocidos o datos malformados → null (se ignoran). */
@@ -62,6 +70,8 @@ export function interpretarEventoChat({ evento, datos }: EventoSSE): EventoChat 
       return {
         tipo: 'done',
         sessionId: typeof d.session_id === 'string' ? d.session_id : null,
+        trazaId: typeof d.traza_id === 'string' ? d.traza_id : null,
+        spanId: typeof d.span_id === 'string' ? d.span_id : null,
         fuentes: fuentesDe(d),
         advertencia: advertenciaDe(d),
       }

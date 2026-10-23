@@ -7,11 +7,21 @@
  */
 import { useQueries, useQuery } from '@tanstack/react-query'
 
-import { interpretarEventoChat, textoFase } from '../dominio/chat'
+import { interpretarEventoChat, textoFase, type EventoChat } from '../dominio/chat'
+import type { DiasKpis } from '../dominio/kpis'
 import { crearParserSSE } from '../dominio/sse'
 import { cliente } from './cliente'
 import { ErrorApi } from './errores'
-import type { Contaminante, Estacion, ParametrosSerie, RespuestaChat, Salud, SerieBloques } from './tipos'
+import type {
+  Contaminante,
+  Estacion,
+  Kpis,
+  ParametrosSerie,
+  RespuestaChat,
+  Salud,
+  SerieBloques,
+  ValoracionChat,
+} from './tipos'
 
 /** Techo del cliente para /chat: por encima del timeout de nginx (180 s) para que, si se agota, el 504 sea del servidor. */
 export const TIEMPO_MAX_CHAT_MS = 185_000
@@ -20,6 +30,7 @@ export const claves = {
   salud: ['salud'] as const,
   estaciones: ['estaciones'] as const,
   serie: (codigo: number | undefined, params: ParametrosSerie) => ['serie', codigo, params] as const,
+  kpis: (dias: DiasKpis) => ['kpis', dias] as const,
 }
 
 export async function obtenerSalud(signal?: AbortSignal): Promise<Salud> {
@@ -119,7 +130,7 @@ export async function preguntarStream(
   const alimentar = crearParserSSE()
   let tokens = ''
   let textoEntero: string | null = null
-  let cierre: { sessionId: string | null; fuentes: RespuestaChat['fuentes']; advertencia: string | null } | null = null
+  let cierre: Extract<EventoChat, { tipo: 'done' }> | null = null
 
   try {
     for (;;) {
@@ -158,6 +169,28 @@ export async function preguntarStream(
     fuentes: cierre.fuentes,
     advertencia: cierre.advertencia,
     session_id: cierre.sessionId,
+    traza_id: cierre.trazaId,
+    span_id: cierre.spanId,
+  }
+}
+
+/** Envía la valoración del turno sin reintentos. */
+export async function valorar(valoracion: ValoracionChat): Promise<void> {
+  try {
+    const { error, response } = await cliente.POST('/chat/valoracion', { body: valoracion })
+    if (!response.ok) throw ErrorApi.desdeRespuesta(response, error)
+  } catch (error) {
+    throw ErrorApi.desdeExcepcion(error)
+  }
+}
+
+export async function obtenerKpis(dias: DiasKpis, signal?: AbortSignal): Promise<Kpis> {
+  try {
+    const { data, error, response } = await cliente.GET('/kpis', { params: { query: { dias } }, signal })
+    if (!response.ok || data === undefined) throw ErrorApi.desdeRespuesta(response, error)
+    return data
+  } catch (error) {
+    throw ErrorApi.desdeExcepcion(error)
   }
 }
 
@@ -218,5 +251,16 @@ export function useSeriesPorEstacion(codigos: readonly number[], params: Paramet
       queryFn: ({ signal }: { signal: AbortSignal }) => obtenerSerie(codigo, params, signal),
       retry: 1,
     })),
+  })
+}
+
+/** KPIs del asistente. El agente ya los cachea 60 s: refrescar antes no trae nada nuevo. */
+export function useKpis(dias: DiasKpis) {
+  return useQuery({
+    queryKey: claves.kpis(dias),
+    queryFn: ({ signal }) => obtenerKpis(dias, signal),
+    staleTime: 60_000,
+    retry: 0,
+    placeholderData: (anterior) => anterior,
   })
 }

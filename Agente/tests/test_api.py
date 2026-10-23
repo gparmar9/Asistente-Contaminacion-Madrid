@@ -30,6 +30,7 @@ def test_responder_devuelve_el_contrato(cliente):
     assert r.status_code == 200
     cuerpo = r.json()
     assert len(cuerpo.pop("traza_id")) == 32  # id de la traza, para buscar el turno en Phoenix
+    assert len(cuerpo.pop("span_id")) == 16   # span `turno`, el que recibe la valoración
     cuerpo.pop("session_id")
     assert cuerpo == {
         "respuesta": TEXTO_NO2,

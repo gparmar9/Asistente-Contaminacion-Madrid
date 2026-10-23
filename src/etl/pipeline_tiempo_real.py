@@ -174,25 +174,65 @@ def bloques_cerrados(resumen: pd.DataFrame, ahora: datetime) -> pd.DataFrame:
     return resumen[fin <= ahora]
 
 
-def _inferir_y_guardar(df_horario: pd.DataFrame, engine, bundle, ahora: datetime) -> tuple[int, int]:
-    """Bloques cerrados -> Isolation Forest -> upsert. Devuelve (bloques, anomalías)."""
+def estaciones_catalogo() -> set[int]:
+    """Códigos cortos de las estaciones del catálogo (las 24 de la red)."""
+    return set(pd.read_csv(RUTA_ESTACIONES, sep=";")["CODIGO_CORTO"].astype(int).tolist())
+
+
+def calidad_datos(df_limpio: pd.DataFrame) -> dict:
+    """Cobertura de una ejecución: estaciones con alguna medición válida y % de filas válidas.
+
+    Una estación que solo trae horas sin medir (flag 'N') cuenta como estación sin datos.
+    """
+    validas = df_limpio["validacion"] == "V"
+    con_datos = set(df_limpio.loc[validas, "estacion"].astype(int).tolist())
+    return {
+        "estaciones": len(con_datos),
+        "estaciones_sin_datos": sorted(estaciones_catalogo() - con_datos),
+        "pct_validas": round(float(validas.mean()) * 100, 1) if len(df_limpio) else None,
+    }
+
+
+def anomalias_por_magnitud(resumen: pd.DataFrame) -> dict:
+    """Bloques anómalos por código de magnitud ({"8": 2, ...}); solo las que tienen alguno."""
+    por_magnitud = resumen.groupby("MAGNITUD")["IS_ANOMALY"].sum()
+    return {str(int(m)): int(n) for m, n in por_magnitud.items() if n}
+
+
+def resultado_sin_datos() -> dict:
+    """Cifras de una ejecución en la que la API no devolvió registros (mismas claves que procesar)."""
+    return {"horas_nuevas": 0, "bloques_upsert": 0, "anomalias": 0,
+            "estaciones": 0, "estaciones_sin_datos": sorted(estaciones_catalogo()),
+            "pct_validas": None, "anomalias_por_magnitud": {}}
+
+
+def _inferir_y_guardar(df_horario: pd.DataFrame, engine, bundle,
+                       ahora: datetime) -> tuple[int, pd.DataFrame]:
+    """Bloques cerrados -> Isolation Forest -> upsert. Devuelve (filas upsert, bloques)."""
     baseline = asegurar_baseline(engine)
     largo = _a_horario_valido(df_horario)
     resumen = bloques_cerrados(detectar(largo, baseline, bundle, HORAS_PUBLICADAS), ahora)
     if resumen.empty:
-        return 0, 0
+        return 0, resumen
 
     # a minúsculas para casar con el esquema de la tabla
     resumen_bd = resumen.rename(columns={c: c.lower() for c in resumen.columns})
-    return upsert_resumen(resumen_bd, engine), int(resumen["IS_ANOMALY"].sum())
+    return upsert_resumen(resumen_bd, engine), resumen
 
 
 def procesar(df_limpio: pd.DataFrame, engine, bundle, ahora: datetime | None = None) -> dict:
-    """Guarda el horario, infiere anomalías por bloque y hace upsert del resumen."""
+    """Guarda el horario, infiere anomalías por bloque y hace upsert del resumen.
+
+    Devuelve las cifras de la ejecución: las tres de carga y las de calidad del dato que la
+    Lambda publica en CloudWatch (deploy/metricas_emf.py).
+    """
     asegurar_esquema(engine)
     n_horas = upsert_horario(df_limpio, engine)
-    n_bloques, n_anom = _inferir_y_guardar(df_limpio, engine, bundle, ahora or ahora_madrid())
-    return {"horas_nuevas": n_horas, "bloques_upsert": n_bloques, "anomalias": n_anom}
+    n_bloques, resumen = _inferir_y_guardar(df_limpio, engine, bundle, ahora or ahora_madrid())
+    return {"horas_nuevas": n_horas, "bloques_upsert": n_bloques,
+            "anomalias": int(resumen["IS_ANOMALY"].sum()),
+            **calidad_datos(df_limpio),
+            "anomalias_por_magnitud": anomalias_por_magnitud(resumen)}
 
 
 def reprocesar(engine, bundle, desde: date) -> dict:
@@ -202,8 +242,8 @@ def reprocesar(engine, bundle, desde: date) -> dict:
              f"FROM {TABLA_HORARIO} WHERE fecha >= :desde"),
         engine, params={"desde": desde},
     )
-    n_bloques, n_anom = _inferir_y_guardar(horario, engine, bundle, ahora_madrid())
-    return {"bloques_upsert": n_bloques, "anomalias": n_anom}
+    n_bloques, resumen = _inferir_y_guardar(horario, engine, bundle, ahora_madrid())
+    return {"bloques_upsert": n_bloques, "anomalias": int(resumen["IS_ANOMALY"].sum())}
 
 
 def bajar_de_api(max_intentos: int = 3) -> pd.DataFrame:

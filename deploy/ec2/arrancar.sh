@@ -6,19 +6,24 @@
 #
 # Todo sale de AWS con el rol de la máquina, sin claves en disco más allá de este script:
 #   s3://jupiter-calidad-aire-madrid/ec2/compose.yml   compose de producción (del repositorio)
+#   s3://jupiter-calidad-aire-madrid/ec2/jupiter.service  servicio de systemd
+#   s3://jupiter-calidad-aire-madrid/ec2/cloudwatch-agent.json  métricas de memoria y disco
 #   SSM /jupiter/versiones/<servicio>                 qué imagen está activa (tag = commit)
 #   SSM /jupiter/database_url                         cadena de conexión a RDS de la API (cifrada)
 #   SSM /jupiter/agente/<variable>                    configuración del agente (opcional): cada
 #                                                     parámetro es una variable de entorno, p. ej.
 #                                                     /jupiter/agente/llm_modelo -> LLM_MODELO
 #   SSM /jupiter/web/contrasena                       contraseña de la web, usuario "demo"
-#                                                     (opcional, cifrado)
+#                                                     (opcional, cifrado); también protege /phoenix/
+#
+# Phoenix usa una imagen pública con la versión fijada en compose.yml.
 set -euo pipefail
 
 REGION=eu-west-1
 BUCKET=jupiter-calidad-aire-madrid
 DIR="${JUPITER_DIR:-/opt/jupiter}"   # variable solo para probarlo fuera de la EC2
-SERVICIOS=(web api-usuario agente rag)
+CWAGENT_CTL="${CWAGENT_CTL:-/opt/aws/amazon-cloudwatch-agent/bin/amazon-cloudwatch-agent-ctl}"
+SERVICIOS=(web api-usuario agente rag phoenix)
 export AWS_DEFAULT_REGION="$REGION"
 
 # A stderr: varios pasos redirigen stdout a ficheros .env y el mensaje acabaría dentro.
@@ -40,6 +45,22 @@ linea_env() {
     printf "%s='%s'\n" "$1" "$2"
 }
 
+# Agente de CloudWatch: memoria y disco de la máquina (2 métricas en CWAgent). Lo instala la
+# primera vez y aplica la configuración de S3 en cada ejecución. Devuelve error en vez de
+# detener el script: sin métricas la aplicación tiene que arrancar igual.
+agente_cloudwatch() {
+    if ! rpm -q amazon-cloudwatch-agent > /dev/null 2>&1; then
+        log "Instalando el agente de CloudWatch"
+        dnf install -y -q amazon-cloudwatch-agent > /dev/null || return 1
+    fi
+    aws s3 cp "s3://$BUCKET/ec2/cloudwatch-agent.json" cloudwatch-agent.json --only-show-errors \
+        || return 1
+    # fetch-config valida el fichero y reinicia el agente con él (-s).
+    "$CWAGENT_CTL" -a fetch-config -m ec2 -s -c "file:$DIR/cloudwatch-agent.json" > /dev/null \
+        || return 1
+    log "Agente de CloudWatch en marcha"
+}
+
 # Servicios a actualizar: los indicados (validados) o todos.
 OBJETIVO=()
 for s in "$@"; do
@@ -55,12 +76,22 @@ cd "$DIR"
 log "Descargando compose.yml de s3://$BUCKET/ec2/"
 aws s3 cp "s3://$BUCKET/ec2/compose.yml" compose.yml --only-show-errors
 
+# Actualiza jupiter.service desde S3 para el próximo arranque, sin recrear la EC2.
+aws s3 cp "s3://$BUCKET/ec2/jupiter.service" jupiter.service.tmp --only-show-errors
+if ! cmp -s jupiter.service.tmp /etc/systemd/system/jupiter.service; then
+    install -m 644 jupiter.service.tmp /etc/systemd/system/jupiter.service
+    systemctl daemon-reload
+    log "jupiter.service actualizado desde S3"
+fi
+rm -f jupiter.service.tmp
+
 log "Leyendo versiones de SSM"
 CUENTA=$(aws sts get-caller-identity --query Account --output text)
 REGISTRO="$CUENTA.dkr.ecr.$REGION.amazonaws.com"
 {
     echo "REGISTRO=$REGISTRO"
     for s in "${SERVICIOS[@]}"; do
+        [ "$s" = phoenix ] && continue   # versión fijada en compose.yml
         VERSION=$(parametro "/jupiter/versiones/$s")
         if [ -z "$VERSION" ]; then
             log "Falta /jupiter/versiones/$s: despliega '$s' con el workflow antes de arrancar"
@@ -97,11 +128,17 @@ if ! grep -q '^DATABASE_URL=' config-agente.env; then
     log "Falta /jupiter/agente/database_url en SSM: el agente no responderá preguntas de datos"
 fi
 
-# Contraseña de la web: con /jupiter/web/contrasena, nginx pide usuario (demo) y contraseña a todo
-# el que no sea la propia máquina (el healthcheck entra por 127.0.0.1). Los dos ficheros se
-# escriben siempre, vacíos si no hay contraseña, porque compose.yml los monta en el contenedor web.
-# Solo «no existe» deja la web sin contraseña: cualquier otro error (permisos) para el arranque,
-# para no abrir la web sin protección por un fallo.
+# La web pide usuario demo y la contraseña de SSM, salvo al healthcheck de 127.0.0.1.
+# Phoenix guarda preguntas de usuarios: exige contraseña incluso desde 127.0.0.1.
+# Siempre se crean los ficheros que monta compose. Si no existe el parámetro de contraseña,
+# los de la web quedan vacíos y Phoenix devuelve 403. Cualquier otro error detiene el arranque.
+# Elimina los directorios que Docker creó al faltar estos ficheros: impiden arrancar web.
+for f in web.htpasswd web-acceso.conf phoenix-acceso.conf; do
+    if [ -d "$f" ]; then
+        log "$f es un directorio (lo creó Docker en un arranque fallido): se elimina"
+        rm -rf "$f"
+    fi
+done
 if CONTRASENA=$(aws ssm get-parameter --name /jupiter/web/contrasena --with-decryption \
                     --query Parameter.Value --output text 2>&1); then
     # En el disco solo queda el hash. Por stdin: la contraseña no aparece en la lista de procesos.
@@ -115,17 +152,31 @@ deny all;
 auth_basic "Calidad del aire de Madrid";
 auth_basic_user_file /etc/nginx/web.htpasswd;
 EOF
-    log "Web protegida con usuario y contraseña"
+    # allow all evita heredar deny all, que bloquearía incluso el acceso con contraseña.
+    cat > phoenix-acceso.conf <<'EOF'
+# Generado por arrancar.sh: exige contraseña también para el acceso local.
+satisfy all;
+allow all;
+auth_basic "Calidad del aire de Madrid";
+auth_basic_user_file /etc/nginx/web.htpasswd;
+EOF
+    log "Web y /phoenix/ protegidas con usuario y contraseña"
 elif [[ "$CONTRASENA" == *ParameterNotFound* ]]; then
     : > web.htpasswd
     : > web-acceso.conf
-    log "Sin /jupiter/web/contrasena en SSM: la web no pide contraseña (acceso solo por IP)"
+    cat > phoenix-acceso.conf <<'EOF'
+# Generado por arrancar.sh: bloquea Phoenix si no hay contraseña.
+return 403;
+EOF
+    log "Sin /jupiter/web/contrasena en SSM: la web no pide contraseña (acceso solo por IP) y /phoenix/ responde 403"
 else
     log "No se pudo leer /jupiter/web/contrasena: $CONTRASENA"
     exit 1
 fi
 # Los workers de nginx no son root: necesitan leer el fichero de contraseñas (solo guarda el hash).
-chmod 644 web.htpasswd web-acceso.conf
+chmod 644 web.htpasswd web-acceso.conf phoenix-acceso.conf
+
+agente_cloudwatch || log "AVISO: el agente de CloudWatch no arrancó; sigue sin métricas de memoria y disco"
 
 log "Login en ECR ($REGISTRO)"
 aws ecr get-login-password | docker login --username AWS --password-stdin "$REGISTRO" > /dev/null
@@ -138,12 +189,12 @@ log "Descargando imágenes: ${OBJETIVO[*]:-todas}"
 if [ ${#OBJETIVO[@]} -eq 0 ]; then
     "${COMPOSE[@]}" up -d --remove-orphans --wait --wait-timeout 600
 else
+    # nginx usa el DNS de Docker: no hace falta reiniciar web si cambia la IP de un contenedor.
     "${COMPOSE[@]}" up -d --wait --wait-timeout 600 "${OBJETIVO[@]}"
-    # nginx resuelve api-usuario al arrancar y guarda su IP: si el contenedor se recrea con otra,
-    # el proxy de /api/* quedaría apuntando a la antigua.
-    if [[ " ${OBJETIVO[*]} " == *" api-usuario "* && " ${OBJETIVO[*]} " != *" web "* ]]; then
-        log "Reiniciando web para que vuelva a resolver api-usuario"
-        "${COMPOSE[@]}" restart web
+    # Si la imagen no cambia, compose no recrea web. Recargamos nginx para aplicar la contraseña.
+    if [[ " ${OBJETIVO[*]} " == *" web "* ]]; then
+        log "Recargando nginx para aplicar los ficheros de acceso"
+        "${COMPOSE[@]}" exec -T web nginx -s reload
     fi
 fi
 

@@ -9,7 +9,8 @@ export AWS_DEFAULT_REGION=eu-west-1
 BUCKET=jupiter-calidad-aire-madrid
 COMPOSE_VERSION=v2.29.7
 
-dnf install -y docker
+# El agente de CloudWatch lo configura arrancar.sh (y lo instala si falta).
+dnf install -y docker amazon-cloudwatch-agent
 systemctl enable --now docker
 
 # Amazon Linux 2023 no trae el plugin de Compose en sus repositorios.

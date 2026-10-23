@@ -6,13 +6,14 @@
 #   secretos-bd.env     DATABASE_URL de la API (desde SSM, cifrado)
 #   config-agente.env   un VAR=valor por cada parámetro de /jupiter/agente/ en SSM (puede estar vacío)
 #   web-acceso.conf     y web.htpasswd: usuario y contraseña de la web (vacíos si no hay)
+#   phoenix-acceso.conf acceso a /phoenix/: la misma contraseña, o 403 si no hay
 #
-# Solo web publica puerto (80): sirve la SPA y hace de proxy de /api/* hacia api-usuario. El resto
-# no tiene autenticación y queda en la red interna de Docker; se encuentran por su nombre
-# (http://rag:8010).
+# Solo web expone el puerto 80: sirve la SPA y dirige /api/* a api-usuario y /phoenix/* a Phoenix.
+# Los demás servicios quedan en la red interna de Docker, accesibles por nombre (http://rag:8010).
 name: jupiter
 
-x-logs: &logs
+x-logs-local: &logs-local
+  # Solo en la máquina (agente y phoenix: lo del agente ya está en sus trazas de Phoenix).
   # Sin límite, los logs de Docker crecen hasta llenar el disco.
   logging:
     driver: json-file
@@ -20,15 +21,30 @@ x-logs: &logs
       max-size: "10m"
       max-file: "3"
 
+# A CloudWatch Logs con el rol de la máquina: grupo /jupiter/ec2 (lo crea la plantilla
+# deploy/cloudwatch/observabilidad.yaml), un stream por contenedor (jupiter-web-1...).
+# non-blocking: si CloudWatch no responde, el contenedor sigue y se pierden líneas, no se para.
+# Docker guarda además una copia local, así que docker compose logs sigue funcionando.
+x-logs-cloudwatch: &logs-cloudwatch
+  logging:
+    driver: awslogs
+    options:
+      awslogs-region: eu-west-1
+      awslogs-group: /jupiter/ec2
+      tag: "{{.Name}}"
+      mode: non-blocking
+      max-buffer-size: 4m
+
 services:
   rag:
     image: ${REGISTRO}/jupiter-rag:${VERSION_RAG}
     restart: unless-stopped
-    <<: *logs
+    <<: *logs-cloudwatch
 
-  # Bedrock con el rol de la máquina: sin claves. El modelo y el resto de su configuración
-  # (LLM_MODELO, DATABASE_URL con el rol agente_lectura...) salen de config-agente.env. Sin
-  # LLM_MODELO arranca igual y /responder devuelve 503.
+  # Bedrock con el rol de la máquina: sin claves. En SSM (config-agente.env) solo va lo secreto o
+  # lo que se cambia sin tocar código: LLM_MODELO, DATABASE_URL con el rol agente_lectura...
+  # Lo fijo de esta máquina va en environment, que manda sobre env_file. Sin LLM_MODELO arranca
+  # igual y /responder devuelve 503.
   agente:
     image: ${REGISTRO}/jupiter-agente:${VERSION_AGENTE}
     restart: unless-stopped
@@ -39,10 +55,12 @@ services:
       LLM_PROVEEDOR: bedrock
       AWS_REGION: eu-west-1
       RAG_URL: http://rag:8010
+      # Por la red interna, sin el prefijo /phoenix (ese solo existe a través de nginx).
+      PHOENIX_ENDPOINT: http://phoenix:6006/v1/traces
     depends_on:
       rag:
         condition: service_healthy
-    <<: *logs
+    <<: *logs-local
 
   api-usuario:
     image: ${REGISTRO}/jupiter-api-usuario:${VERSION_API_USUARIO}
@@ -55,7 +73,7 @@ services:
     depends_on:
       agente:
         condition: service_healthy
-    <<: *logs
+    <<: *logs-cloudwatch
 
   web:
     image: ${REGISTRO}/jupiter-web:${VERSION_WEB}
@@ -70,4 +88,33 @@ services:
     volumes:
       - ./web-acceso.conf:/etc/nginx/conf.d/zz-acceso.conf:ro
       - ./web.htpasswd:/etc/nginx/web.htpasswd:ro
-    <<: *logs
+      # Exige contraseña en /phoenix/; devuelve 403 si no hay ninguna configurada.
+      - ./phoenix-acceso.conf:/etc/nginx/phoenix-acceso.conf:ro
+    <<: *logs-cloudwatch
+
+  # Trazas del agente. Para cambiar la imagen de Docker Hub, editar la versión y desplegar "phoenix".
+  # El agente le envía las trazas (PHOENIX_ENDPOINT, arriba), pero puede arrancar sin Phoenix.
+  # Su interfaz se abre en /phoenix/ a través de web.
+  phoenix:
+    image: arizephoenix/phoenix:version-20.19.0
+    restart: unless-stopped
+    environment:
+      PHOENIX_WORKING_DIR: /mnt/data   # SQLite de Phoenix, en el volumen
+      PHOENIX_HOST_ROOT_PATH: /phoenix # los enlaces de la interfaz llevan el prefijo de nginx
+      # Retención inicial de la base. Se purga los domingos a las 00:00 UTC si la EC2 está encendida.
+      # Si está apagada, las trazas se acumulan; la alarma de disco vigila el espacio.
+      PHOENIX_DEFAULT_RETENTION_POLICY_DAYS: "30"
+    volumes:
+      - phoenix_data:/mnt/data
+    # La imagen no trae healthcheck ni curl/wget: se usa su Python.
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:6006/healthz', timeout=3)"]
+      interval: 30s
+      timeout: 5s
+      start_period: 60s
+      retries: 3
+    <<: *logs-local
+
+# En el disco EBS de la EC2: sobrevive a apagar y encender la máquina.
+volumes:
+  phoenix_data:

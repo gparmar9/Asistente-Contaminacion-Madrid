@@ -14,6 +14,8 @@
 #   api-usuario  SSM (con el motivo en el historial del parámetro) y, si la EC2 está encendida,
 #   agente       actualiza solo ese contenedor. La imagen ya está en ECR: no se reconstruye nada.
 #   rag
+# Phoenix fija su versión en deploy/ec2/compose.yml. Para volver atrás,
+# revertir el commit y ejecutar "Desplegar" → phoenix.
 # Para añadir uno nuevo: sumarlo a `options` y a un job con `if:`.
 #
 # Usa el mismo rol OIDC que desplegar.yml y comparte su bloqueo por componente: nunca coinciden

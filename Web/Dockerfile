@@ -2,7 +2,7 @@
 #
 # Etapa 1 compila el proyecto (tsc + vite build). Etapa 2 solo contiene nginx y
 # los ficheros estáticos: ~50 MB, sin Node ni dependencias de desarrollo.
-# El proxy de /api/* hacia el contenedor `api` se configura en nginx.conf.
+# El proxy de /api/* y /phoenix/* se configura en nginx.conf.
 
 FROM node:22-alpine AS build
 WORKDIR /app
@@ -17,6 +17,8 @@ RUN npm run build
 
 FROM nginx:1.27-alpine
 COPY nginx.conf /etc/nginx/conf.d/default.conf
+# Se copia fuera de conf.d para incluirlo solo en location /phoenix/.
+COPY phoenix-acceso.conf /etc/nginx/phoenix-acceso.conf
 COPY --from=build /app/dist /usr/share/nginx/html
 
 EXPOSE 80

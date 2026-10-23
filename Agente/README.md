@@ -14,8 +14,10 @@ Decisiones de diseño, alternativas descartadas y estado por fases:
 | Método | Ruta | Qué devuelve |
 |-|-|-|
 | GET | `/salud` | Estado del servicio, proveedor y modelo configurados |
-| POST | `/responder` | `{pregunta, session_id?}` → `{respuesta, fuentes[{tipo, referencia}], advertencia, traza_id, session_id}` (mismo contrato que reenvía `ApiUsuario` desde `/chat`; `traza_id` sirve para buscar el turno en las trazas) |
+| POST | `/responder` | `{pregunta, session_id?}` → `{respuesta, fuentes[{tipo, referencia}], advertencia, traza_id, span_id, session_id}` (mismo contrato que reenvía `ApiUsuario` desde `/chat`; `traza_id` sirve para buscar el turno en las trazas y `span_id` es el span `turno`, el que recibe la valoración) |
 | POST | `/responder/stream` | La misma entrada; respuesta en Server-Sent Events (ver abajo). `ApiUsuario` la reenvía desde `/chat/stream` |
+| POST | `/valoracion` | `{session_id, traza_id, span_id, valor: positiva\|negativa}` → 204. Anotación `valoracion_usuario` (`HUMAN`, *score* 1/0) en Phoenix sobre el span `turno`; un segundo voto de la sesión al mismo turno lo sustituye. Sin Phoenix, 503 (no se reintenta). `ApiUsuario` la reenvía desde `/chat/valoracion` |
+| GET | `/kpis?dias=7` | KPIs de uso de los últimos 1, 7 o 30 días, calculados con los spans de Phoenix (ver [KPIs de uso](#kpis-de-uso-del-asistente-desplegado)). Sin Phoenix, 503. `ApiUsuario` lo reenvía desde `/kpis` |
 
 Documentación interactiva en `/docs`.
 
@@ -53,7 +55,7 @@ Cada evento es `event: <tipo>\ndata: <json>\n\n`, con `Cache-Control: no-cache` 
 | `token` | `{texto}` | Solo respuestas definitivas: la llamada sin herramientas ofrecidas (charla), la síntesis de datos y la síntesis forzada |
 | `passthrough` | `{texto, fuentes, advertencia, traza_id}` | El resto, íntegro al final: rutas documental (el JSON se valida antes de mostrarse) y mixta, frases fijas, `sin_evidencia` |
 | `error` | `{detalle}` | Fallo con el stream ya abierto; cierra sin `done`. Antes de abrirlo, código HTTP (503) |
-| `done` | `{session_id, traza_id, fuentes, advertencia}` | Turno completado. Lleva siempre los metadatos definitivos, también cuando el texto salió como `token` (si hubo `passthrough`, coinciden con los suyos) |
+| `done` | `{session_id, traza_id, span_id, fuentes, advertencia}` | Turno completado. Lleva siempre los metadatos definitivos, también cuando el texto salió como `token` (si hubo `passthrough`, coinciden con los suyos) |
 
 Si el cliente corta la conexión, el turno se cancela (sin más llamadas al LLM ni al RAG, y el
 span del turno lleva `agente.cancelado=true`). Eso no garantiza que Bedrock deje de procesar y
@@ -202,7 +204,10 @@ turno (agent)                       pregunta -> respuesta; ruta, intención, vue
 
 Las decisiones del código (frase fija, `sin_evidencia`, límite de vueltas, herramienta no
 disponible) quedan como eventos `decision` en el span en curso. Los tokens que no envía el
-proveedor no aparecen (nunca valen cero).
+proveedor no aparecen (nunca valen cero). En el stream, el primer texto que sale hacia el
+cliente deja el evento `primer_token` en el span `turno` (latencia percibida en el chat). Todos los
+spans del turno llevan `session.id`: Phoenix agrupa los turnos de una conversación en su vista de
+sesiones. La raíz de Phoenix para anotar la valoración y leer los KPIs se deduce de `PHOENIX_ENDPOINT`.
 
 | Variable | Por defecto | Para qué |
 |-|-|-|
@@ -228,6 +233,11 @@ respuesta HTTP y la línea `turno traza=...` de los logs llevan al mismo turno. 
 responde, el SDK lo avisa en el log y el turno sigue igual: los spans se envían por lotes en
 segundo plano.
 
+En la EC2, Phoenix es un contenedor más y se abre en `http://<ip>/phoenix/` con el usuario y la
+contraseña de la web. El agente le envía las trazas por la red interna a
+`http://phoenix:6006/v1/traces` (sin el prefijo `/phoenix`), fijado en `deploy/ec2/compose.yml`.
+Detalle en [`deploy/README.md`](../deploy/README.md#trazas-del-agente-en-phoenix).
+
 Informe agregado desde los JSONL (solo biblioteca estándar): turnos por ruta e intención,
 latencia por fase (mediana con n; p95 solo descriptivo), tokens y coste con precios fechados en
 el script, síntesis válidas a la primera, reparaciones, búsquedas forzadas y decisiones. Un turno
@@ -249,6 +259,24 @@ con cada span visible; coste medio por fase; tabla de turnos ordenable y cascada
 su coste. Lleva la pregunta y la respuesta de cada turno (no los mensajes al LLM): tratarlo como
 las trazas, fuera de git. El `.json` es el conjunto de datos que dibuja la página; una futura web
 de análisis podría servirlo desde un endpoint y reutilizar la plantilla.
+
+### KPIs de uso del asistente desplegado
+
+`GET /kpis` lee los spans del proyecto con la API REST de Phoenix (`datos/phoenix.py`, con `httpx`)
+y los calcula en `business/kpis.py`: preguntas por día; intención, ruta, tema y resultado del turno;
+tasa de resolución; bloqueos por regla; reparaciones y respuestas forzadas por el código; coste por
+pregunta (P50, P90, por pregunta resuelta y la lista para el histograma); latencia y primer token
+por ruta; fallos de herramienta por causa; sesiones y reformulación tras un rechazo (`session.id`);
+satisfacción por ruta y tema (anotaciones `valoracion_usuario`). Los turnos, el coste y la tabla de
+precios son los de `business/trazas.py`, los mismos que usa `informe_trazas.py`.
+
+La respuesta solo lleva agregados y recuentos con su *n* (contrato en `entities/kpis.py`): ni
+preguntas, ni respuestas, ni mensajes de error. Se guarda 60 s por periodo para no releer Phoenix
+en cada recarga. Es lo que mostrará la página de administración de la web (`/admin/uso`).
+
+```bash
+curl -s 'localhost:8200/kpis?dias=30' | python -m json.tool   # con PHOENIX_ENDPOINT en .env
+```
 
 ## Tests
 

@@ -16,6 +16,8 @@ solo se reenvía.
 | GET | `/estaciones/{codigo}/series` | Bloques horarios con estadísticos y anomalías (`resumen_datos_ml`). Parámetros: `contaminante` (obligatorio), `desde`, `hasta`, `bloque` |
 | POST | `/chat` | Respuesta del asistente. Sin `AGENTE_URL` ni `ORCHESTRATOR_URL`, responde un stub con el mismo contrato |
 | POST | `/chat/stream` | La misma respuesta como Server-Sent Events (ver abajo) |
+| POST | `/chat/valoracion` | 👍/👎 sobre una respuesta: `{session_id, traza_id, span_id, valor: positiva\|negativa}` → 204. Se reenvía al agente, que la anota en Phoenix. Sin `AGENTE_URL`, 404; si el agente no la guarda, 503 |
+| GET | `/kpis?dias=7` | KPIs de uso del asistente de los últimos 1, 7 o 30 días: se reenvían del agente, que los calcula con los spans de Phoenix (contrato en `entities/kpis.py`, copia del del agente; solo agregados, sin texto de usuarios). Sin comprobación de permisos: la web los muestra bajo el rótulo «Solo administradores», pero no hay gestión de usuarios. Sin `AGENTE_URL`, 404; agente o Phoenix caídos, 503; respuesta fuera de contrato, 502 |
 
 Documentación interactiva en `/docs` (OpenAPI autogenerada).
 
@@ -39,11 +41,12 @@ pytest tests/ -v
 ## Contrato del chat
 
 `POST /chat` con `{"pregunta": "...", "session_id": "...?"}` →
-`{"respuesta": "...", "fuentes": [{"tipo": "sql|documento", "referencia": "..."}], "advertencia": "...|null", "session_id": "...", "traza_id": "...|null"}`.
+`{"respuesta": "...", "fuentes": [{"tipo": "sql|documento", "referencia": "..."}], "advertencia": "...|null", "session_id": "...", "traza_id": "...|null", "span_id": "...|null"}`.
 
 - `session_id` (opcional, 1–64 caracteres `[A-Za-z0-9_-]`): agrupa los turnos de una
   conversación. Si no llega, se genera uno; el cliente lo reenvía en la pregunta siguiente.
 - `traza_id`: el turno en las trazas del agente. `null` con el orquestador o el stub.
+- `span_id`: el span del turno en el agente; es lo que se manda en `/chat/valoracion`. `null` sin agente.
 
 A quién se pregunta:
 
@@ -67,13 +70,13 @@ Misma entrada; respuesta `text/event-stream`. Cada evento es `event: <tipo>\ndat
 | `token` | `{texto}` | Fragmentos de las respuestas definitivas (charla, síntesis de datos, síntesis forzada) |
 | `passthrough` | `{texto, fuentes, advertencia, traza_id}` | Respuesta completa entregada al final (ruta documental, frases fijas) |
 | `error` | `{detalle}` | Fallo con el stream abierto; cierra sin `done` |
-| `done` | `{session_id, traza_id, fuentes, advertencia}` | Turno completado, con los metadatos definitivos aunque el texto llegara como `token` |
+| `done` | `{session_id, traza_id, span_id, fuentes, advertencia}` | Turno completado, con los metadatos definitivos aunque el texto llegara como `token` |
 
 - Con `AGENTE_URL`: reenvía byte a byte el SSE de `{AGENTE_URL}/responder/stream`. Si el
   agente no contesta 200, responde 503 sin abrir el stream. Si el cliente se va, cierra la
   conexión con el agente (que cancela el turno).
 - Sin `AGENTE_URL`: llama al mismo camino que `/chat` y emite `passthrough` + `done`
-  (`traza_id: null`; `done` repite las fuentes y la advertencia).
+  (`traza_id` y `span_id` a `null`; `done` repite las fuentes y la advertencia).
 
 ```bash
 curl -N -X POST localhost:8000/chat/stream -H 'Content-Type: application/json' \

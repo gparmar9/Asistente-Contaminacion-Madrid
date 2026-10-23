@@ -14,6 +14,8 @@ import NoEncontrada from './paginas/NoEncontrada'
 
 // La única pantalla con Recharts se carga aparte: el resto no paga su peso.
 const DetalleEstacion = lazy(() => import('./paginas/DetalleEstacion'))
+// Página de administración: casi nadie la abre, no entra en el bundle principal.
+const UsoAsistente = lazy(() => import('./paginas/UsoAsistente'))
 
 export default function App() {
   return (
@@ -31,6 +33,7 @@ export default function App() {
             <Route path="/estaciones/:codigo" element={<DetalleEstacion />} />
             <Route path="/asistente" element={<Asistente />} />
             <Route path="/metodologia" element={<Metodologia />} />
+            <Route path="/admin/uso" element={<UsoAsistente />} />
             <Route path="*" element={<NoEncontrada />} />
           </Routes>
         </Suspense>
