@@ -38,7 +38,7 @@ respuesta útil sin ella, no es parte del MVP.
 ## Arquitectura (resumen)
 
 ```
-                    EventBridge Scheduler — cada noche a las 23:45 (Europe/Madrid)
+     EventBridge Scheduler — al cierre de cada franja: 07:45, 13:45, 20:45 y 23:45 (Europe/Madrid)
                                     │ invoca
 API Madrid (tiempo real) ──▶ AWS Lambda: pipeline_tiempo_real ──▶ RDS PostgreSQL
                                     │                             ├── calidad_aire_horas_live
@@ -107,7 +107,7 @@ pip install -r requirements.txt
 ### Opción A · Conectarse a la base de datos en la nube
 
 La base de datos vive en **Amazon RDS**, ya tiene el histórico cargado (1,27 M de filas) y **se
-actualiza sola cada noche a las 23:45**. No hay que cargar nada ni levantar Docker.
+actualiza sola al cierre de cada franja** (07:45, 13:45, 20:45 y 23:45). No hay que cargar nada ni levantar Docker.
 
 **1. Credenciales de AWS.** Entra en el portal del máster, copia el bloque de claves y pégalo en tu
 terminal. Son temporales: cuando un comando responda `ExpiredToken`, copia unas nuevas.
@@ -198,10 +198,12 @@ python src/etl/pipeline_tiempo_real.py
 ```
 
 Baja datos de la API, los guarda en `calidad_aire_horas_live`, corre la inferencia y hace *upsert*
-en `resumen_datos_ml`. Es **idempotente**: reejecutarlo no duplica nada, y corrige las horas que
-todavía no estaban publicadas cuando se ejecutó antes.
+en `resumen_datos_ml` **solo los bloques ya cerrados** (uno a medias daría falsos positivos). Es
+**idempotente**: reejecutarlo no duplica nada, y corrige las horas que todavía no estaban publicadas
+cuando se ejecutó antes.
 
-> En la nube esto lo hace la Lambda cada noche; en local solo tiene sentido para probar.
+> En la nube esto lo hace la Lambda al cierre de cada franja; en local solo tiene sentido para probar.
+> Con `--reprocesar AAAA-MM-DD` rehace los bloques desde el horario ya guardado, sin llamar a la API.
 
 ---
 
@@ -373,18 +375,18 @@ docker compose --profile api down
 
 ## Infraestructura en AWS
 
-La Fase 1 ya no depende de ningún ordenador: **se ejecuta sola en AWS todas las noches a las 23:45**.
+La Fase 1 ya no depende de ningún ordenador: **se ejecuta sola en AWS al cierre de cada franja** (07:45, 13:45, 20:45 y 23:45).
 
 | Servicio | Para qué |
 |---|---|
 | **S3** | Modelo entrenado, histórico y parquet |
 | **RDS PostgreSQL** | La base de datos del proyecto |
-| **Lambda + EventBridge Scheduler** | Ejecuta el pipeline cada noche |
+| **Lambda + EventBridge Scheduler** | Ejecuta el pipeline al cierre de cada franja |
 | **SSM Parameter Store** | La cadena de conexión, cifrada |
 | **CloudWatch + SNS** | Logs y aviso por correo si algo falla |
 | **EC2 + Docker Compose** | La web, la API, el agente, el RAG y Phoenix (trazas del agente en `/phoenix/`) |
 
-Comprobar que se ejecutó anoche:
+Comprobar las últimas ejecuciones:
 
 ```powershell
 aws logs tail /aws/lambda/jupiter-pipeline --since 1d --format short
@@ -610,7 +612,6 @@ enchufable, así que añadir un detector nuevo no toca el resto del sistema.
 | **Autoencoder (PCA)** | Anomalías de *forma* del perfil horario, solo con scikit-learn (un autoencoder lineal equivale a PCA). | Bajo |
 | **LSTM Autoencoder** | Lo mismo con no-linealidades temporales; componente de *deep learning* para la memoria. | Alto (PyTorch) |
 | Baseline con recencia | Ponderar más los años recientes (la contaminación baja con los años). | Bajo |
-| **No puntuar el bloque del día aún abierto** | Evita falsos positivos de «sensor caído» mientras la franja está a medias: el mismo día da ~97 anomalías a media tarde y ~15 por la noche. Imprescindible antes de subir la frecuencia de ingesta. | Bajo |
 | Distinguir el tipo de anomalía (ambiental / operativa) | El chatbot necesita separar «el ozono está alto» de «a esta estación le faltan horas». | Bajo |
 | Despliegue automático a AWS desde GitHub Actions (OIDC) | Publicar la imagen sin claves estáticas ni pasos manuales. | Medio |
 

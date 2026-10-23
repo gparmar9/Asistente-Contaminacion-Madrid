@@ -123,6 +123,8 @@ Hilo conductor de la memoria: cómo y por qué cambió el diseño.
 | 2026-10-09 | Modelo de referencia para SQL | MiniMax M2.5 → **sin modelo de referencia en los siguientes lotes** | Logró 2/11 aciertos en datos frente a 4/11 del mejor modelo barato, con mayor coste por lote: 0,085 $ frente a 0,023–0,043 $. Se prioriza corregir el diseño |
 | 2026-10-13 | Servicios de la EC2 | `api-usuario` + `orquestador` + `rag`, con `api-usuario` publicado en el 8000 y el LLM por `/jupiter/llm/{base_url,model,api_key}` → **`web` + `api-usuario` + `agente` + `rag`**: solo `web` (nginx) publica puerto (80); el agente usa **Bedrock con el rol de la EC2** (sin claves) y lee su configuración de **todo `/jupiter/agente/`** en SSM (cada parámetro, una variable de entorno) | El equipo sustituyó el orquestador por el `Agente` (2026-10-08) y la web ya tiene imagen. Un solo origen para el navegador (nginx hace de proxy de `/api/*`), como en local. Leer la ruta entera evita tocar `arrancar.sh` cada vez que el agente añade una variable. Descartado: mantener el orquestador desplegado (código sin uso) y una clave de API del LLM en SSM (Bedrock no la necesita con el rol de la máquina) |
 | 2026-10-21 | Acceso a la web de la EC2 | Puerto 80 abierto solo a las IP del equipo → **IP del equipo o, para demos, abierto a todo internet con usuario y contraseña** (autenticación básica de nginx, contraseña cifrada en SSM) | La demo la presentan compañeros desde redes cuya IP pública no se conoce de antemano y puede cambiar. Descartados: una contraseña fija en el código (el repositorio es público), abrirlo sin contraseña (la API no tiene autenticación y el chat cuesta dinero), *port forwarding* con Session Manager (cada presentador necesita la CLI de AWS y su plugin) y un balanceador con Cognito o CloudFront con HTTPS (exigen dominio y certificado; demasiado para la víspera de la demo) |
+| 2026-10-22 | Frecuencia de ingesta | Una carga al día a las 23:45 con la RDS encendida de 22:00 a 01:30 → **una carga al cierre de cada franja**: 07:45, 13:45, 20:45 y 23:45 (`cron(45 7,13,20,23 * * ? *)`), escribiendo **solo los bloques cerrados**, **con la RDS siempre encendida** `[pendiente de aplicar en AWS]` | Datos del día disponibles durante la jornada y cada bloque evaluado completo, sin los falsos positivos del bloque abierto (§6.5). El minuto 45 sale de producción: 36/36 noches con la hora 22 publicada a las 23:45. El ahorro deja de ser prioritario. Descartado: cada hora (evalúa bloques a medias), cada 20 min (diseño inicial), 08:15/14:15/21:15 (primera propuesta: 30 min más de espera sin necesidad) y decidir el cierre por lo publicado en vez de por el reloj (si la API se retrasa, la última carga del día no escribiría la noche) |
+| 2026-10-23 | Cobertura del bloque de noche en tiempo real | Sobre 4 horas (20–23) → **sobre las 3 que publica la API (20–22)** | La hora 23 no llega nunca (§11): con 4, todas las noches tenían cobertura 0,75 y el detector marcaba el 7,19 % (0,44 % en el histórico). Simulado en el histórico: 8,69 % con 4 y 0,49 % con 3. Descartado: reentrenar con la noche en 20–22 (cambia el modelo y el histórico por una hora) y una segunda fuente para la hora 23 (no se ha localizado una publicación diaria `[por confirmar]`) |
 | 2026-10-23 | Logs y métricas de la EC2 | Logs de los contenedores solo en el disco de la máquina (`json-file`) y sin métricas de memoria ni disco → logs de `web`, `api-usuario` y `rag` en CloudWatch Logs y memoria y disco con el agente de CloudWatch; `agente` y `phoenix` siguen en la máquina | Depurar exigía entrar por Session Manager y los fallos de la EC2 no avisaban a nadie. Base para las alarmas. Descartados: Grafana + Loki en la misma EC2 (3-4 contenedores más en 4 GB y duplica Phoenix y CloudWatch), Amazon Managed Grafana (9 $ por usuario y mes), métricas propias del agente con EMF (unos 5-8 $/mes `[estimación]` y repiten Phoenix) y enviar también los logs del agente (duplican sus trazas) |
 | 2026-10-23 | Trazas del agente en producción | Phoenix solo en local (perfil `observabilidad` del compose) → **Phoenix como quinto contenedor de la EC2**, sin puerto propio, servido por el nginx de la web en `/phoenix/` y **siempre con la contraseña de la web** (403 si no hay contraseña). El agente le envía las trazas por la red interna de Docker. Imagen pública fijada en el compose (`20.19.0`), SQLite en un volumen del disco de la EC2 | Las trazas de cada turno (fases, tiempos, tokens, errores) son la observabilidad del asistente y solo existían en el portátil de quien probaba. Descartados: Phoenix Cloud de Arize (manda a un tercero las preguntas de los usuarios), publicar su puerto 6006 (un segundo puerto sin autenticación), un balanceador con reglas por ruta (unos 16 $/mes `[estimación]`), guardar las trazas en la RDS (ata Phoenix a los horarios de la base y mete un esquema ajeno), copiar la imagen a ECR (un repositorio y un job más para una imagen que no se construye) y la autenticación propia de Phoenix (usuarios y API keys, pero exige un paso manual tras el primer arranque y un secreto más en SSM; no compensa con una sola persona operando) |
 | 2026-10-23 | Acceso a la web de la EC2 | 80 para la IP del equipo y para todo internet, y 443 abierto a todo internet → **solo el 80, abierto a todo internet con contraseña** | La contraseña ya protegía la web y `/phoenix/`, así que la regla de la IP del equipo sobraba. En el 443 no escucha nada: su regla solo servía para que el navegador que prueba HTTPS primero recibiera un rechazo inmediato. Se acepta que ese navegador tarde más en pasar a HTTP a cambio de no tener abierto un puerto sin uso |
@@ -260,9 +262,18 @@ los picos**, como haría una media diaria. Resultado: **1.274.644 filas de bloqu
 
 1. Descarga de la API con reintentos.
 2. Limpieza con el parser único.
-3. Inserción del horario crudo en tabla de *staging* + `INSERT ... ON CONFLICT DO NOTHING`.
-4. Agregación a bloques, features e Isolation Forest.
-5. *Upsert* de `resumen_datos_ml` con `ON CONFLICT DO UPDATE`.
+3. Inserción del horario crudo en tabla de *staging* + `INSERT ... ON CONFLICT`, que solo
+   actualiza una hora si antes era inválida y ahora es válida.
+4. Agregación a bloques, features e Isolation Forest. La cobertura de la noche se mide sobre las 3
+   horas que publica la API (20–22, §6.5 bis).
+5. **Solo los bloques cerrados**: se descartan los del día cuya última hora publicable (6, 12, 19
+   y 22) aún no ha terminado. Por reloj y no por lo publicado: si la API se retrasa, el bloque se
+   escribe con menos cobertura y la carga siguiente lo completa.
+6. *Upsert* de `resumen_datos_ml` con `ON CONFLICT DO UPDATE`.
+
+**Cuándo se ejecuta:** al cierre de cada franja, a las 07:45, 13:45, 20:45 y 23:45 (§2). Cada
+ejecución recalcula todos los bloques cerrados del día. `--reprocesar AAAA-MM-DD` rehace los bloques
+desde el horario guardado, sin llamar a la API.
 
 **Propiedad clave: idempotencia.** Reejecutarlo no duplica datos, lo que permite programarlo con
 frecuencia sin coordinación.
@@ -318,6 +329,17 @@ una estación de tráfico y en una de fondo.
 - **Validación cualitativa con eventos conocidos:** entre los bloques más anómalos aparece PM10 en
   la estación 18 la madrugada del **01-01-2019** (129,5 µg/m³ frente a 14,9 esperados), atribuible a
   la pirotecnia de Nochevieja.
+- **El Isolation Forest detecta sobre todo fallos operativos y deja pasar episodios ambientales
+  extremos** (comprobado el 2026-10-22 sobre `resumen_datos_ml.parquet`). El 74,9 % de sus marcas
+  tienen cobertura < 0,7 (entre 57 % en NO y 88 % en PM2.5), y solo marca el **12,7 %** de los
+  bloques con |z| > 3 (2.198 de 17.251; en PM10, el 7,3 %). Caso más claro, la **calima del
+  15-03-2022**: el z-score marca 52/52 bloques de PM10 (mediana de z 12,2) y 31/32 de PM2.5; el IF,
+  **7/52 y 0/32**. Los bloques de PM10 de ese día, con cobertura 1,0 y medias de 137–528 µg/m³,
+  puntúan 0,67–0,71, justo bajo el umbral del modelo de PM10 (0,694). Lectura: la puntuación del IF
+  se satura (a partir de cierto punto, un valor más extremo no se aísla antes) y el cupo del 1 % lo
+  ocupan sobre todo los fallos de cobertura. Los dos detectores son **complementarios**: z-score
+  para lo ambiental, IF para lo operativo. Hoy `IS_ANOMALY` es solo la salida del IF, así que la web
+  y el agente no verían ese episodio como anómalo.
 
 ### 6.5 Qué detecta el modelo en un día real (2026-09-16)
 
@@ -342,14 +364,43 @@ que el Isolation Forest aporta valor precisamente ahí. Sirve como caso de estud
 **Efecto del momento de ejecución.** La misma jornada dio 41 anomalías a las 17:06 y 15 a las 19:40:
 el bloque de tarde en curso tenía entonces ~0,5 de cobertura y se marcaba; al completarse hasta 0,85
 dejó de marcarse. Es decir, ejecutar a media jornada genera falsos positivos transitorios en la
-franja abierta. De ahí que la ingesta se programe a las **23:45**, con las cuatro franjas cerradas:
-el recuento es estable y comparable entre días.
+franja abierta. De ahí que la ingesta solo escriba **bloques cerrados** y se ejecute al cierre de
+cada franja (§5.4): el recuento es estable y comparable entre días. Comprobado de nuevo el
+2026-10-23 a las 18:49 con la API real: la tarde abierta (5 de 7 horas, cobertura 0,714) tenía 8
+bloques marcados, todos con z-score normal y por encima del 0,7 de la web, es decir, visibles como
+anomalías; madrugada y mañana, cerradas, ninguno.
 
 **Confirmado en producción, no solo en el test.** Tras desplegar el arreglo, la ejecución del
 2026-09-19 corrigió 742 horas que habían quedado como placeholder, y las anomalías del día
 volvieron al rango normal (13, frente a las 97 falsas registradas a media tarde antes del arreglo).
 Las 126 filas `N` que quedan son íntegramente la hora 23 (una por cada serie activa), la
 limitación permanente ya documentada — no un resto del bug.
+
+### 6.5 bis Producción del 16-09 al 21-10-2026 (consultado en RDS el 2026-10-22)
+
+- **36/36 días con carga**, 38 ejecuciones de la Lambda (2 manuales), **0 errores** (CloudWatch);
+  duración media 8,5 s, máxima 23,2 s. 92.400 horas cargadas (93,4 % válidas) y 15.336 bloques
+  nuevos (418–428 al día: 107 series × 4 bloques).
+- **517 bloques marcados (3,4 %)**, frente al 1 % del histórico; entre 1 y 51 al día (mediana 12,5).
+  Por bloque: noche **7,19 %** (histórico 0,44 %), mañana 4,13 % (2,19 %), tarde 1,48 % (0,84 %),
+  madrugada 0,68 % (0,53 %).
+- **Causa del exceso nocturno: la hora 23 nunca llega** (§11). Todos los bloques de noche en vivo
+  tienen cobertura 0,75; en el histórico solo el 0,59 % la tienen y de esos el IF marca el 6,3 %,
+  la misma tasa que en producción. Como 0,75 supera el filtro de la web (≥ 0,7), **se muestran como
+  anomalías**: falso positivo sistemático. 250 de las 276 marcas de noche tienen cobertura ≥ 0,7.
+- **Arreglo (2026-10-23):** en tiempo real, la cobertura de la noche se mide sobre las 3 horas que
+  la API publica (20–22). Simulado sobre los 318.000 bloques de noche del histórico con el modelo
+  de producción:
+
+  | Bloque de noche | Marcados | Marcados con cobertura ≥ 0,7 |
+  |---|---|---|
+  | Horas 20–23, sobre 4 (como se entrenó) | 0,44 % | 0,22 % |
+  | Horas 20–22, sobre 4 (producción hasta ahora) | **8,69 %** | 8,22 % |
+  | Horas 20–22, sobre 3 (arreglo) | **0,49 %** | 0,18 % |
+
+  El arreglo coincide con el cálculo de 4 horas en el 99,65 % de los bloques; quitar la hora 23
+  apenas mueve el z-score (+0,02 de media). Los días ya cargados se rehacen con `--reprocesar`
+  `[pendiente de ejecutar]`.
 
 ### 6.6 Limitaciones del detector
 
@@ -358,6 +409,9 @@ limitación permanente ya documentada — no un resto del bug.
 - **Fuga de información en el baseline:** el valor esperado se calcula con **todo** el histórico,
   incluido el periodo evaluado. En producción debería ajustarse solo con datos de entrenamiento.
 - El baseline no pondera la recencia, aunque la contaminación baja con los años.
+- **Infradetección de episodios ambientales extremos** (§6.4): el IF solo marca el 12,7 % de los
+  bloques con |z| > 3 y no marcó la calima del 15-03-2022 en PM2.5. Mejora directa: combinar
+  ambos detectores (`IS_ANOMALY` = IF o |z| > 3) y etiquetar el tipo (ambiental u operativa).
 
 ---
 
@@ -1413,12 +1467,33 @@ Los objetos se organizan con los mismos prefijos que el repositorio: `models/`, 
 - La instancia se creó con la **plantilla de capa gratuita** (750 h/mes de `db.t4g.micro` Single-AZ,
   20 GB de SSD de uso general y 20 GB de backups). La configuración elegida cabe entera en esos
   límites; se eligió **gp2** en lugar de gp3 precisamente porque es lo que cubre la capa gratuita.
-  `[por confirmar: si la cuenta del máster sigue dentro de los 12 meses de capa gratuita]`
-- **Encendido programado (desde el 2026-10-01, §8.8):** la instancia solo está encendida de 22:00 a
-  01:30 y cuando el equipo la enciende a mano; parada solo se paga el disco y las copias. Estimación
-  sin capa gratuita: ~3,5 h/día ≈ 106 h/mes de instancia + disco ≈ **4–5 $/mes** en lugar de 15,5
-  `[estimación: confirmar con la factura de octubre]`. Es posible porque la carga pasó a ser diaria
-  (23:45); con la ingesta cada 20 minutos prevista al principio no lo habría sido.
+  **Comprobado el 2026-10-22: la capa gratuita no aplica a la cuenta** (ver el coste real, abajo).
+- **Encendido programado (del 2026-10-01 a la ingesta por franjas, §8.8):** la instancia solo
+  estaba encendida de 22:00 a 01:30 y cuando el equipo la encendía a mano; parada solo se paga el
+  disco y las copias. Real: 4,67 $ de RDS del 1 al 22 de octubre (abajo). Era posible porque la
+  carga era diaria (23:45); con cargas también de día, la RDS pasa a estar siempre encendida.
+
+**Coste real (Cost Explorer, sin impuestos, consultado el 2026-10-22).** La capa gratuita **no
+aplica** a la cuenta: la RDS se cobra desde el primer día.
+
+| Servicio | 16–30 sep | 1–22 oct |
+|---|---|---|
+| RDS (instancia, disco y copias) | 7,10 $ | 4,67 $ |
+| IPv4 públicas (aparece como «VPC») | 1,72 $ | 2,64 $ |
+| Bedrock | — | 1,49 $ |
+| EC2 (instancia y disco) | — | 1,17 $ |
+| Otros (ECR, S3, Systems Manager, Cost Explorer) | 0,03 $ | 0,37 $ |
+| **Total** | **8,85 $** | **10,35 $** |
+
+- Instancia RDS: 343,6 h en septiembre (24 h/día) y 110,9 h en octubre (~5 h/día con el encendido
+  programado). Disco y copias se pagan igual con la base apagada.
+- **IPv4 pública a 0,005 $/h por dirección**, también la IP elástica de la EC2 con la máquina
+  apagada (404,8 h «idle» en octubre, 2,02 $). En octubre, una cuarta parte de la factura. No estaba
+  en la estimación inicial.
+- Systems Manager: 124 pasos de los runbooks de encendido y apagado (0,25 $).
+- **Estimación con la RDS siempre encendida** (ingesta por franjas, decidido el 2026-10-22):
+  ~12,4 $ de instancia + ~2,3 $ de disco + ~1 $ de copias + ~7,3 $ de dos IPv4 ≈ **24 $/mes**, más
+  las horas de EC2 y el uso de Bedrock `[estimación]`.
 
 ### 8.4 Decisión de red
 
@@ -1595,8 +1670,10 @@ El bloque `noche` en vivo sale unas 11 veces más anómalo que en el histórico,
 cobertura 0,75 (3.165 de 3.196 bloques). Con cobertura 0,5 o 0,25 (31 bloques, ejecuciones
 manuales a deshora) sube al 62 % y al 100 %. `mañana` en el 4 % es un rasgo del modelo, presente
 también en el histórico. Consecuencia: unas 200 anomalías de más al mes en la base `[estimación: 3.196 × (6,8 − 0,6) %]` y
-una `TasaAnomalias` nocturna estructuralmente por encima del 1 % esperado. Pendiente de decidir el
-arreglo antes de calibrar la alarma (fase 4).
+una `TasaAnomalias` nocturna estructuralmente por encima del 1 % esperado. **Arreglado el mismo
+día** (§5.4, §6.5 bis): el pipeline solo escribe bloques cerrados y mide la noche sobre las 3 horas
+que publica la API; con las cargas por franja, `TasaAnomalias` pasa a ser la de los bloques recién
+cerrados. Queda calibrar la alarma con datos posteriores al arreglo (fase 4).
 
 La retención de los logs se baja a 14 días; por defecto no caducan nunca.
 
@@ -1754,10 +1831,15 @@ Los tres filtros, probados con `test-metric-filter` sobre una línea real del ch
 del chat solo toma la 200. `[por confirmar: 503 reales con el agente parado y primer dato de
 TiempoRespuestaChat]`
 
-### 8.8 Encendido programado de la base de datos — estado actual
+### 8.8 Encendido programado de la base de datos (2026-10-01 a 2026-10-23)
 
-La RDS solo está encendida cuando hace falta: cada noche alrededor de la carga, y cuando el equipo
-la enciende a mano para trabajar o hacer una demo.
+**Sustituido por la RDS siempre encendida** al pasar a una carga por franja (§2): las dos
+programaciones se desactivan, no se borran, y «Apagar entorno» ya solo apaga la EC2
+`[pendiente de aplicar en AWS]`. Las ventanas de copias y mantenimiento no coinciden con ninguna
+de las cuatro cargas. Se conserva el diseño porque explica decisiones y fallos de §8 y §12.
+
+La RDS solo estaba encendida cuando hacía falta: cada noche alrededor de la carga, y cuando el
+equipo la encendía a mano para trabajar o hacer una demo.
 
 | Hora de Madrid | Qué pasa | UTC en verano / invierno |
 |---|---|---|
@@ -2111,8 +2193,8 @@ la enciende a mano para trabajar o hacer una demo.
 - **La hora 23 nunca se captura.** El endpoint en tiempo real solo sirve el día en curso y publica
   con ~1 hora de retraso (comprobado: a las 14:51 la última hora válida era la 13). A las 23:45 lo
   último disponible es la hora 22, y pasada la medianoche la API ya solo devuelve el día nuevo.
-  Consecuencia sistemática: el bloque de noche (20-23) tiene cobertura 0,75 todos los días. Para
-  cerrarlo haría falta una segunda fuente (el fichero diario del Ayuntamiento), no otro horario.
+  Por eso, en tiempo real, el bloque de noche se mide sobre 3 horas (20–22) y su media no incluye
+  la hora 23 (§6.5 bis). Para cerrarlo haría falta una segunda fuente, no otro horario.
 - **El asistente documental no consulta mediciones.** El RAG responde sobre documentación revisada,
   no sobre la situación de hoy; por eso añade automáticamente una limitación de actualidad cuando
   la pregunta habla del presente. Unir ambas fuentes es la herramienta SQL del agente, pendiente
@@ -2390,6 +2472,8 @@ la enciende a mano para trabajar o hacer una demo.
 | 2026-10-16 | **Dos modelos más para el agente** (Guille con Claude Code, rama `feature/evaluacion-haiku-qwen`): candidatos elegidos con la API de precios de AWS y la tabla de regiones: Claude Haiku 5.5 y Qwen3 Next 80B A3B. Haiku no está disponible en la cuenta (nadie ha enviado el formulario de caso de uso de Anthropic, así que no hay acuerdo de Marketplace). Qwen3 Next pasa por las baterías de Carlos (clasificador, 12 turnos, conversaciones, adversario, 16 de datos y los 28 nuevos con SQL libre y catálogo) contra una copia local de sus datos: 16/20 en datos no vistos con SQL libre (empata con gpt-oss), 10/20 como selector del catálogo, 0 mixtas y copia literal del prompt de sistema. Unos 0,14 $. Coste real de la campaña de Carlos en Cost Explorer: 1,21 $. Precio de Qwen3 Next añadido al informe de trazas y comparativa visual (`docs/agente/presentacion/comparativa_modelos.html`) ampliada a los tres modelos, con los resultados SQL. Veredictos pendientes de revisión humana |
 | 2026-10-18 | **Nemotron 3 Super en las baterías del agente** (Guille con Claude Code, rama `feature/evaluacion-haiku-qwen`): con Haiku 5.5 aún bloqueado, se evalúa Nemotron 3 Super 120B con las mismas baterías y los mismos datos. Clasificador 31/31, conversaciones 11/11, 16/20 en datos no vistos con SQL libre y 14/20 con el catálogo (el mejor selector), turno documental de 4,9 s; copia literal del prompt de sistema e inventa datos de Getafe con el catálogo. Unos 0,14 $. Precio en el informe de trazas y cuarta serie en la comparativa visual. Veredictos pendientes de revisión humana |
 | 2026-10-21 | **Usuario y contraseña en la web** (Guille con Claude Code, rama `feature/web-contrasena`): para la demo, que presentan compañeros desde redes cuya IP no se conoce. `arrancar.sh` lee la contraseña de SSM, calcula su hash y genera la configuración de nginx y `compose.yml` la monta en `web`, sin reconstruir la imagen. Probado en local: `arrancar.sh` con `aws` simulado (con contraseña, sin parámetro y con permiso denegado, que detiene el arranque; la contraseña en claro no queda en ningún fichero) y nginx real con el `nginx.conf` de la web (401 sin credenciales o con una errónea, 200 con la buena, también en `/api/*`, healthcheck interno sano; sin parámetro, 200 como antes). Aplicado en AWS el mismo día: permiso de lectura del parámetro en el rol de la EC2, puerto 80 abierto a todo internet y «Desplegar → `web`» con la EC2 encendida (el log muestra «Web protegida»). Desde una IP fuera de la lista del equipo: 401 en la web, `/api/*` y `/api/chat` sin credenciales o con una errónea; con ellas, 24 estaciones, datos de NO₂ hasta el día de la prueba, una pregunta de datos por SQL (7,2 s) y una documental con citas `[Dn]` (23,4 s) |
+| 2026-10-22 | **Detector frente a la calima del 15-03-2022** (Guille con Claude Code, al redactar el 3.1 de la memoria): sobre el histórico, el IF marca 7/52 bloques de PM10 y 0/32 de PM2.5 ese día, frente a 52/52 y 31/32 del z-score. En global solo marca el 12,7 % de los bloques con \|z\| > 3 y el 74,9 % de sus marcas tienen cobertura < 0,7: los dos detectores son complementarios (§6.4, §6.6). Sin cambios en el código; combinarlos queda propuesto |
+| 2026-10-22 | **Balance de producción y coste real** (Guille con Claude Code, consultas de solo lectura en CloudWatch, RDS y Cost Explorer): 36/36 días con carga y 0 errores desde el 16-09; 3,4 % de bloques marcados, inflado por el bloque de noche (7,19 % frente a 0,44 % del histórico) porque la hora 23 nunca llega (§6.5 bis). Coste real sin impuestos: 8,85 $ (16–30 sep) y 10,35 $ (1–22 oct); sin capa gratuita y con las IPv4 públicas como segundo gasto (§8.3). Decidido: ingesta al cierre de cada franja y RDS siempre encendida |
 | 2026-10-23 | **Phoenix detrás de la web, en local** (Carlos con Claude Code, rama `feature/phoenix-prefijo`): primer paso para llevar Phoenix a la EC2 bajo `/phoenix`, detrás del nginx de la web y con su contraseña. Antes, medición en la EC2: 1279 MB usados de 3835 con los cuatro contenedores y el modelo del RAG cargado (562 MB en reposo), y Phoenix 20.19.0 ocupa unos 450-500 MB en reposo: cabe sin cambiar de instancia. El `nginx.conf` de la web resuelve los nombres en cada petición (DNS de Docker y destinos en variables): `web` arranca sin Phoenix (502 en `/phoenix`) y deja de depender de la IP de `api-usuario`. `/phoenix` tiene su propio fichero de acceso, abierto en local; en la EC2 exigirá la contraseña siempre. Log de acceso en JSON, preparado para CloudWatch. Probado con la imagen real, un `api-usuario` simulado y Phoenix: rutas de `/api` (con query y caracteres codificados), estáticos, GraphQL y una traza por la red interna; con contraseña, 401 sin credenciales o con una errónea y 200 con la buena; sin contraseña, 403 en `/phoenix` y la web abierta. La retención de 30 días de Phoenix purga los domingos a las 00:00 UTC, con la EC2 apagada: se acepta que las trazas crezcan |
 | 2026-10-23 | **Phoenix en la EC2** (Carlos con Claude Code, rama `feature/phoenix-prefijo`): `phoenix` pasa a ser el quinto contenedor del compose de producción, con imagen pública fijada (`20.19.0`), volumen propio y healthcheck con el Python de la imagen (no trae `curl` ni `wget`). `arrancar.sh` genera el acceso a `/phoenix/` (contraseña de la web siempre o 403 sin ella), no busca versión de Phoenix en SSM y deja de reiniciar `web` al redesplegar `api-usuario`. Hallazgo: al relanzar `web` con la misma imagen, compose no recrea el contenedor aunque cambien los ficheros de acceso que monta, así que poner o quitar la contraseña no se aplicaba hasta el siguiente encendido; ahora `arrancar.sh` recarga nginx cuando actualiza `web`. «Desplegar» gana el componente `phoenix`, sin tests ni build. Probado sin AWS: `arrancar.sh` con `aws` y `docker` simulados en seis casos (nunca pide la versión de Phoenix; con permiso denegado se detiene sin generar el acceso) y Phoenix real levantado con el compose de producción (sano en 16 s) detrás de nginx con los ficheros generados: con contraseña, 401 sin credenciales o con una errónea, 200 con la buena y 401 desde la propia máquina; estáticos y GraphQL con prefijo; una traza enviada a `http://phoenix:6006/v1/traces` aparece en su proyecto; sin contraseña, 403 en `/phoenix/` y la web abierta. Pendiente de aplicar en AWS |
 | 2026-10-23 | **Arreglo del arranque de la EC2** (Carlos con Claude Code, rama `fix/arranque-ec2`): dos ejecuciones de «Encender entorno» fallaron porque la EC2 ejecutaba el `arrancar.sh` de su disco, anterior a Phoenix, con el `compose.yml` nuevo de S3 (§8.9). `jupiter.service` trae ahora `arrancar.sh` de S3 antes de ejecutarlo; `arrancar.sh` reinstala `jupiter.service` si cambió y borra los directorios que Docker crea en lugar de los ficheros de acceso; «Encender entorno» reintenta el arranque una vez. Sintaxis de `arrancar.sh` y del comando del workflow comprobada con `bash -n`, y `arrancar.sh` probado con `aws`, `docker` y `systemctl` simulados y el fichero de acceso convertido en directorio. EC2 recuperada a mano por SSM el mismo día (borrar el directorio, `arrancar.sh` y `jupiter.service` de S3, reiniciar el servicio): cinco contenedores sanos y 401 sin credenciales en `/`, `/api/health` y `/phoenix/`. `[por confirmar: encendido tras desplegar con la máquina apagada, con el arreglo ya en S3]` |
@@ -2406,6 +2490,7 @@ la enciende a mano para trabajar o hacer una demo.
 | 2026-10-23 | **KPIs de uso servidos por el agente** (Carlos con Claude Code, rama `feature/kpis-agente`): `GET /kpis` en el agente (últimos 1, 7 o 30 días; lector de Phoenix, cálculo en la capa de negocio, caché de 60 s, 503 sin Phoenix) y `GET /kpis` en api-usuario (404 sin agente, 503 caído, 502 fuera de contrato). Turnos, coste y precios pasan a `agente/business/trazas.py`, compartidos con `informe_trazas.py` sin cambios de cifras. Se elimina el script `kpis_phoenix.py` y sus tests; sus casos pasan al agente. Tests: 171 del agente (10 omitidos) y 34 de api-usuario en verde. `[por confirmar: página web y despliegue]` |
 | 2026-10-23 | **Página «Uso del asistente» en la web** (Carlos con Claude Code, rama `feature/kpis-agente`): `/admin/uso` con rótulo «Solo administradores» sin protección, enlace en el pie, seis indicadores con su *n*, embudo, histograma del coste con P50/P90, satisfacción por ruta y tablas; contrato OpenAPI regenerado. Sin cambios en `compose.yml`: la raíz de Phoenix sale de `PHOENIX_ENDPOINT`. Web: 56 tests Vitest, typecheck, lint y build en verde. `[por confirmar: despliegue y prueba en la EC2]` |
 | 2026-10-23 | **Job `frontend` en CI** (Carlos con Claude Code, rama `feature/kpis-agente`): README, memoria y comentarios daban por hecha la comprobación del contrato web-API, pero el job nunca se había añadido a `tests.yml`. Nuevo sexto job: regenera `openapi.json` desde `ApiUsuario` (FastAPI 0.161.1 y pydantic 2.14.1 fijados) y `schema.d.ts`, falla con `git diff --exit-code` si difieren y pasa lint, tests y build de la web. Comprobado en local: el contrato regenerado coincide byte a byte con el versionado; lint, 56 tests y build en verde. Primera ejecución en GitHub `[por confirmar]` |
+| 2026-10-23 | **Ingesta al cierre de cada franja y bloque de noche sobre 3 horas** (Guille con Claude Code, rama `feature/ingesta-por-franjas`): el pipeline solo escribe bloques cerrados y mide la noche sobre las 3 horas que publica la API; `--reprocesar` rehace los días ya cargados. Simulado en el histórico: noche marcada 8,69 % → 0,49 % (0,44 % con las 4 horas). Horario elegido: 07:45, 13:45, 20:45 y 23:45. «Apagar entorno» ya no apaga la RDS. Tests unitarios y del agente en verde. Pendiente en AWS: desactivar las programaciones de la RDS, desplegar la Lambda, cambiar el horario y reprocesar |
 
 ---
 

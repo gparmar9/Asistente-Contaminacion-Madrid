@@ -230,14 +230,15 @@ export default function Metodologia() {
       <ul>
         <li>
           <strong>La hora 23 nunca llega.</strong> El endpoint en tiempo real solo sirve el día en curso y publica con
-          una hora de retraso; la ingesta nocturna encuentra, como mucho, la hora 22, y al día siguiente la API ya solo
-          devuelve el día nuevo. Consecuencia: el bloque de noche (20–23 h) tiene cobertura 0,75 todos los días. Sigue
-          por encima del umbral, pero su media se calcula con tres horas de cuatro.
+          hasta una hora de retraso; la última carga encuentra, como mucho, la hora 22, y al día siguiente la API ya solo
+          devuelve el día nuevo. Por eso, en tiempo real, el bloque de noche (20–23 h) se mide sobre las tres horas que
+          sí llegan: medido sobre cuatro, su cobertura sería siempre 0,75 y el detector lo marcaría unas 20 veces más
+          que en el histórico. Su media se calcula con tres horas de cuatro.
         </li>
         <li>
-          <strong>Los datos del día se consolidan de noche.</strong> El pipeline se ejecuta a las 23:45 con las cuatro
-          franjas cerradas; ejecutarlo a media jornada genera falsos positivos transitorios en la franja abierta. Por
-          eso la pantalla «Hoy» muestra el último día con datos y lo indica cuando no es el día de hoy.
+          <strong>Cada franja se evalúa al cerrarse.</strong> El pipeline se ejecuta a las 07:45, 13:45, 20:45 y 23:45 y
+          solo guarda los bloques ya terminados: uno a medias tiene poca cobertura y daría falsos positivos. Hasta la
+          primera carga del día, la pantalla «Hoy» muestra el último día con datos y lo indica.
         </li>
         <li>
           <strong>Sin etiquetas.</strong> No hay anomalías anotadas a mano, así que no se pueden calcular precisión ni

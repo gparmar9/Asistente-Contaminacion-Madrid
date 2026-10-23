@@ -49,6 +49,15 @@ def test_a_bloques_cobertura_parcial():
     assert fila["COBERTURA"] == 0.5
 
 
+def test_a_bloques_cobertura_sobre_horas_indicadas():
+    """Noche sin la hora 23: 0,75 con 4 horas de duración, 1,0 si se mide sobre 3."""
+    largo = _largo_dia_completo()
+    largo = largo[largo.HORA < 23]
+    noche = lambda b: b[b.BLOQUE == "noche"].iloc[0]["COBERTURA"]
+    assert noche(a_bloques(largo)) == 0.75
+    assert noche(a_bloques(largo, {"madrugada": 7, "manana": 6, "tarde": 7, "noche": 3})) == 1.0
+
+
 def test_calcular_baseline_es_media_por_grupo():
     """Mismo grupo en dos años con medias 10 y 20 -> valor esperado 15."""
     bloques = pd.DataFrame([

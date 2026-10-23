@@ -276,7 +276,7 @@ Resources:
             {
               "type": "text", "x": 0, "y": 0, "width": 24, "height": 2,
               "properties": {
-                "markdown": "## Jupiter: calidad del aire de Madrid\nBedrock, borde HTTP (log de acceso de nginx), máquina, datos y negocio (lo que carga cada noche el pipeline y cuántas preguntas recibe el asistente). El detalle de cada pregunta al asistente está en **Phoenix**: `http://<IP de la EC2>/phoenix/` (la IP cambia en cada encendido). Logs en el grupo `${LogsEc2}`."
+                "markdown": "## Jupiter: calidad del aire de Madrid\nBedrock, borde HTTP (log de acceso de nginx), máquina, datos y negocio (lo que carga el pipeline al cierre de cada franja y cuántas preguntas recibe el asistente). El detalle de cada pregunta al asistente está en **Phoenix**: `http://<IP de la EC2>/phoenix/` (la IP cambia en cada encendido). Logs en el grupo `${LogsEc2}`."
               }
             },
             {
@@ -422,13 +422,13 @@ Resources:
             {
               "type": "text", "x": 0, "y": 26, "width": 24, "height": 1,
               "properties": {
-                "markdown": "### Negocio: una ejecución del pipeline cada noche (23:45) y uso del asistente. Detalle de cada ejecución (validez, estaciones que faltan, anomalías por contaminante) en Logs Insights sobre `/aws/lambda/jupiter-pipeline`"
+                "markdown": "### Negocio: una ejecución del pipeline al cierre de cada franja (07:45, 13:45, 20:45 y 23:45) y uso del asistente. Detalle de cada ejecución (validez, estaciones que faltan, anomalías por contaminante) en Logs Insights sobre `/aws/lambda/jupiter-pipeline`"
               }
             },
             {
               "type": "metric", "x": 0, "y": 27, "width": 6, "height": 6,
               "properties": {
-                "title": "Pipeline: horas cargadas por noche", "region": "${AWS::Region}", "view": "bar", "stat": "Sum", "period": 86400,
+                "title": "Pipeline: horas cargadas por día", "region": "${AWS::Region}", "view": "bar", "stat": "Sum", "period": 86400,
                 "metrics": [ [ "Jupiter/Pipeline", "HorasNuevas", { "label": "Filas horarias nuevas o corregidas" } ] ]
               }
             },
@@ -436,7 +436,7 @@ Resources:
               "type": "metric", "x": 6, "y": 27, "width": 6, "height": 6,
               "properties": {
                 "title": "Pipeline: estaciones con datos (de 24)", "region": "${AWS::Region}", "view": "gauge", "stat": "Minimum", "period": 86400,
-                "metrics": [ [ "Jupiter/Pipeline", "EstacionesConDatos", { "label": "Última noche" } ] ],
+                "metrics": [ [ "Jupiter/Pipeline", "EstacionesConDatos", { "label": "Mínimo del día" } ] ],
                 "yAxis": { "left": { "min": 0, "max": 24 } },
                 "annotations": { "horizontal": [ { "value": 20, "label": "Faltan 5 o más", "color": "#d62728", "fill": "below" } ] }
               }

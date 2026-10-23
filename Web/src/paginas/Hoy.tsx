@@ -19,8 +19,8 @@ import { useEstacionSeleccionada } from '../estado/hooks'
  * Pantalla Hoy, en tres bloques: cifra protagonista (anomalías fiables del día
  * de referencia), stat tiles por contaminante y bloques marcados.
  *
- * El pipeline consolida el día a las 23:45, así que durante la jornada lo
- * normal es que "hoy" aún no tenga bloques. En ese caso se usa el último día
+ * El pipeline carga cada franja al cerrarse (la primera, a las 07:45), así que
+ * de madrugada "hoy" aún no tiene bloques. En ese caso se usa el último día
  * con datos y se dice explícitamente, en lugar de mostrar un cero engañoso.
  */
 export default function Hoy() {
@@ -88,8 +88,8 @@ export default function Hoy() {
               <>
                 {formatearFechaLarga(fechaReferencia)}
                 {!esHoy && (
-                  <span className="chip" title="Los bloques de hoy se consolidan a las 23:45: se muestra el último día con datos">
-                    último día con datos · hoy se consolida a las 23:45
+                  <span className="chip" title="Cada franja se carga al cerrarse; la primera de hoy, a las 07:45: se muestra el último día con datos">
+                    último día con datos · hoy se carga desde las 07:45
                   </span>
                 )}
               </>
