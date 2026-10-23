@@ -14,7 +14,8 @@ Sin `configurar()` (tests) los spans se crean pero no se exportan.
 
 Las decisiones del código (frase fija, sin evidencia, límite de vueltas...) son eventos
 `decision` en el span en curso, y cada hallazgo de las comprobaciones posteriores, un evento
-`comprobacion` en el span `turno`. La herramienta SQL deja un span `redactar_sql` por intento,
+`comprobacion` en el span `turno`; en el stream, el primer texto enviado al cliente deja el
+evento `primer_token` en ese mismo span. La herramienta SQL deja un span `redactar_sql` por intento,
 un evento `sql_invalido` por cada SQL rechazado y el SQL ejecutado en su span (`agente.sql`).
 """
 from __future__ import annotations
@@ -149,6 +150,12 @@ def comprobacion(regla: str, detalle: str, bloquea: bool) -> None:
     """Hallazgo de una comprobación posterior, como evento en el span en curso (el del turno)."""
     trace.get_current_span().add_event("comprobacion", {
         "agente.regla": regla, "agente.detalle": detalle, "agente.bloquea": bloquea})
+
+
+def primer_token(s: Span) -> None:
+    """Evento `primer_token` en el span del turno: el primer texto sale hacia el cliente (stream).
+    Su hora menos el inicio del turno es la latencia percibida en el chat."""
+    s.add_event("primer_token")
 
 
 def sql_invalido(origen: str, error: str) -> None:

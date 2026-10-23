@@ -1565,11 +1565,73 @@ sin permisos nuevos. Namespace `Jupiter/Pipeline`, sin dimensiones:
   SSM y S3 al importarse. 7 tests nuevos (forma del JSON, rama sin datos, tasa con cero bloques,
   cobertura de estaciones).
 
-Estado (2026-10-23): código, plantilla y tests listos; plantilla validada con `cfn-lint`.
-`[por confirmar: validate-template, despliegue de la imagen y de la pila, que Dimensions: [[]]
-publique las 4 métricas sin dimensión y las cifras de la primera ejecución real]`
+Estado (2026-10-23): desplegado en AWS (imagen de la Lambda y pila). Una invocación manual a las
+14:07 UTC publicó las 4 métricas en `Jupiter/Pipeline` **sin dimensiones** (`Dimensions: [[]]`
+funciona como se esperaba) y la alarma `jupiter-pipeline-sin-datos` pasó a `OK` con 2.568 horas.
+Cifras de esa ejecución: 23 estaciones con datos (falta la 55), 61,8 % de filas válidas, 107
+bloques anómalos de 321 (**33,3 %**). `[por confirmar: que los widgets del pipeline muestren el
+dato en el panel]`
+
+**Hallazgo: la tasa de anomalías depende de la hora de ejecución** (consultas de solo lectura a la
+RDS, 2026-10-23). En la ejecución manual de las 16:07, los 107 anómalos eran los 107 bloques
+`tarde` (13-19 h), con cobertura media 0,28: el bloque estaba a medias y el modelo, que usa la
+`COBERTURA` como *feature*, lo marca siempre. `madrugada` y `mañana`, completos, 0 anómalos. La
+ejecución de la noche reescribe esos bloques, así que ese caso se corrige solo.
+
+El caso que **no** se corrige es el de cada noche. A las 23:45 la hora 24 aún no está medida y el
+bloque `noche` (20-23 h) se guarda con 3 de 4 horas; la API solo da el día en curso, así que
+ninguna ejecución posterior lo completa:
+
+| Bloque | % anómalos, histórico 2025 (cobertura) | % anómalos, últimos 30 días en vivo (cobertura) |
+|---|---|---|
+| madrugada | 0,4 (0,99) | 0,6 (1,00) |
+| mañana | 4,2 (0,96) | 4,0 (0,97) |
+| tarde | 1,2 (0,98) | 1,8 (0,98) |
+| noche | 0,6 (0,99) | **6,8 (0,75)** |
+
+El bloque `noche` en vivo sale unas 11 veces más anómalo que en el histórico, y siempre con
+cobertura 0,75 (3.165 de 3.196 bloques). Con cobertura 0,5 o 0,25 (31 bloques, ejecuciones
+manuales a deshora) sube al 62 % y al 100 %. `mañana` en el 4 % es un rasgo del modelo, presente
+también en el histórico. Consecuencia: unas 200 anomalías de más al mes en la base `[estimación: 3.196 × (6,8 − 0,6) %]` y
+una `TasaAnomalias` nocturna estructuralmente por encima del 1 % esperado. Pendiente de decidir el
+arreglo antes de calibrar la alarma (fase 4).
 
 La retención de los logs se baja a 14 días; por defecto no caducan nunca.
+
+**KPIs de uso del asistente, desde Phoenix.** Script `Agente/evaluacion/kpis_phoenix.py`: lee los
+spans del proyecto `agente` con la API REST de Phoenix (`GET /v1/projects/{proyecto}/spans`,
+paginada) y reutiliza el árbol del turno y el cálculo de coste del informe de trazas (§7.3). En la
+EC2 el agente no escribe JSONL, así que Phoenix es la única fuente. Coste 0 y ninguna métrica de
+CloudWatch (regla de reparto).
+
+- KPIs: preguntas por día; mezcla de intenciones, rutas y temas; resultado del turno (respondida,
+  frase fija, sin evidencia, servicio no disponible, bloqueada, error) y **tasa de resolución** =
+  respondida + frase fija (la frase fija es la respuesta correcta a una intención fuera de
+  alcance); bloqueos por regla; síntesis válida a la primera y respuestas forzadas por el código;
+  **coste por pregunta** (P50, P90 y por pregunta resuelta); latencia por ruta; **tiempo hasta el
+  primer token**; fallos de herramienta por causa (`agente.estado`) y preguntas de datos perdidas
+  con la RDS apagada (§8.8).
+- Preparados y «sin datos» hasta que el span `turno` lleve `session.id` y exista la valoración de
+  los usuarios: turnos y duración de sesión, tasa de reformulación tras un rechazo (si el turno
+  siguiente sí se resuelve, el rechazo pudo ser un falso negativo) y satisfacción.
+- **Primer token**: el agente añade el evento `primer_token` al span `turno` cuando el primer texto
+  sale hacia el cliente. Solo existe en el stream y en las rutas que entregan tokens (libre, datos,
+  síntesis forzada); documental, mixta y frases fijas llegan enteras al final, y para ellas la
+  latencia percibida es la del turno.
+- Dos figuras para la memoria, SVG generado por el propio script sin librerías: embudo intención →
+  ruta → resultado y distribución del coste por pregunta con P50 y P90.
+- Sin texto de usuarios en la salida (ni preguntas, ni respuestas, ni mensajes de error, que pueden
+  llevar literales de la pregunta): el informe se versiona en `Agente/evaluacion/resultados/`.
+- Descartado: `arize-phoenix-client` (una dependencia más para una llamada HTTP paginada; `httpx`
+  ya estaba y permite probar sin red con `MockTransport`) y las vistas guardadas en la interfaz de
+  Phoenix (no reproducibles).
+- Esquema de la API comprobado en el código del servidor 20.19.0: devuelve los atributos del span
+  aplanados (`agente.ruta`) y el tipo aparte (`span_kind`); un adaptador de 15 líneas los lleva al
+  formato del JSONL. Probado contra el Phoenix local (misma versión): lee y pagina la API real.
+  9 tests nuevos (7 del informe, 2 del evento).
+
+Estado (2026-10-23): código y tests listos. `[por confirmar: ejecución contra la EC2 y cifras
+reales con su n; el evento primer_token llega con la próxima imagen del agente]`
 
 El asistente se observa con **Phoenix**, no con CloudWatch: cada turno deja una traza OpenTelemetry
 con sus fases, tiempos, tokens y errores. En la EC2 se consulta en `/phoenix/` (§8.9).
@@ -2243,7 +2305,8 @@ la enciende a mano para trabajar o hacer una demo.
 | 2026-10-23 | **Logs y métricas de la EC2 en CloudWatch** (Carlos con Claude Code, rama `feature/cloudwatch-logs`): `web`, `api-usuario` y `rag` envían su log a `/jupiter/ec2` con el driver `awslogs` (modo `non-blocking`); `agente` y `phoenix` siguen en la máquina. El agente de CloudWatch publica memoria y disco (2 métricas en `CWAgent`, dimensión `InstanceId`); `arrancar.sh` lo instala si falta y, si falla, avisa y sigue. El grupo de logs lo crea una pila de CloudFormation (`jupiter-observabilidad`) que recogerá también alarmas y panel. Rol de la EC2: escribir solo en ese grupo y métricas solo en `CWAgent`. Probado sin AWS: `docker compose config` (driver por servicio), plantilla validada con `validate-template` y `arrancar.sh` con `aws`, `docker`, `rpm`, `dnf` y el agente simulados en seis casos (primera instalación, ya instalado, un solo servicio, y fallos de `dnf`, de S3 y de la configuración: en los tres avisa y la aplicación arranca). Aplicado el mismo día: pila y permisos del rol, «Desplegar → `phoenix`» (instaló el agente de CloudWatch) y `arrancar.sh rag api-usuario web` por SSM para recrear solo esos tres contenedores, sin apagar la EC2. Verificado: tres *streams*, exactamente 2 métricas en `CWAgent` (memoria ~30 %, disco 23,4 %) y una pregunta al chat en Logs Insights (`POST /api/chat/stream`, 200, 5,6 s). Incidencia: la pila se creó primero en otra cuenta porque la terminal usaba el perfil por defecto; se borró y la guía de despliegue comprueba ahora la cuenta antes de aplicar. `docker compose logs` en la máquina funciona para los cinco servicios. `[por confirmar: arranque completo tras apagar y encender]` |
 | 2026-10-23 | **Alarmas y panel de CloudWatch** (Carlos con Claude Code, rama `feature/cloudwatch-logs`): la pila `jupiter-observabilidad` suma al grupo de logs 3 filtros de métricas sobre el log de nginx, 8 alarmas (web 5xx, errores y tokens de Bedrock, estado, créditos, memoria y disco de la EC2, espacio de la RDS) y el panel `jupiter`. Parámetros: `InstanceId` de la EC2 y `UmbralTokensDia` (provisional 2 M; la cifra la fija quien lleva el coste). Los umbrales se fijaron con consultas de solo lectura a la cuenta, que dieron tres hallazgos: EC2 en modo `unlimited` (los créditos son coste, no lentitud), RDS con autoescalado de disco y métricas de Bedrock solo por modelo o para toda la cuenta. La alarma de errores de Bedrock suma dos métricas: 11 métricas en alarmas, una por encima de la capa gratuita `[estimación: 0,10 $/mes]`. Guía de despliegue con la tabla de alarmas, la prueba de una alarma y el cierre del 443. Validado con `validate-template`, `cfn-lint` y el JSON del panel. Aplicado el mismo día: nueve alarmas en `OK` con datos reales al minuto, prueba de `jupiter-web-5xx` con `set-alarm-state` publicada en SNS y filtros comprobados con `test-metric-filter` sobre una línea real del chat. Grupo de seguridad: cerrados el 443 y la regla de la IP del equipo; queda solo el 80 abierto a todo internet con contraseña. `[por confirmar: 503 reales con el agente parado]` |
 | 2026-10-23 | **Batería de uso contra la EC2** (Carlos con Claude Code): para poblar Phoenix y el panel `jupiter` con uso representativo, 95 peticiones con contraseña en 234 s y 2 en paralelo: 61 turnos de chat sacados de los casos de evaluación del agente (turno, datos, comprobaciones, 5 conversaciones de varios turnos y una muestra del clasificador; 3 de cada 4 por `/api/chat/stream`), 31 consultas de estaciones y series y 3 errores de cliente. Resultado: 61/61 turnos con 200, ningún 5xx, 3 respuestas 422 esperadas; tiempo por turno p50 4,7 s, p90 9,1 s y máximo 22,2 s medido en el cliente. En CloudWatch: 218 invocaciones y unos 245 000 tokens de entrada en Bedrock (un 12 % del umbral diario provisional), `TiempoRespuestaChat` con media de 5,5 s y las diez alarmas en `OK`. En Phoenix, 66 trazas y 597 spans en el proyecto `agente`, mediana de 4,9 s |
-| 2026-10-23 | **Métricas de negocio del pipeline** (Carlos con Claude Code, rama `feature/metricas-pipeline`): la Lambda publica en formato EMF `HorasNuevas`, `EstacionesConDatos`, `BloquesAnomalos` y `TasaAnomalias` (namespace `Jupiter/Pipeline`), también con ceros cuando la API no devuelve registros, más tres campos de detalle que no son métricas (`pct_validas`, `estaciones_sin_datos`, `anomalias_por_magnitud`). Alarma nueva `jupiter-pipeline-sin-datos` (cierra el fallo silencioso del `{"ok": False}`) y fila «Negocio» en el panel, con las preguntas del día como `SampleCount` de `TiempoRespuestaChat`. 9 de 10 métricas gratuitas. Tests unitarios: 125 en verde. `[por confirmar: despliegue en AWS]` |
+| 2026-10-23 | **Métricas de negocio del pipeline** (Carlos con Claude Code, rama `feature/metricas-pipeline`): la Lambda publica en formato EMF `HorasNuevas`, `EstacionesConDatos`, `BloquesAnomalos` y `TasaAnomalias` (namespace `Jupiter/Pipeline`), también con ceros cuando la API no devuelve registros, más tres campos de detalle que no son métricas (`pct_validas`, `estaciones_sin_datos`, `anomalias_por_magnitud`). Alarma nueva `jupiter-pipeline-sin-datos` (cierra el fallo silencioso del `{"ok": False}`) y fila «Negocio» en el panel, con las preguntas del día como `SampleCount` de `TiempoRespuestaChat`. 9 de 10 métricas gratuitas. Tests unitarios: 125 en verde. Desplegado el mismo día: métricas sin dimensiones y alarma en `OK`; la primera ejecución (manual, a media tarde) dio un 33,3 % de bloques anómalos, uno por serie, que apunta al bloque en curso incompleto (§8.7) |
+| 2026-10-23 | **KPIs de uso del asistente desde Phoenix** (Carlos con Claude Code, rama `feature/kpis-phoenix`): script `kpis_phoenix.py` que lee los spans de la API REST de Phoenix y calcula preguntas por día, mezcla de rutas y temas, tasa de resolución, bloqueos, coste por pregunta (P50/P90 y por pregunta resuelta), latencia por ruta, tiempo hasta el primer token y fallos de herramienta por causa, con dos figuras SVG (embudo y coste) y sin texto de usuarios. Sesiones, reformulación y satisfacción, preparados para cuando llegue `session.id`. El agente emite el evento `primer_token` en el span `turno`. Probado contra el Phoenix local; 9 tests nuevos, 152 del agente en verde. `[por confirmar: informe de la EC2]` |
 
 ---
 
