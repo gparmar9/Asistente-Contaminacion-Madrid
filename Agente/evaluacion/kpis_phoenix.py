@@ -9,14 +9,16 @@ KPIs: preguntas por día, mezcla de intenciones, rutas y temas, resultado del tu
 resolución, bloqueos por regla, reparaciones y respuestas forzadas por el código, coste por
 pregunta (P50, P90 y por pregunta resuelta), latencia por ruta, tiempo hasta el primer token
 (evento `primer_token`), fallos de herramienta por causa (`agente.estado`), sesiones (turnos y
-duración) y tasa de reformulación tras un rechazo. Las dos últimas necesitan `session.id` en el
-span `turno` y la satisfacción, la valoración de los usuarios: sin ellas salen «sin datos».
+duración), tasa de reformulación tras un rechazo y satisfacción (👍/👎) por ruta y tema. Las
+sesiones necesitan `session.id` en el span `turno`; la satisfacción, las anotaciones
+`valoracion_usuario` de Phoenix (`GET /v1/projects/{proyecto}/span_annotations`, también
+verificada en 20.19.0): con `--jsonl` o sin votos sale «sin datos».
 
 La salida no lleva texto de usuarios: ni preguntas ni respuestas ni mensajes de error, solo
 agregados y, con `--detalle`, ruta, tema, tiempos, tokens y coste por turno. Se puede versionar.
 
-El formato lo da la extensión de `--salida`: `.md` (tablas; las dos figuras se escriben como
-`<nombre>_embudo.svg` y `<nombre>_coste.svg` al lado) o `.html` (autocontenido, figuras dentro).
+El formato lo da la extensión de `--salida`: `.md` (tablas; las figuras se escriben como
+`<nombre>_embudo.svg`, `<nombre>_coste.svg` y `<nombre>_satisfaccion.svg` al lado) o `.html` (autocontenido, figuras dentro).
 
 Uso, desde la carpeta Agente/ (la contraseña de la web, en `PHOENIX_CONTRASENA` o la pide):
     .venv/bin/python evaluacion/kpis_phoenix.py --phoenix http://<ip-de-la-ec2>/phoenix \\
@@ -50,7 +52,10 @@ from evaluacion import informe_trazas  # noqa: E402
 from evaluacion.informe_trazas import Turno, tabla  # noqa: E402
 
 ZONA = ZoneInfo("Europe/Madrid")
-TAM_PAGINA = 1000  # máximo que admite el endpoint
+TAM_PAGINA = 1000  # máximo que admite el endpoint de spans
+SPANS_POR_PETICION = 100  # limita la longitud de la URL
+VALORACION = "valoracion_usuario"
+RESPUESTAS_ANTES_DEL_AVISO = 2  # como en Web/src/dominio/valoracion.ts
 
 # Resultado del turno, en el orden de las tablas. Resuelto = respondida o frase fija del código
 # (fuera de alcance por diseño, o un periodo sin mediciones): es la respuesta correcta.
@@ -81,6 +86,29 @@ def descargar(cliente: httpx.Client, proyecto: str, desde: datetime | None = Non
         cursor = cuerpo.get("next_cursor")
         if not cursor:
             return spans
+
+
+def descargar_valoraciones(cliente: httpx.Client, proyecto: str, span_ids: list[str]) -> dict[str, str]:
+    """Voto (`positiva` | `negativa`) por span `turno`. Con varias anotaciones del mismo span, la última."""
+    anotaciones: list[dict] = []
+    for i in range(0, len(span_ids), SPANS_POR_PETICION):
+        params: dict[str, Any] = {"span_ids": span_ids[i:i + SPANS_POR_PETICION],
+                                  "include_annotation_names": [VALORACION], "limit": TAM_PAGINA}
+        cursor = None
+        while True:
+            r = cliente.get(f"/v1/projects/{proyecto}/span_annotations",
+                            params={**params, **({"cursor": cursor} if cursor else {})})
+            r.raise_for_status()
+            cuerpo = r.json()
+            anotaciones.extend(cuerpo["data"])
+            cursor = cuerpo.get("next_cursor")
+            if not cursor:
+                break
+    votos: dict[str, str] = {}
+    for a in sorted(anotaciones, key=lambda a: a.get("updated_at") or ""):
+        if (a.get("result") or {}).get("label") in ("positiva", "negativa"):
+            votos[a["span_id"]] = a["result"]["label"]
+    return votos
 
 
 def a_formato_jsonl(span: dict) -> dict:
@@ -164,7 +192,9 @@ def sesiones(lista: list[Turno]) -> dict[str, list[Turno]]:
     return dict(por_sesion)
 
 
-def construir(lista: list[Turno], huerfanas: int, origen: str, detalle: bool = False) -> Informe:
+def construir(lista: list[Turno], huerfanas: int, origen: str, detalle: bool = False,
+              votos: dict[str, str] | None = None) -> Informe:
+    """Construye el informe; votos=None indica que el origen no incluye valoraciones."""
     n = len(lista)
     if lista:
         primero, ultimo = (_local(lista[0].raiz["start"]), _local(lista[-1].raiz["start"]))
@@ -204,9 +234,9 @@ def construir(lista: list[Turno], huerfanas: int, origen: str, detalle: bool = F
     s.append(_bloqueos(lista))
     s.append(_herramientas(lista))
     s.append(_sesiones(lista, resultados))
-    s.append(Seccion("Satisfacción", "Sin datos: la valoración de los usuarios (👍/👎) aún no existe."))
+    s.append(_satisfaccion(lista, votos))
     if detalle:
-        s.append(_detalle(lista, resultados))
+        s.append(_detalle(lista, resultados, votos or {}))
     return informe
 
 
@@ -393,17 +423,52 @@ def _sesiones(lista: list[Turno], resultados: dict[str, str]) -> Seccion:
                    "de la misma sesión sí se resuelve, el rechazo pudo ser un falso negativo.", filas)
 
 
-def _detalle(lista: list[Turno], resultados: dict[str, str]) -> Seccion:
+def _satisfaccion(lista: list[Turno], votos: dict[str, str] | None) -> Seccion:
+    titulo = "Satisfacción (valoración 👍/👎 de los usuarios)"
+    if votos is None:
+        return Seccion(titulo, "Sin datos: las valoraciones solo están en Phoenix (este informe sale de JSONL).")
+    valorados = [(t, votos[t.raiz["span_id"]]) for t in lista if t.raiz["span_id"] in votos]
+    if not valorados:
+        return Seccion(titulo, "Sin datos: ningún turno del periodo tiene valoración.")
+    # Como la web (`dominio/valoracion.ts`): el aviso sale tras la 2.ª respuesta completa. Un turno con
+    # excepción o cancelado no llega a `done` y la web no lo cuenta.
+    elegibles = [g for g in sesiones(lista).values()
+                 if sum(not (t.error or t.cancelado) for t in g) >= RESPUESTAS_ANTES_DEL_AVISO]
+    con_voto = sum(any(t.raiz["span_id"] in votos for t in g) for g in elegibles)
+    positivos = sum(v == "positiva" for _, v in valorados)
+    filas = [["Grupo", "Valor", "Votos 👍", "n (votos)"],
+             ["Todas las respuestas", _pct(positivos, len(valorados)), str(positivos), str(len(valorados))]]
+    por_ruta = _positivos_por(valorados, lambda t: t.ruta)
+    filas += [[f"Ruta `{r}`", _pct(p, n), str(p), str(n)] for r, (p, n) in por_ruta]
+    filas += [[f"Tema `{tema}`", _pct(p, n), str(p), str(n)]
+              for tema, (p, n) in _positivos_por(valorados, lambda t: t.atributo("agente.tema") or "?")]
+    texto = (f"Turnos valorados: {len(valorados)} de {len(lista)}. Sesiones con 2 o más respuestas completas (las "
+             f"que pueden ver el aviso, una vez al día por navegador) con algún voto: {con_voto} de {len(elegibles)} "
+             f"({_pct(con_voto, len(elegibles))}). Tasa de respuesta frente al uso real: votos / `SampleCount` "
+             "de `TiempoRespuestaChat` en CloudWatch para el mismo periodo. Sesgo: vota quien quiere, y el "
+             "voto es sobre la sesión del día aunque se anote en el último turno.")
+    return Seccion(titulo, texto, filas, ("satisfaccion", svg_satisfaccion(por_ruta)))
+
+
+def _positivos_por(valorados: list[tuple[Turno, str]], clave) -> list[tuple[str, tuple[int, int]]]:
+    """(grupo, (votos positivos, votos)) de más a menos votos."""
+    grupos: dict[str, list[str]] = defaultdict(list)
+    for t, v in valorados:
+        grupos[clave(t)].append(v)
+    return sorted(((g, (vs.count("positiva"), len(vs))) for g, vs in grupos.items()), key=lambda par: -par[1][1])
+
+
+def _detalle(lista: list[Turno], resultados: dict[str, str], votos: dict[str, str]) -> Seccion:
     numero = {sesion: f"S{i}" for i, sesion in enumerate(sesiones(lista), 1)}
     filas = [["Inicio (Madrid)", "Traza", "Sesión", "Intención", "Ruta", "Tema", "Resultado", "Duración (ms)",
-              "Primer token (ms)", "Tokens (e / s)", "Coste (USD)"]]
+              "Primer token (ms)", "Tokens (e / s)", "Coste (USD)", "Valoración"]]
     for t in lista:
         filas.append([f"{_local(t.raiz['start']):%Y-%m-%d %H:%M:%S}", t.trace_id[:8],
                       numero.get(t.atributo("session.id"), "—"), t.intencion, t.ruta, t.atributo("agente.tema") or "?",
                       resultados[t.trace_id], informe_trazas._num(t.duracion_ms),
                       informe_trazas._num(primer_token_ms(t)),
                       f"{t.tokens_entrada} / {t.tokens_salida}" if t.tokens_entrada is not None else "incompletos",
-                      informe_trazas._num(t.coste_usd, 5)])
+                      informe_trazas._num(t.coste_usd, 5), votos.get(t.raiz["span_id"], "—")])
     return Seccion("Detalle por turno", "Sin pregunta ni respuesta. La traza (8 primeros caracteres) "
                    "permite abrir el turno en Phoenix.", filas)
 
@@ -538,6 +603,27 @@ def svg_histograma(costes: list[float]) -> str:
     return _svg(ancho, alto, "Distribución del coste por pregunta con P50 y P90", cuerpo)
 
 
+def svg_satisfaccion(por_ruta: list[tuple[str, tuple[int, int]]]) -> str:
+    """% de votos 👍 por ruta en escala 0-100 %, con el nº de votos de cada barra."""
+    ancho, x0, max_barra, fila, grosor = 640, 150, 380, 26, 16
+    cuerpo, y = ['<text class="titulo" x="16" y="22">Satisfacción por ruta (% de votos 👍)</text>'], 40
+    for k in range(0, 101, 25):
+        x = x0 + max_barra * k / 100
+        cuerpo.append(f'<line class="rejilla" x1="{x:.1f}" x2="{x:.1f}" y1="{y - 4}" '
+                      f'y2="{y + fila * len(por_ruta)}"/>')
+        cuerpo.append(f'<text class="tenue" x="{x:.1f}" y="{y + fila * len(por_ruta) + 14}" '
+                      f'text-anchor="middle">{k} %</text>')
+    for ruta, (positivos, n) in por_ruta:
+        largo = max(1.0, max_barra * positivos / n)
+        cuerpo.append(f'<text class="etiqueta" x="{x0 - 8}" y="{y + grosor - 4}" text-anchor="end">'
+                      f'{html.escape(_corto(ruta, 20))}</text>')
+        cuerpo.append(_barra_h(x0, y, largo, grosor, f"Ruta {ruta}: {positivos} de {n} votos 👍"))
+        cuerpo.append(f'<text class="valor" x="{x0 + largo + 6:.1f}" y="{y + grosor - 4}">{_pct(positivos, n)} '
+                      f'<tspan class="tenue">(n = {n})</tspan></text>')
+        y += fila
+    return _svg(ancho, y + 28, "Satisfacción por ruta: porcentaje de votos positivos", cuerpo)
+
+
 def _corto(texto: str, maximo: int) -> str:
     return texto if len(texto) <= maximo else texto[:maximo - 1] + "…"
 
@@ -645,10 +731,13 @@ def main() -> None:
         sys.exit(f"Extensión no soportada: {formato!r} (usa .md o .html)")
     desde, hasta = _intervalo(args.desde, fin=False), _intervalo(args.hasta, fin=True)
 
+    votos = None
     if args.phoenix:
         try:
             with _cliente(args.phoenix, args.usuario) as cliente:
                 spans = [a_formato_jsonl(s) for s in descargar(cliente, args.proyecto, desde, hasta)]
+                raices = [t.raiz["span_id"] for t in informe_trazas.turnos(spans)[0]]
+                votos = descargar_valoraciones(cliente, args.proyecto, raices)
         except httpx.HTTPStatusError as exc:
             sys.exit(f"Phoenix respondió {exc.response.status_code} en {exc.request.url}"
                      + (" (¿contraseña?)" if exc.response.status_code == 401 else ""))
@@ -664,7 +753,7 @@ def main() -> None:
                  and (not hasta or _fecha(t.raiz["start"]) < hasta)]
     if args.desde or args.hasta:
         origen_texto += f", intervalo {args.desde or '…'} – {args.hasta or '…'}"
-    informe = construir(lista, huerfanas, origen_texto, args.detalle)
+    informe = construir(lista, huerfanas, origen_texto, args.detalle, votos)
 
     if formato == ".html":
         texto, figuras = a_html(informe), {}

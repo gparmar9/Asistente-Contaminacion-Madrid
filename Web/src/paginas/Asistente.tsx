@@ -1,5 +1,6 @@
 import { useEffect, useRef } from 'react'
 
+import { AvisoValoracion } from '../componentes/chat/AvisoValoracion'
 import { ChipsSugeridas } from '../componentes/chat/ChipsSugeridas'
 import { Consulta } from '../componentes/chat/Consulta'
 import { EntradaChat } from '../componentes/chat/EntradaChat'
@@ -58,6 +59,7 @@ export default function Asistente() {
         </section>
       )}
 
+      <AvisoValoracion />
       <EntradaChat enviando={enviando} onEnviar={(p) => enviar(p)} />
 
       {consultas.length > 0 && (

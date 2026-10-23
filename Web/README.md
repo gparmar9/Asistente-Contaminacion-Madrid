@@ -29,6 +29,13 @@ petición en vuelo no se pierde al cerrar el panel, y la burbuja marca con un pu
 respuesta mientras estaba cerrado. En `/asistente` la burbuja se oculta para no duplicar el campo.
 `?chat=abierto` en la URL abre el panel al cargar.
 
+Tras la **2.ª respuesta completa** de la conversación, encima del campo de pregunta aparece
+«¿Qué tal lo está haciendo el asistente hoy?» con 👍, 👎 y «Ahora no» (regla en
+`src/dominio/valoracion.ts`). Sale una vez al día por navegador (`localStorage`
+`jupiter.valoracion.fecha`; sin almacenamiento, una vez por carga), nunca con una pregunta en
+vuelo y solo con respuestas del agente, que traen `traza_id` y `span_id` en el evento `done`. El
+voto va a `POST /api/chat/valoracion` sin esperar respuesta y se anota en Phoenix sobre el turno.
+
 ## Reglas de correctitud que implementa la interfaz
 
 - `is_anomaly` **solo se interpreta con `cobertura >= 0,7`**. Por debajo, el bloque se
@@ -57,7 +64,7 @@ cd Web
 npm ci
 npm run dev        # http://localhost:5173, con proxy /api -> localhost:8000
 npm run lint
-npm test           # vitest: regla de cobertura, citas [Dn] y fechas (lógica pura, sin DOM)
+npm test           # vitest: regla de cobertura, citas [Dn], fechas, SSE y aviso de valoración (lógica pura, sin DOM)
 npm run build      # tsc -b && vite build
 ```
 

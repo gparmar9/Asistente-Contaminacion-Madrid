@@ -67,6 +67,11 @@ class Settings:
     # sea reproducible; None (vacía) = la fecha del sistema.
     fecha_referencia: date | None = None
 
+    @property
+    def phoenix_url(self) -> str:
+        """URL base de la API de Phoenix, sin `/v1/traces`."""
+        return self.phoenix_endpoint.removesuffix("/").removesuffix("/v1/traces")
+
 
 def get_settings() -> Settings:
     return Settings(

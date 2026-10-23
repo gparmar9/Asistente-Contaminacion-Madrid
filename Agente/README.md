@@ -14,8 +14,9 @@ Decisiones de diseño, alternativas descartadas y estado por fases:
 | Método | Ruta | Qué devuelve |
 |-|-|-|
 | GET | `/salud` | Estado del servicio, proveedor y modelo configurados |
-| POST | `/responder` | `{pregunta, session_id?}` → `{respuesta, fuentes[{tipo, referencia}], advertencia, traza_id, session_id}` (mismo contrato que reenvía `ApiUsuario` desde `/chat`; `traza_id` sirve para buscar el turno en las trazas) |
+| POST | `/responder` | `{pregunta, session_id?}` → `{respuesta, fuentes[{tipo, referencia}], advertencia, traza_id, span_id, session_id}` (mismo contrato que reenvía `ApiUsuario` desde `/chat`; `traza_id` sirve para buscar el turno en las trazas y `span_id` es el span `turno`, el que recibe la valoración) |
 | POST | `/responder/stream` | La misma entrada; respuesta en Server-Sent Events (ver abajo). `ApiUsuario` la reenvía desde `/chat/stream` |
+| POST | `/valoracion` | `{session_id, traza_id, span_id, valor: positiva\|negativa}` → 204. Anotación `valoracion_usuario` (`HUMAN`, *score* 1/0) en Phoenix sobre el span `turno`; un segundo voto de la sesión al mismo turno lo sustituye. Sin Phoenix, 503 (no se reintenta). `ApiUsuario` la reenvía desde `/chat/valoracion` |
 
 Documentación interactiva en `/docs`.
 
@@ -53,7 +54,7 @@ Cada evento es `event: <tipo>\ndata: <json>\n\n`, con `Cache-Control: no-cache` 
 | `token` | `{texto}` | Solo respuestas definitivas: la llamada sin herramientas ofrecidas (charla), la síntesis de datos y la síntesis forzada |
 | `passthrough` | `{texto, fuentes, advertencia, traza_id}` | El resto, íntegro al final: rutas documental (el JSON se valida antes de mostrarse) y mixta, frases fijas, `sin_evidencia` |
 | `error` | `{detalle}` | Fallo con el stream ya abierto; cierra sin `done`. Antes de abrirlo, código HTTP (503) |
-| `done` | `{session_id, traza_id, fuentes, advertencia}` | Turno completado. Lleva siempre los metadatos definitivos, también cuando el texto salió como `token` (si hubo `passthrough`, coinciden con los suyos) |
+| `done` | `{session_id, traza_id, span_id, fuentes, advertencia}` | Turno completado. Lleva siempre los metadatos definitivos, también cuando el texto salió como `token` (si hubo `passthrough`, coinciden con los suyos) |
 
 Si el cliente corta la conexión, el turno se cancela (sin más llamadas al LLM ni al RAG, y el
 span del turno lleva `agente.cancelado=true`). Eso no garantiza que Bedrock deje de procesar y
@@ -203,7 +204,9 @@ turno (agent)                       pregunta -> respuesta; ruta, intención, vue
 Las decisiones del código (frase fija, `sin_evidencia`, límite de vueltas, herramienta no
 disponible) quedan como eventos `decision` en el span en curso. Los tokens que no envía el
 proveedor no aparecen (nunca valen cero). En el stream, el primer texto que sale hacia el
-cliente deja el evento `primer_token` en el span `turno` (latencia percibida en el chat).
+cliente deja el evento `primer_token` en el span `turno` (latencia percibida en el chat). Todos los
+spans del turno llevan `session.id`: Phoenix agrupa los turnos de una conversación en su vista de
+sesiones. La raíz de Phoenix para anotar la valoración se deduce de `PHOENIX_ENDPOINT`.
 
 | Variable | Por defecto | Para qué |
 |-|-|-|
@@ -260,8 +263,10 @@ KPIs de uso del sistema desplegado, leídos de Phoenix por su API REST (`evaluac
 solo `httpx`): preguntas por día, intención, ruta, tema y resultado del turno, tasa de resolución,
 bloqueos, coste por pregunta (P50, P90 y por pregunta resuelta), latencia por ruta, tiempo hasta el
 primer token y fallos de herramienta por causa; sesiones y reformulación cuando los spans lleven
-`session.id`. La salida no lleva preguntas ni respuestas y se puede versionar en
-`evaluacion/resultados/`. Con `.md`, las dos figuras (embudo y coste) se escriben como SVG al lado.
+`session.id`; satisfacción por ruta y tema con las anotaciones `valoracion_usuario` (👍/👎, solo
+desde Phoenix). La salida no lleva preguntas ni respuestas y se puede versionar en
+`evaluacion/resultados/`. Con `.md`, las tres figuras (embudo, coste y satisfacción) se escriben
+como SVG al lado.
 
 ```bash
 # EC2: nginx protege /phoenix/ con la contraseña de la web (en PHOENIX_CONTRASENA, o la pide)

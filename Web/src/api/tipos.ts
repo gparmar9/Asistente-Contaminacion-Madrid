@@ -15,6 +15,8 @@ export type Bloque = components['schemas']['Bloque']
 export type PreguntaChat = components['schemas']['PreguntaChat']
 export type RespuestaChat = components['schemas']['RespuestaChat']
 export type FuenteChat = components['schemas']['FuenteChat']
+export type ValoracionChat = components['schemas']['ValoracionChat']
+export type ValorValoracion = ValoracionChat['valor']
 export type TipoFuente = FuenteChat['tipo']
 
 /** Query params de GET /estaciones/{codigo_corto}/series (contaminante obligatorio). */

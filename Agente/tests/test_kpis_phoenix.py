@@ -5,8 +5,8 @@ from datetime import datetime, timedelta, timezone
 import httpx
 
 from evaluacion.informe_trazas import turnos
-from evaluacion.kpis_phoenix import (a_formato_jsonl, a_html, a_markdown, construir, descargar, primer_token_ms,
-                                     resultado)
+from evaluacion.kpis_phoenix import (a_formato_jsonl, a_html, a_markdown, construir, descargar,
+                                     descargar_valoraciones, primer_token_ms, resultado)
 
 MODELO = "mistral.ministral-3-14b-instruct"  # 0,23 / 0,23 USD por millón
 INICIO = datetime(2026, 10, 23, 10, tzinfo=timezone.utc)
@@ -26,16 +26,17 @@ def _span(traza, id_, padre, nombre, tipo, inicio_ms, ms, status="OK", eventos=(
 
 
 def _turno(traza, inicio_ms, ms, sesion=None, eventos=(), hijos=(), tokens=(100, 20), **atributos):
-    """Span `turno` con una llamada al LLM (sin tokens si `tokens` es None) y los hijos que se pasen."""
+    """Crea un turno con una llamada al LLM y los spans hijos indicados."""
     if sesion:
         atributos["session.id"] = sesion
-    raiz = _span(traza, "t", None, "turno", "AGENT", inicio_ms, ms, eventos=eventos,
+    raiz_id = f"t{traza}"
+    raiz = _span(traza, raiz_id, None, "turno", "AGENT", inicio_ms, ms, eventos=eventos,
                  **{"input.value": SECRETOS[0], "output.value": SECRETOS[1], "agente.tema": "salud", **atributos})
     llm = {"llm.model_name": MODELO}
     if tokens:
         llm |= {"llm.token_count.prompt": tokens[0], "llm.token_count.completion": tokens[1]}
-    return [raiz, _span(traza, "l", "t", "llm", "LLM", inicio_ms, ms / 2, **llm),
-            *(_span(traza, f"h{i}", "t", *h[:2], inicio_ms, 10, **h[2]) for i, h in enumerate(hijos))]
+    return [raiz, _span(traza, "l", raiz_id, "llm", "LLM", inicio_ms, ms / 2, **llm),
+            *(_span(traza, f"h{i}", raiz_id, *h[:2], inicio_ms, 10, **h[2]) for i, h in enumerate(hijos))]
 
 
 def _phoenix() -> list[dict]:
@@ -128,7 +129,65 @@ def test_sin_sesiones_ni_primer_token_salen_sin_datos():
     texto, _ = a_markdown(construir(turnos([a_formato_jsonl(s) for s in spans])[0], 0, "prueba"))
     assert "Sin datos: los spans `turno` aún no llevan `session.id`." in texto
     assert "Sin datos: ningún turno lleva el evento `primer_token`" in texto
-    assert "Sin datos: la valoración de los usuarios" in texto
+    assert "Sin datos: las valoraciones solo están en Phoenix" in texto
+
+
+def test_descargar_valoraciones_por_lotes_y_el_ultimo_voto_gana():
+    peticiones = []
+
+    def anotacion(span_id, label, cuando):
+        return {"span_id": span_id, "name": "valoracion_usuario", "annotator_kind": "HUMAN",
+                "result": {"label": label, "score": int(label == "positiva")}, "updated_at": cuando}
+
+    def transporte(peticion: httpx.Request) -> httpx.Response:
+        peticiones.append(peticion)
+        ids = peticion.url.params.get_list("span_ids")
+        if peticion.url.params.get("cursor") == "c2":
+            return httpx.Response(200, json={"data": [anotacion("ta2", "positiva", "2026-10-23T11:00:00Z")],
+                                             "next_cursor": None})
+        datos = [anotacion("ta2", "negativa", "2026-10-23T10:00:00Z")] if "ta2" in ids else []
+        return httpx.Response(200, json={"data": datos, "next_cursor": "c2" if datos else None})
+
+    cliente = httpx.Client(base_url="http://ec2/phoenix", transport=httpx.MockTransport(transporte))
+    ids = [f"s{i}" for i in range(150)] + ["ta2"]
+    votos = descargar_valoraciones(cliente, "agente", ids)
+
+    assert votos == {"ta2": "positiva"}  # el voto cambiado sustituye al anterior
+    assert peticiones[0].url.path == "/phoenix/v1/projects/agente/span_annotations"
+    assert len(peticiones[0].url.params.get_list("span_ids")) == 100  # los ids van en la URL: por lotes
+    assert peticiones[0].url.params["include_annotation_names"] == "valoracion_usuario"
+    assert len(peticiones) == 3
+
+
+def test_satisfaccion_por_ruta_y_tema():
+    lista, _ = _lista()
+    votos = {"ta2": "positiva", "ta3": "negativa", "tc1": "positiva", "otro": "negativa"}
+    texto, figuras = a_markdown(construir(lista, 0, "prueba", detalle=True, votos=votos), "kpis")
+
+    assert "| Todas las respuestas | 66,7 % | 2 | 3 |" in texto
+    assert "| Ruta `documental` | 100,0 % | 1 | 1 |" in texto and "| Ruta `libre` | 0,0 % | 0 | 1 |" in texto
+    assert "| Tema `salud` | 66,7 % | 2 | 3 |" in texto
+    assert "Turnos valorados: 3 de 5" in texto  # el voto de un span de fuera del periodo no cuenta
+    assert "con algún voto: 1 de 1 (100,0 %)" in texto  # s1 es la única sesión de 2 o más turnos
+    assert "| 0,00003 | positiva |" in texto  # columna del detalle
+    assert "kpis_satisfaccion.svg" in figuras
+    ET.fromstring(figuras["kpis_satisfaccion.svg"])
+
+
+def test_la_participacion_solo_cuenta_sesiones_con_dos_respuestas_completas():
+    """Como la web: un turno fallido o cancelado no llega a `done` y no cuenta para el aviso."""
+    otras = [*_turno("d1", 300_000, 1000, "s3", **{"agente.ruta": "libre", "agente.intencion": "CHARLA"}),
+             *_turno("d2", 310_000, 1000, "s3", status="ERROR"),
+             *_turno("e1", 320_000, 1000, "s4", **{"agente.ruta": "libre", "agente.intencion": "CHARLA"}),
+             *_turno("e2", 330_000, 1000, "s4", **{"agente.cancelado": True})]
+    lista, _ = turnos([a_formato_jsonl(s) for s in [*_phoenix(), *otras]])
+    texto, _ = a_markdown(construir(lista, 0, "prueba", votos={"ta3": "positiva"}))
+    assert "con algún voto: 1 de 1 (100,0 %)" in texto  # s3 y s4 tienen 2 turnos, pero solo 1 respuesta
+
+
+def test_satisfaccion_sin_votos_en_phoenix():
+    texto, figuras = a_markdown(construir(_lista()[0], 0, "prueba", votos={}), "kpis")
+    assert "Sin datos: ningún turno del periodo tiene valoración." in texto and "kpis_satisfaccion.svg" not in figuras
 
 
 def test_la_salida_no_lleva_texto_de_usuarios():
