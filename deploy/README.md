@@ -298,7 +298,7 @@ el equipo lo sustituyó por el `Agente` (ver `docs/notas_memoria.md` §2).
 |---|---|
 | [`compose.yml`](ec2/compose.yml) | Los servicios con imágenes de ECR (`jupiter-web`, `jupiter-api-usuario`, `jupiter-agente`, `jupiter-rag`) y `phoenix` (Docker Hub, versión fijada aquí). Sin base de datos: usa RDS |
 | [`arrancar.sh`](ec2/arrancar.sh) | Lee de SSM qué versión de cada servicio está activa y la configuración, inicia sesión en ECR y levanta los contenedores. Con un argumento (`arrancar.sh rag`) actualiza solo ese servicio. nginx resuelve los nombres de los contenedores en cada petición, así que recrear `api-usuario` o `phoenix` no obliga a reiniciar `web` |
-| [`jupiter.service`](ec2/jupiter.service) | Servicio de systemd: ejecuta `arrancar.sh` en cada arranque de la máquina |
+| [`jupiter.service`](ec2/jupiter.service) | Servicio de systemd: en cada arranque de la máquina trae de S3 el `arrancar.sh` actual y lo ejecuta. `arrancar.sh` reinstala a su vez este fichero si cambió en S3, así que un despliegue con la EC2 apagada se aplica completo al encenderla |
 | [`user-data.sh`](ec2/user-data.sh) | Primer arranque: instala Docker y Compose y deja instalado lo anterior |
 
 De dónde sale cada cosa (todo con el rol de la máquina, `jupiter-ec2-api`, sin claves en disco):
@@ -398,7 +398,7 @@ Todo se hace con los mismos workflows que la Lambda; nadie entra en la máquina.
 | **Desplegar** → `web`, `api-usuario`, `agente` o `rag` | Construye la imagen del código de la rama elegida (normalmente `main`), la sube a ECR con el commit como tag, publica `ec2/` en S3 y guarda la versión en SSM con quién y desde dónde. Si la EC2 está encendida, actualiza **solo ese contenedor** y espera a que esté sano; si está apagada, la usará al encenderse |
 | **Desplegar** → `phoenix` | Sin tests ni build: publica `ec2/` en S3 y, si la EC2 está encendida, recrea solo `phoenix` con la versión de `compose.yml` |
 | **Rollback** → mismo componente | Sin versión: tabla de imágenes en ECR, la activa y el historial de cambios. Con versión (commit corto) y motivo: la vuelve a activar sin reconstruir nada. No aplica a `phoenix` |
-| **Encender entorno** | Enciende la RDS y la EC2 a la vez, espera a que los servicios estén sanos y muestra la dirección de la web (la IP cambia en cada encendido) |
+| **Encender entorno** | Enciende la RDS y la EC2 a la vez, espera a que los servicios estén sanos y muestra la dirección de la web (la IP cambia en cada encendido). Si el arranque falla, muestra el log y lo reintenta una vez: con la EC2 ya encendida, relanzarlo tras corregir la causa vuelve a levantar la aplicación |
 | **Apagar entorno** | Apaga la EC2 y después la RDS. Entre las 22:00 y las 00:00 solo la EC2 (la RDS hace falta para la carga) |
 
 Los workflows localizan la máquina por su etiqueta `Name=jupiter-api` y le ejecutan comandos
