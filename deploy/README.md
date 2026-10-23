@@ -43,6 +43,7 @@ apagado a demanda en [`encender_entorno.yml`](../.github/workflows/encender_ento
 | **SSM Parameter Store** | `/jupiter/database_url` | La cadena de conexión, cifrada |
 | **CloudWatch + SNS** | `jupiter-alertas` | Logs, métricas de negocio del pipeline (`Jupiter/Pipeline`) y avisos por correo |
 | **CloudFormation** | `jupiter-observabilidad` | Logs de la EC2, filtros de métricas, alarmas y el panel `jupiter` |
+| **AWS Budgets** | `jupiter-bedrock-diario` | Aviso por correo si Bedrock pasa de 2 $ en un día (solo avisa) |
 
 Flujo de una ejecución:
 
@@ -296,7 +297,8 @@ navegador ──:80──▶ web (nginx: SPA + proxy /api/*) ──▶ api-usuar
                     └── proxy /phoenix/* ──▶ phoenix ◀── trazas OTLP ── agente
 ```
 
-Solo `web` publica puerto (80, abierto a todo internet con usuario y contraseña); `api-usuario`, `agente`, `rag` y
+Solo `web` publica puerto (80, abierto a todo internet y sin contraseña, con IP fija: ver
+[Acceso a la web](#acceso-a-la-web-pública-con-ip-fija)); `api-usuario`, `agente`, `rag` y
 `phoenix` no tienen autenticación y quedan en la red interna de Docker. El `LLMOrchestrator` no se despliega:
 el equipo lo sustituyó por el `Agente` (ver `docs/notas_memoria.md` §2).
 
@@ -316,7 +318,7 @@ De dónde sale cada cosa (todo con el rol de la máquina, `jupiter-ec2-api`, sin
 | SSM `/jupiter/versiones/<servicio>` | Qué imagen está activa (tag = commit). La escribe el despliegue |
 | SSM `/jupiter/database_url` | La misma cadena de conexión que usa la Lambda (la usa `api-usuario`) |
 | SSM `/jupiter/agente/<variable>` | Configuración del agente que es secreta o se cambia sin tocar código: cada parámetro se convierte en una variable de entorno (`/jupiter/agente/llm_modelo` → `LLM_MODELO`). Una variable nueva del agente se da de alta creando el parámetro, sin tocar ningún script. Lo que es fijo de la máquina (proveedor, región, URL del RAG y de Phoenix) va en `compose.yml` y manda sobre SSM |
-| SSM `/jupiter/web/contrasena` (SecureString, opcional) | Contraseña de la web y de `/phoenix/`, usuario `demo` (ver [Usuario y contraseña de la web](#usuario-y-contraseña-de-la-web)) |
+| SSM `/jupiter/web/contrasena` (SecureString, opcional) | Contraseña de la web y de `/phoenix/`, usuario `demo`. **Hoy no existe**: la web es pública (ver [Acceso a la web](#acceso-a-la-web-pública-con-ip-fija)) |
 | Docker Hub `arizephoenix/phoenix` | Imagen pública de Phoenix; la versión está en `compose.yml`, no en SSM |
 
 Parámetros del agente que hacen falta (los demás, como en [`Agente/.env.example`](../Agente/.env.example), son opcionales):
@@ -342,11 +344,33 @@ gestionada `AmazonSSMManagedInstanceCore` para entrar con *Session Manager* (sin
 Los ficheros de `ec2/` llevan finales de línea LF aunque se trabaje en Windows
 ([`.gitattributes`](../.gitattributes)): un script con CRLF falla en Linux.
 
-### Usuario y contraseña de la web
+### Acceso a la web: pública, con IP fija
 
-El puerto 80 está abierto a todo internet y la web pide usuario y contraseña: así se enseña desde
-cualquier red (una demo, el tribunal con sus móviles) sin mantener una lista de IP. No hay regla
-para el 443:
+Para la corrección del TFM, la web está **abierta a todo internet sin contraseña** en una
+**IP elástica** (fija): el tribunal entra con un enlace que no cambia aunque se apague la EC2.
+`/phoenix/` responde **403** a todo el mundo, porque guarda las preguntas de los usuarios. Lo deja
+así [`aws/3_web_publica.ps1`](aws/3_web_publica.ps1), seguido de **Desplegar → `web`**:
+
+1. Crea la IP elástica con la etiqueta `Name=jupiter-api` y la asocia a la EC2. Sustituye a la IP
+   automática, que cambiaba en cada encendido; cuesta lo mismo (0,005 $/h), también con la EC2
+   apagada. Si se recrea la EC2, volver a ejecutar el script la asocia a la nueva.
+2. Borra `/jupiter/web/contrasena`. Al desplegar `web`, nginx deja de pedir contraseña.
+3. Crea el presupuesto **`jupiter-bedrock-diario`** (AWS Budgets): 2 $ al día solo de Bedrock, con
+   correo al pasar el 80 % y el 100 %. **Solo avisa, no corta nada**, y AWS actualiza los costes
+   unas tres veces al día: llega horas tarde. El aviso rápido es la alarma de CloudWatch
+   `jupiter-bedrock-tokens-dia` ([Alarmas y panel](#alarmas-y-panel)).
+
+```powershell
+pwsh deploy/aws/3_web_publica.ps1 -Correo <correo-del-equipo>   # -LimiteDia 2 por defecto
+```
+
+Riesgo asumido: la API y el chat no tienen autenticación, así que cualquiera puede hacer preguntas
+al asistente y cada una se paga en Bedrock (del orden de 0,001-0,003 $ por pregunta
+`[estimación]`). Para cortar el acceso: volver a poner la contraseña (abajo) y desplegar `web`.
+
+#### Usuario y contraseña (opcional)
+
+El mecanismo sigue en `arrancar.sh` para volver a cerrar la web sin tocar código:
 
 - `arrancar.sh` lee la contraseña de `/jupiter/web/contrasena`, calcula su hash con `openssl` y
   escribe `web-acceso.conf`, `web.htpasswd` y `phoenix-acceso.conf`, que `compose.yml` monta en el
@@ -366,8 +390,8 @@ aws ssm put-parameter --name /jupiter/web/contrasena --type SecureString --overw
 ```
 
 Se aplica al encenderse la EC2 o con **Desplegar → `web`** si ya está encendida. Para quitarla:
-`aws ssm delete-parameter --name /jupiter/web/contrasena` y volver a desplegar `web`, cerrando antes
-el puerto 80 a todo internet.
+`aws ssm delete-parameter --name /jupiter/web/contrasena` y volver a desplegar `web` (es lo que hace
+`3_web_publica.ps1`).
 
 **El 443 está cerrado**: no hay HTTPS y nginx solo escucha en el 80. Un navegador que intenta
 primero `https://` espera hasta agotar el tiempo antes de pasar a `http://` (con el puerto abierto
@@ -382,7 +406,8 @@ en `http://<ip>/phoenix/`.
 
 - **Acceso**: usuario `demo` y la contraseña de la web, **siempre**. Sin `/jupiter/web/contrasena`
   responde 403, aunque la web esté abierta: guarda las preguntas y respuestas de los usuarios y no
-  tiene autenticación propia.
+  tiene autenticación propia. **Con la web pública no hay contraseña, así que hoy responde 403**:
+  para consultarlo, poner la contraseña un rato y desplegar `web` (la web vuelve a pedirla).
 - **Envío**: el agente manda las trazas a `http://phoenix:6006/v1/traces` por la red interna, sin
   pasar por nginx ni por el prefijo. La dirección está fija en `compose.yml` (`PHOENIX_ENDPOINT`),
   sin parámetro de SSM. El agente no depende de Phoenix para arrancar: si no está, pierde las trazas
@@ -392,7 +417,8 @@ en `http://<ip>/phoenix/`.
   `PHOENIX_ENDPOINT`, sin variable nueva): web → `/api/kpis` → api-usuario → `agente:8200/kpis`.
   Solo agregados, sin texto de usuarios; caché de 60 s en el agente. Con Phoenix parado la página
   avisa del error (503) y el resto de la web sigue igual. Lleva el rótulo «Solo administradores»
-  pero no tiene más protección que la contraseña de la web: el proyecto no tiene gestión de usuarios.
+  pero no tiene más protección que la contraseña de la web (hoy, ninguna: la ve cualquiera, solo con
+  agregados): el proyecto no tiene gestión de usuarios.
 - **Datos**: SQLite en el volumen Docker `phoenix_data` (disco de la EC2): sobrevive a apagar y
   encender, se pierde si se recrea la máquina. Retención de 30 días, pero la purga corre los
   domingos a las 00:00 UTC y con la EC2 apagada a esa hora no se ejecuta: las trazas crecen.
@@ -457,7 +483,7 @@ Todo se hace con los mismos workflows que la Lambda; nadie entra en la máquina.
 | **Desplegar** → `web`, `api-usuario`, `agente` o `rag` | Construye la imagen del código de la rama elegida (normalmente `main`), la sube a ECR con el commit como tag, publica `ec2/` en S3 y guarda la versión en SSM con quién y desde dónde. Si la EC2 está encendida, actualiza **solo ese contenedor** y espera a que esté sano; si está apagada, la usará al encenderse |
 | **Desplegar** → `phoenix` | Sin tests ni build: publica `ec2/` en S3 y, si la EC2 está encendida, recrea solo `phoenix` con la versión de `compose.yml` |
 | **Rollback** → mismo componente | Sin versión: tabla de imágenes en ECR, la activa y el historial de cambios. Con versión (commit corto) y motivo: la vuelve a activar sin reconstruir nada. No aplica a `phoenix` |
-| **Encender entorno** | Enciende la RDS y la EC2 a la vez, espera a que los servicios estén sanos y muestra la dirección de la web (la IP cambia en cada encendido). Si el arranque falla, muestra el log y lo reintenta una vez: con la EC2 ya encendida, relanzarlo tras corregir la causa vuelve a levantar la aplicación |
+| **Encender entorno** | Enciende la RDS y la EC2 a la vez, espera a que los servicios estén sanos y muestra la dirección de la web (la IP elástica: no cambia). Si el arranque falla, muestra el log y lo reintenta una vez: con la EC2 ya encendida, relanzarlo tras corregir la causa vuelve a levantar la aplicación |
 | **Apagar entorno** | Apaga solo la EC2: la RDS se queda siempre encendida para las cargas de cada franja |
 
 Los workflows localizan la máquina por su etiqueta `Name=jupiter-api` y le ejecutan comandos
@@ -485,6 +511,9 @@ Con credenciales de AWS en la sesión y desde la raíz del repositorio:
    su apagado a la 01:30 (`jupiter-ec2-apagar`, con el rol `jupiter-scheduler-ec2`; **desactivado
    desde el 2026-10-23** para la entrega, y volver a ejecutar el script lo reactiva). Al crearse
    instala Docker y levanta la aplicación; el script muestra su dirección.
+5. **`pwsh deploy/aws/3_web_publica.ps1 -Correo <correo>`** (opcional, para abrir la web al
+   público): IP fija, web sin contraseña y presupuesto diario de Bedrock (ver
+   [Acceso a la web](#acceso-a-la-web-pública-con-ip-fija)). Después, **Desplegar → `web`**.
 
 Para cambiar de modelo: `aws ssm put-parameter --name /jupiter/agente/llm_modelo --overwrite --value <id>`
 y reiniciar el agente (Desplegar → `agente`, o apagar y encender).

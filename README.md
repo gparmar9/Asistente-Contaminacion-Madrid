@@ -51,7 +51,7 @@ CSV histórico 2018-2026 ──▶ Notebooks 01/02/03 (en local) ──▶ model
 data/rag/*.md ──▶ rag.indexar (embeddings e5) ──▶ ChromaDB: corpus_rag ──▶ rag.api: evidencias D1..Dn   (Fase 2)
 
 Usuario ──▶ Web (nginx: SPA React + proxy /api/*) ──▶ ApiUsuario (FastAPI) ──▶ RDS: /estaciones, /series   (Fase 4)
-              └── /phoenix/* ──▶ Phoenix: trazas de cada turno del asistente (siempre con contraseña)
+              └── /phoenix/* ──▶ Phoenix: trazas de cada turno del asistente (con contraseña; sin ella, 403)
                                                           └── /chat ──▶ LLMOrchestrator ──▶ LLM hospedado (OpenAI-compatible)
                                                                               ├── query_sql ─────────▶ RDS PostgreSQL   (Fase 3)
                                                                               └── buscar_evidencias ─▶ servicio RAG (rag.api, HTTP)
