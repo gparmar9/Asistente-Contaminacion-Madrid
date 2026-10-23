@@ -59,7 +59,7 @@ from llama_index.core.base.llms.types import ChatMessage, ChatResponse, MessageR
 from llama_index.core.llms.function_calling import FunctionCallingLLM
 from llama_index.core.llms.llm import ToolSelection
 from llama_index.core.tools.types import BaseTool
-from opentelemetry.trace import Status, StatusCode
+from opentelemetry.trace import Span, Status, StatusCode
 
 from agente import observabilidad
 from agente.business import comprobaciones, frases
@@ -135,7 +135,7 @@ class Bucle:
             span.set_attribute("agente.historial_turnos", len(historial))
             resultado = ResultadoTurno(respuesta="", traza_id=observabilidad.trace_id_actual())
             # Con alguna regla en bloqueo, nada sale como token antes de comprobarlo.
-            emitir_texto = None if self._bloquean else _texto_al_cliente(emitir, resultado)
+            emitir_texto = None if self._bloquean else _texto_al_cliente(emitir, resultado, span)
             try:
                 await self._turno(pregunta, historial, resultado, emitir or _no_emitir, emitir_texto)
             except asyncio.CancelledError:  # el cliente del stream se fue: no se hacen más llamadas
@@ -484,12 +484,15 @@ async def _no_emitir(evento: Evento) -> None:
     """Emisor de los turnos sin stream."""
 
 
-def _texto_al_cliente(emitir: Emisor | None, resultado: ResultadoTurno) -> Emisor | None:
-    """Emisor de tokens que marca `resultado.emitida`. None si el turno no tiene emisor."""
+def _texto_al_cliente(emitir: Emisor | None, resultado: ResultadoTurno, span_turno: Span) -> Emisor | None:
+    """Emisor de tokens que marca `resultado.emitida` y deja el evento `primer_token` en el span
+    del turno con el primero. None si el turno no tiene emisor."""
     if emitir is None:
         return None
 
     async def emitir_texto(evento: Evento) -> None:
+        if not resultado.emitida:
+            observabilidad.primer_token(span_turno)
         resultado.emitida = True
         await emitir(evento)
     return emitir_texto

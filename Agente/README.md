@@ -202,7 +202,8 @@ turno (agent)                       pregunta -> respuesta; ruta, intención, vue
 
 Las decisiones del código (frase fija, `sin_evidencia`, límite de vueltas, herramienta no
 disponible) quedan como eventos `decision` en el span en curso. Los tokens que no envía el
-proveedor no aparecen (nunca valen cero).
+proveedor no aparecen (nunca valen cero). En el stream, el primer texto que sale hacia el
+cliente deja el evento `primer_token` en el span `turno` (latencia percibida en el chat).
 
 | Variable | Por defecto | Para qué |
 |-|-|-|
@@ -254,6 +255,21 @@ con cada span visible; coste medio por fase; tabla de turnos ordenable y cascada
 su coste. Lleva la pregunta y la respuesta de cada turno (no los mensajes al LLM): tratarlo como
 las trazas, fuera de git. El `.json` es el conjunto de datos que dibuja la página; una futura web
 de análisis podría servirlo desde un endpoint y reutilizar la plantilla.
+
+KPIs de uso del sistema desplegado, leídos de Phoenix por su API REST (`evaluacion/kpis_phoenix.py`,
+solo `httpx`): preguntas por día, intención, ruta, tema y resultado del turno, tasa de resolución,
+bloqueos, coste por pregunta (P50, P90 y por pregunta resuelta), latencia por ruta, tiempo hasta el
+primer token y fallos de herramienta por causa; sesiones y reformulación cuando los spans lleven
+`session.id`. La salida no lleva preguntas ni respuestas y se puede versionar en
+`evaluacion/resultados/`. Con `.md`, las dos figuras (embudo y coste) se escriben como SVG al lado.
+
+```bash
+# EC2: nginx protege /phoenix/ con la contraseña de la web (en PHOENIX_CONTRASENA, o la pide)
+.venv/bin/python evaluacion/kpis_phoenix.py --phoenix http://<ip>/phoenix --desde 2026-10-23 \
+    --salida evaluacion/resultados/kpis_20261023.md
+.venv/bin/python evaluacion/kpis_phoenix.py --phoenix http://localhost:6006 --usuario "" --detalle  # local
+.venv/bin/python evaluacion/kpis_phoenix.py --jsonl trazas/*.jsonl --salida kpis.html               # sin Phoenix
+```
 
 ## Tests
 
