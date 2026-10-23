@@ -5,17 +5,25 @@ Encadena todo el flujo de la Fase 1 sobre los datos que llegan de la API de Madr
     1. Baja las mediciones y las limpia a formato largo (limpiar_datos_live).
     2. Guarda el horario crudo en la tabla `calidad_aire_horas_live` (idempotente).
     3. Agrega a bloques, calcula features y aplica el Isolation Forest (nb03).
-    4. Escribe/actualiza las filas resultantes en `resumen_datos_ml` (upsert).
+    4. Escribe/actualiza en `resumen_datos_ml` (upsert) solo los bloques ya cerrados.
+
+Se ejecuta al cierre de cada franja; cada ejecución recalcula todos los bloques
+cerrados del día con lo que la API haya publicado hasta entonces.
 
 El baseline histórico se materializa una vez en la tabla `baseline_historico`.
 
 Uso:
-    python src/etl/pipeline_tiempo_real.py          # baja de la API y procesa
+    python src/etl/pipeline_tiempo_real.py                         # baja de la API y procesa
+    python src/etl/pipeline_tiempo_real.py --reprocesar 2026-09-16 # rehace los bloques desde
+                                                                   # el horario ya guardado
 """
+import argparse
 import os
 import sys
 import time
+from datetime import date, datetime
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 import pandas as pd
 import requests
@@ -23,7 +31,7 @@ from sqlalchemy import create_engine, text
 from dotenv import load_dotenv
 
 from limpiar_datos import limpiar_datos_live
-from features_bloques import CLAVES_BASE
+from features_bloques import CLAVES_BASE, DURACION
 from inferencia import cargar_bundle, detectar
 
 load_dotenv()
@@ -36,6 +44,15 @@ URL_API = "https://ciudadesabiertas.madrid.es/dynamicAPI/API/query/calair_tiempo
 TABLA_HORARIO = "calidad_aire_horas_live"
 TABLA_RESUMEN = "resumen_datos_ml"
 TABLA_BASELINE = "baseline_historico"
+
+# La API solo sirve el día en curso y publica cada hora con hasta ~1 h de retraso, así que
+# la hora 23 no llega nunca. La cobertura de la noche se mide sobre las 3 horas que sí se
+# publican (20-22): simulado en el histórico, sus marcas bajan del 8,7 % al 0,5 % (0,44 %
+# con las 4 horas).
+HORAS_PUBLICADAS = {**DURACION, "noche": 3}
+# Última hora publicable de cada bloque: el bloque está cerrado cuando esa hora ha terminado.
+ULTIMA_HORA = {"madrugada": 6, "manana": 12, "tarde": 19, "noche": 22}
+ZONA = ZoneInfo("Europe/Madrid")
 
 # Columnas de la tabla resumen_datos_ml, en orden (minúsculas)
 COLS_RESUMEN = [
@@ -141,22 +158,52 @@ def _a_horario_valido(df_limpio: pd.DataFrame) -> pd.DataFrame:
     })
 
 
-def procesar(df_limpio: pd.DataFrame, engine, bundle) -> dict:
-    """Guarda el horario, infiere anomalías por bloque y hace upsert del resumen."""
-    asegurar_esquema(engine)
+def ahora_madrid() -> datetime:
+    """Hora local de Madrid sin zona, comparable con FECHA + HORA."""
+    return datetime.now(ZONA).replace(tzinfo=None)
+
+
+def bloques_cerrados(resumen: pd.DataFrame, ahora: datetime) -> pd.DataFrame:
+    """Descarta los bloques aún abiertos: un bloque a medias se marcaría como anomalía.
+
+    Va por reloj y no por lo publicado: si la API se retrasa, el bloque se escribe
+    igualmente con menos cobertura y la siguiente ejecución lo completa.
+    """
+    fin = (pd.to_datetime(resumen["FECHA"])
+           + pd.to_timedelta(resumen["BLOQUE"].map(ULTIMA_HORA) + 1, unit="h"))
+    return resumen[fin <= ahora]
+
+
+def _inferir_y_guardar(df_horario: pd.DataFrame, engine, bundle, ahora: datetime) -> tuple[int, int]:
+    """Bloques cerrados -> Isolation Forest -> upsert. Devuelve (bloques, anomalías)."""
     baseline = asegurar_baseline(engine)
-
-    n_horas = upsert_horario(df_limpio, engine)
-
-    largo = _a_horario_valido(df_limpio)
-    resumen = detectar(largo, baseline, bundle)
+    largo = _a_horario_valido(df_horario)
+    resumen = bloques_cerrados(detectar(largo, baseline, bundle, HORAS_PUBLICADAS), ahora)
+    if resumen.empty:
+        return 0, 0
 
     # a minúsculas para casar con el esquema de la tabla
     resumen_bd = resumen.rename(columns={c: c.lower() for c in resumen.columns})
-    n_bloques = upsert_resumen(resumen_bd, engine)
-    n_anom = int(resumen["IS_ANOMALY"].sum())
+    return upsert_resumen(resumen_bd, engine), int(resumen["IS_ANOMALY"].sum())
 
+
+def procesar(df_limpio: pd.DataFrame, engine, bundle, ahora: datetime | None = None) -> dict:
+    """Guarda el horario, infiere anomalías por bloque y hace upsert del resumen."""
+    asegurar_esquema(engine)
+    n_horas = upsert_horario(df_limpio, engine)
+    n_bloques, n_anom = _inferir_y_guardar(df_limpio, engine, bundle, ahora or ahora_madrid())
     return {"horas_nuevas": n_horas, "bloques_upsert": n_bloques, "anomalias": n_anom}
+
+
+def reprocesar(engine, bundle, desde: date) -> dict:
+    """Rehace los bloques desde el horario ya guardado (p. ej., tras cambiar la cobertura)."""
+    horario = pd.read_sql(
+        text(f"SELECT estacion, magnitud, fecha, hora, valor, validacion "
+             f"FROM {TABLA_HORARIO} WHERE fecha >= :desde"),
+        engine, params={"desde": desde},
+    )
+    n_bloques, n_anom = _inferir_y_guardar(horario, engine, bundle, ahora_madrid())
+    return {"bloques_upsert": n_bloques, "anomalias": n_anom}
 
 
 def bajar_de_api(max_intentos: int = 3) -> pd.DataFrame:
@@ -174,8 +221,19 @@ def bajar_de_api(max_intentos: int = 3) -> pd.DataFrame:
 
 
 def main():
+    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser.add_argument("--reprocesar", type=date.fromisoformat, metavar="AAAA-MM-DD",
+                        help="no llama a la API: rehace los bloques desde esa fecha")
+    args = parser.parse_args()
+
     engine = create_engine(os.environ["DATABASE_URL"])
     bundle = cargar_bundle(RUTA_MODELOS)
+
+    if args.reprocesar:
+        res = reprocesar(engine, bundle, args.reprocesar)
+        print(f"Reprocesado desde {args.reprocesar}: {res['bloques_upsert']} bloques upsert "
+              f"({res['anomalias']} anomalías detectadas).")
+        return
 
     df_ancho = bajar_de_api()
     if df_ancho.empty:

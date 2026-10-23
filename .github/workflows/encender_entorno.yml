@@ -5,8 +5,9 @@
 # deja como está. Al terminar, el resumen muestra la dirección de la API (la IP cambia en cada
 # encendido).
 #
-# Para apagarlo al terminar: "Apagar entorno". Si nadie lo hace, la programación nocturna lo
-# apaga a la 01:30 (hora de Madrid).
+# Para apagar la EC2 al terminar: "Apagar entorno". Si nadie lo hace, la programación nocturna
+# la apaga a la 01:30 (hora de Madrid). La base de datos se queda siempre encendida (la Lambda
+# carga al cierre de cada franja); si la encuentra parada, la enciende.
 #
 # Rol propio (jupiter-github-actions-entorno), separado del de despliegue: solo puede encender y
 # apagar estas dos máquinas y comprobar el estado de la API en la EC2.
@@ -128,6 +129,6 @@ jobs:
             if [ -n "${IP:-}" ]; then
               echo "| Web | http://$IP (solo desde las IP autorizadas) |"
             fi
-            echo "| Apagado automático | 01:30 (hora de Madrid) |"
+            echo "| Apagado automático de la EC2 | 01:30 (hora de Madrid) |"
             echo "| Lanzado por | @$GITHUB_ACTOR |"
           } >> "$GITHUB_STEP_SUMMARY"

@@ -30,8 +30,8 @@ from sqlalchemy.exc import SQLAlchemyError
 from agente.entities.datos import ResultadoConsulta
 
 VISTA = "mediciones_bloques"
-# `ultima_fecha()` y `estaciones()` cambian como mucho una vez al día (el pipeline cierra el día
-# a las 23:45)
+# `ultima_fecha()` y `estaciones()` cambian como mucho una vez al día (la primera carga del día,
+# a las 07:45)
 CACHE_ULTIMA_FECHA_S = 3600
 
 
