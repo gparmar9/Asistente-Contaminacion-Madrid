@@ -128,6 +128,7 @@ Hilo conductor de la memoria: cómo y por qué cambió el diseño.
 | 2026-10-23 | Acceso a la web de la EC2 | 80 para la IP del equipo y para todo internet, y 443 abierto a todo internet → **solo el 80, abierto a todo internet con contraseña** | La contraseña ya protegía la web y `/phoenix/`, así que la regla de la IP del equipo sobraba. En el 443 no escucha nada: su regla solo servía para que el navegador que prueba HTTPS primero recibiera un rechazo inmediato. Se acepta que ese navegador tarde más en pasar a HTTP a cambio de no tener abierto un puerto sin uso |
 | 2026-10-23 | Alarmas | Dos alarmas, solo de la Lambda → **diez alarmas** que cubren también la web (5xx), Bedrock (errores y tokens al día), la EC2 (estado, créditos de CPU, memoria, disco) y la RDS (espacio), con 3 filtros de métricas sobre el log de nginx y un panel; todo en la plantilla de CloudFormation `jupiter-observabilidad` | Un fallo de la web, del modelo o de la máquina no avisaba a nadie, y un bucle del agente o la web abierta a internet podían disparar el gasto en Bedrock sin que nadie lo viera. Descartados: un script con `put-metric-alarm` por alarma, como el resto de `deploy/aws/` (con ocho alarmas se desvía de lo que hay en AWS sin que nadie lo note), crearlas en la consola (no se revisan en un PR) y métricas propias del agente (Phoenix ya lo mide) |
 | 2026-10-23 | Evaluación del asistente | Solo *offline* (baterías de preguntas con respuesta esperada y LLM juez) → **offline + valoración 👍/👎 de los usuarios** pedida en la web y anotada en Phoenix sobre el span del turno | Las baterías miden lo que el equipo pregunta, no lo que preguntan los usuarios ni si les sirve. Votar en Phoenix deja el voto junto a la traza (ruta, tema, coste) sin tabla nueva. Descartados: una tabla de votos en la RDS (apagada fuera de horario y separa el voto de su traza), un 👍/👎 en cada respuesta y una encuesta abierta (texto libre de usuarios que no se puede versionar) |
+| 2026-10-23 | KPIs de uso del asistente | Script local `kpis_phoenix.py` que leía Phoenix y escribía un informe markdown o HTML → **endpoint `GET /kpis` del agente**, reenviado por api-usuario, para verlos en la web desplegada; **script eliminado** | Ver los KPIs exigía ejecutar el script en un portátil con la contraseña de la web, y el tribunal no lo vería. El cálculo pasa al agente, dueño de la lógica del turno, y comparte con el informe de evaluación el árbol del turno y la tabla de precios. Descartados: mantener el script además del endpoint (dos sitios con la misma lógica), que api-usuario lea Phoenix (duplica el turno) y una página estática regenerada cada hora |
 
 **Decisiones abiertas que alimentarán esta tabla:** modelo del agente en Bedrock (Ministral 14B,
 gpt-oss-120b, Qwen3 Next 80B (2026-10-16) o Nemotron 3 Super 120B (2026-10-18); Claude Haiku 5.5 no está
@@ -1599,44 +1600,66 @@ arreglo antes de calibrar la alarma (fase 4).
 
 La retención de los logs se baja a 14 días; por defecto no caducan nunca.
 
-**KPIs de uso del asistente, desde Phoenix.** Script `Agente/evaluacion/kpis_phoenix.py`: lee los
-spans del proyecto `agente` con la API REST de Phoenix (`GET /v1/projects/{proyecto}/spans`,
-paginada) y reutiliza el árbol del turno y el cálculo de coste del informe de trazas (§7.3). En la
-EC2 el agente no escribe JSONL, así que Phoenix es la única fuente. Coste 0 y ninguna métrica de
-CloudWatch (regla de reparto).
+**KPIs de uso del asistente, desde Phoenix.** Los calcula el propio agente y los sirve en
+`GET /kpis?dias=1|7|30` (Phoenix retiene 30 días); api-usuario los reenvía en `GET /kpis` y la web
+los muestra en `/admin/uso` («Uso del asistente», enlace «Administración» en el pie). Camino: web → nginx →
+api-usuario → agente → API REST de Phoenix (`GET /v1/projects/{proyecto}/spans`, paginada) por la
+red interna. En la EC2 el agente no escribe JSONL, así que Phoenix es la única fuente. Coste 0 y
+ninguna métrica de CloudWatch (regla de reparto).
 
+- Capas: `datos/phoenix.py` (lector con `httpx` y adaptador del span de Phoenix al formato del
+  JSONL), `business/trazas.py` (árbol del turno, tokens, coste y tabla de precios; los comparte con
+  el informe de evaluación de §7.3, sin duplicar precios), `business/kpis.py` (cálculo puro y
+  servicio con caché de 60 s por periodo para no releer Phoenix en cada recarga) y
+  `entities/kpis.py` (contrato; api-usuario tiene una copia con el mismo esquema JSON, comprobado).
 - KPIs: preguntas por día; mezcla de intenciones, rutas y temas; resultado del turno (respondida,
   frase fija, sin evidencia, servicio no disponible, bloqueada, error) y **tasa de resolución** =
   respondida + frase fija (la frase fija es la respuesta correcta a una intención fuera de
   alcance); bloqueos por regla; síntesis válida a la primera y respuestas forzadas por el código;
-  **coste por pregunta** (P50, P90 y por pregunta resuelta); latencia por ruta; **tiempo hasta el
-  primer token**; fallos de herramienta por causa (`agente.estado`) y preguntas de datos perdidas
-  con la RDS apagada (§8.8).
+  **coste por pregunta** (P50, P90, por pregunta resuelta y la lista de costes para el histograma);
+  latencia y **tiempo hasta el primer token** por ruta; fallos de herramienta por causa
+  (`agente.estado`) y preguntas de datos perdidas con la RDS apagada (§8.8).
 - Por sesión (`session.id` en los spans, ver valoración abajo): turnos y duración de sesión y tasa
   de reformulación tras un rechazo (si el turno siguiente sí se resuelve, el rechazo pudo ser un
-  falso negativo). Salen «sin datos» con los spans anteriores a ese cambio.
-- **Satisfacción** (👍/👎, ver valoración abajo): % de votos positivos en total, por ruta y por
-  tema, con su *n*, y una tercera figura (satisfacción por ruta). Los votos se leen de
+  falso negativo). `null` con los spans anteriores a ese cambio.
+- **Satisfacción** (👍/👎, ver valoración abajo): votos positivos en total, por ruta y por tema, y
+  participación (sesiones con 2 o más respuestas completas que votaron). Los votos se leen de
   `GET /v1/projects/{proyecto}/span_annotations` (verificado en el OpenAPI de Phoenix 20.19.0),
   en lotes de 100 ids de span porque van en la URL.
 - **Primer token**: el agente añade el evento `primer_token` al span `turno` cuando el primer texto
   sale hacia el cliente. Solo existe en el stream y en las rutas que entregan tokens (libre, datos,
   síntesis forzada); documental, mixta y frases fijas llegan enteras al final, y para ellas la
   latencia percibida es la del turno.
-- Dos figuras para la memoria, SVG generado por el propio script sin librerías: embudo intención →
-  ruta → resultado y distribución del coste por pregunta con P50 y P90.
-- Sin texto de usuarios en la salida (ni preguntas, ni respuestas, ni mensajes de error, que pueden
-  llevar literales de la pregunta): el informe se versiona en `Agente/evaluacion/resultados/`.
-- Descartado: `arize-phoenix-client` (una dependencia más para una llamada HTTP paginada; `httpx`
-  ya estaba y permite probar sin red con `MockTransport`) y las vistas guardadas en la interfaz de
-  Phoenix (no reproducibles).
+- El JSON solo lleva recuentos con su *n* y percentiles (rango más cercano); los porcentajes y las
+  figuras los hace la web. Sin texto de usuarios (ni preguntas, ni respuestas, ni mensajes de
+  error, que pueden llevar literales de la pregunta); un test lo comprueba.
+- **Página `/admin/uso`**: selector de 24 h, 7 o 30 días; seis indicadores (preguntas, tasa de
+  resolución, coste P50, latencia P50, primer token P50 y satisfacción), cada uno con su *n*;
+  embudo intención → ruta → resultado en barras horizontales; histograma del coste por turno con
+  marcas de P50 y P90; satisfacción por ruta (barras 0-100 % con el *n* de cada una); tablas de
+  rutas (latencias), temas, fallos de herramienta, sesiones y satisfacción por tema con la
+  participación. Sin votos, «Sin valoraciones en el periodo» en lugar de 0 %. Las barras y el
+  histograma son HTML y CSS, sin Recharts; la página se carga aparte del bundle principal
+  (11 kB). Lógica pura (porcentajes, cubos del histograma, formato) con 13 tests Vitest.
+- **Rótulo «Solo administradores» sin protección.** La página lo lleva y explica que en producción
+  pediría iniciar sesión con un perfil de administrador; el acceso es el del resto de la web (la
+  contraseña de nginx). La gestión de usuarios está fuera del alcance del TFM, y una clave falsa
+  daría una sensación de seguridad que no existe; el rótulo deja claro el diseño previsto sin
+  simularlo. Exponerla no filtra nada: solo agregados, sin texto de usuarios (§11).
+- Phoenix caído, sin configurar o con un formato inesperado → 503 con mensaje; api-usuario
+  devuelve 503 si el agente no responde y 502 si la respuesta no cumple el contrato.
+- Descartados: `arize-phoenix-client` (una dependencia más para una llamada HTTP paginada; `httpx`
+  ya estaba y permite probar sin red con `MockTransport`), las vistas guardadas en la interfaz de
+  Phoenix (no reproducibles), que api-usuario lea Phoenix directamente (duplicaría la lógica del
+  turno, que es del agente) y una página estática regenerada cada hora (aparte de la web y con
+  datos de hasta una hora). La variable `PHOENIX_URL` del diseño no hizo falta: la raíz de la API
+  se deduce de `PHOENIX_ENDPOINT`, como para la valoración.
 - Esquema de la API comprobado en el código del servidor 20.19.0: devuelve los atributos del span
-  aplanados (`agente.ruta`) y el tipo aparte (`span_kind`); un adaptador de 15 líneas los lleva al
-  formato del JSONL. Probado contra el Phoenix local (misma versión): lee y pagina la API real.
-  9 tests nuevos (7 del informe, 2 del evento).
+  aplanados (`agente.ruta`) y el tipo aparte (`span_kind`); el adaptador los lleva al formato del
+  JSONL. El lector se probó contra el Phoenix local (misma versión) cuando era un script.
 
-Estado (2026-10-23): código y tests listos. `[por confirmar: ejecución contra la EC2 y cifras
-reales con su n; el evento primer_token llega con la próxima imagen del agente]`
+Estado (2026-10-23): endpoint en el agente y en api-usuario y página web, con tests. `[por
+confirmar: despliegue y cifras reales con su n]`
 
 **Valoración 👍/👎 de los usuarios, anotada en Phoenix.** Es la única medida de satisfacción real:
 la evaluación del asistente (§7.3) era hasta ahora solo *offline*, con baterías de preguntas.
@@ -1882,8 +1905,8 @@ la enciende a mano para trabajar o hacer una demo.
   y `frontend`.
 - **Contrato frontend-backend comprobado en CI.** El job `frontend` exporta el OpenAPI real de
   `ApiUsuario` (`Web/scripts/exportar_openapi.py`), regenera los tipos TypeScript y falla con
-  `git diff --exit-code` si el contrato versionado no coincide; después lint y `npm run build`
-  (`tsc -b` + Vite). Un build roto o una deriva de esquema tumban el PR. Las versiones de FastAPI y
+  `git diff --exit-code` si el contrato versionado no coincide; después lint, `npm test` y
+  `npm run build` (`tsc -b` + Vite). Un build roto o una deriva de esquema tumban el PR. Las versiones de FastAPI y
   pydantic del job están fijadas a las que generaron el fichero, porque el esquema que emiten puede
   cambiar entre versiones.
 - **Observabilidad del agente:** spans OpenTelemetry por turno, visibles en Phoenix y guardados en
@@ -1967,6 +1990,10 @@ la enciende a mano para trabajar o hacer una demo.
   índice si el cálculo falla.
 - **Un identificador derivado de la posición es frágil.** Pasar a `chunk_id` estables
   (`archivo:slug-sección:ordinal`) permite reordenar el corpus sin invalidar las citas emitidas.
+- **La documentación iba por delante del CI.** README, memoria y comentarios describían un job
+  `frontend` que comprobaba el contrato, pero nunca llegó a `tests.yml`: durante tres semanas un
+  cambio de la API podía desincronizar los tipos de la web sin que ningún PR fallase. Al describir
+  un control automático, comprobar que el workflow lo ejecuta (2026-10-23).
 - **Dependencias sin fijar en CI rompen sin tocar código.** El job de integración instalaba
   `sqlalchemy` sin versión; una versión nueva pasó a elegir el driver `psycopg` (v3) para las URL
   `postgresql://` y el job falló con `No module named 'psycopg'` en un PR que no tocaba la base de
@@ -2110,6 +2137,8 @@ la enciende a mano para trabajar o hacer una demo.
 - **Panel y trazas no están enlazados**: la IP de la EC2 cambia en cada encendido, así que el
   panel de CloudWatch no puede llevar un enlace fijo a `/phoenix/`. Lo resolvería una IP elástica
   o un dominio.
+- **La página de KPIs no tiene control de acceso propio** (§8.7): lleva el rótulo «Solo
+  administradores», pero la ve cualquiera con la contraseña de la web. No hay gestión de usuarios.
 
 **Trabajo futuro**
 - **¿Hace falta un modelo de razonamiento para el agente?** En la ruta documental no: el modelo sin
@@ -2136,6 +2165,9 @@ la enciende a mano para trabajar o hacer una demo.
   un criterio de abstención adicional.
 - **Ampliar el juego de casos** y separar casos de calibración y de medida, para que el umbral no
   se ajuste y se mida con las mismas preguntas.
+- **Gestión de usuarios con rol de administrador**: Cognito u OIDC delante de nginx, con un grupo
+  «administradores» que dé acceso a `/admin/` y `/api/kpis`, y HTTPS, sin el que cualquier
+  credencial viaja en claro.
 - **Decidir dónde se despliega el servicio RAG.** El modelo de embeddings (~1,1 GB) y su carga en
   la primera petición no encajan bien en Lambda; habrá que valorar otra opción de cómputo.
 
@@ -2371,6 +2403,9 @@ la enciende a mano para trabajar o hacer una demo.
 | 2026-10-23 | **Valoración 👍/👎 de los usuarios, web e informe** (Carlos con Claude Code, rama `feature/valoracion-usuario`): aviso «¿Qué tal lo está haciendo el asistente hoy?» en el panel y en `/asistente` tras la 2.ª respuesta, una vez al día por navegador; `traza_id` y `span_id` leídos del `done`; contrato OpenAPI regenerado. El informe de KPIs añade satisfacción total, por ruta y por tema con su *n* y la figura de satisfacción por ruta. Tests: 43 de la web, 162 del agente y 26 de api-usuario en verde. `[por confirmar: despliegue y anotación real en la EC2]` |
 | 2026-10-23 | **Revisión local de valoraciones** (Codex): simplificados los comentarios; reproducidos el estado diario obsoleto del aviso y el sesgo del denominador de participación. Detectada por lectura la falta de validación de pertenencia del span. Hallazgos pendientes de corrección (§8). Web: 43 pruebas, lint y compilación correctos. Agente y API: 188 pruebas correctas y 10 omitidas; ejecución fuera del sandbox por bloqueo de TestClient dentro de él. |
 | 2026-10-23 | **PR de la valoración a `development`** (Carlos con Claude Code): PR #95. El primer intento, #93, se abrió contra `main` y la protección falló como debía; al rehacerlo con el mismo commit, el fallo seguía visible en el #95 porque los checks van por commit (§9). Tests de la PR en verde |
+| 2026-10-23 | **KPIs de uso servidos por el agente** (Carlos con Claude Code, rama `feature/kpis-agente`): `GET /kpis` en el agente (últimos 1, 7 o 30 días; lector de Phoenix, cálculo en la capa de negocio, caché de 60 s, 503 sin Phoenix) y `GET /kpis` en api-usuario (404 sin agente, 503 caído, 502 fuera de contrato). Turnos, coste y precios pasan a `agente/business/trazas.py`, compartidos con `informe_trazas.py` sin cambios de cifras. Se elimina el script `kpis_phoenix.py` y sus tests; sus casos pasan al agente. Tests: 171 del agente (10 omitidos) y 34 de api-usuario en verde. `[por confirmar: página web y despliegue]` |
+| 2026-10-23 | **Página «Uso del asistente» en la web** (Carlos con Claude Code, rama `feature/kpis-agente`): `/admin/uso` con rótulo «Solo administradores» sin protección, enlace en el pie, seis indicadores con su *n*, embudo, histograma del coste con P50/P90, satisfacción por ruta y tablas; contrato OpenAPI regenerado. Sin cambios en `compose.yml`: la raíz de Phoenix sale de `PHOENIX_ENDPOINT`. Web: 56 tests Vitest, typecheck, lint y build en verde. `[por confirmar: despliegue y prueba en la EC2]` |
+| 2026-10-23 | **Job `frontend` en CI** (Carlos con Claude Code, rama `feature/kpis-agente`): README, memoria y comentarios daban por hecha la comprobación del contrato web-API, pero el job nunca se había añadido a `tests.yml`. Nuevo sexto job: regenera `openapi.json` desde `ApiUsuario` (FastAPI 0.161.1 y pydantic 2.14.1 fijados) y `schema.d.ts`, falla con `git diff --exit-code` si difieren y pasa lint, tests y build de la web. Comprobado en local: el contrato regenerado coincide byte a byte con el versionado; lint, 56 tests y build en verde. Primera ejecución en GitHub `[por confirmar]` |
 
 ---
 

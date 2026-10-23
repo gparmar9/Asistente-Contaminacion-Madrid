@@ -17,6 +17,7 @@ tipos generados desde el OpenAPI del backend con `openapi-typescript` + cliente
 | `/estaciones/:codigo` | **Detalle** | Línea de tendencia por bloques, heatmap días × bloques, tabla alternativa, rangos 7/30/90/personalizado, filtro por bloque y comparación con hasta 2 estaciones más |
 | `/asistente` | **Asistente** | Preguntas independientes al asistente: chips sugeridas, contador de espera, fuentes separadas por tipo (`sql` / `documento`) y citas `[Dn]` enlazadas |
 | `/metodologia` | **Metodología** | Datos, bloques, detector, regla de cobertura, limitaciones, aviso completo y bibliografía del corpus |
+| `/admin/uso` | **Uso del asistente** | KPIs del agente leídos de Phoenix (`GET /api/kpis?dias=1\|7\|30`): preguntas, resolución, coste, latencia, primer token y satisfacción con su *n*; embudo intención → ruta → resultado, histograma del coste con P50/P90, satisfacción por ruta y tablas. Rótulo «Solo administradores» **sin protección** (el proyecto no tiene gestión de usuarios); enlace «Administración» en el pie |
 
 El **aviso médico** es un banner persistente dentro de la cabecera fija: se ve sin
 hacer scroll en todas las pantallas. Su texto es la `advertencia` de la última
@@ -35,6 +36,7 @@ Tras la **2.ª respuesta completa** de la conversación, encima del campo de pre
 `jupiter.valoracion.fecha`; sin almacenamiento, una vez por carga), nunca con una pregunta en
 vuelo y solo con respuestas del agente, que traen `traza_id` y `span_id` en el evento `done`. El
 voto va a `POST /api/chat/valoracion` sin esperar respuesta y se anota en Phoenix sobre el turno.
+Los votos se resumen en `/admin/uso` («Sin valoraciones en el periodo» si no hay ninguno, nunca 0 %).
 
 ## Reglas de correctitud que implementa la interfaz
 
@@ -64,7 +66,7 @@ cd Web
 npm ci
 npm run dev        # http://localhost:5173, con proxy /api -> localhost:8000
 npm run lint
-npm test           # vitest: regla de cobertura, citas [Dn], fechas, SSE y aviso de valoración (lógica pura, sin DOM)
+npm test           # vitest: regla de cobertura, citas [Dn], fechas, SSE, aviso de valoración y KPIs (lógica pura, sin DOM)
 npm run build      # tsc -b && vite build
 ```
 
@@ -83,8 +85,8 @@ npm run contrato          # = contrato:exportar (Python) + contrato:tipos (opena
 ```
 
 El job `frontend` de CI repite esos dos pasos y falla con `git diff --exit-code` si el
-contrato versionado no coincide con el código del backend. Así una deriva de esquema se
-detecta en el PR, no en producción. Las versiones de FastAPI/pydantic del job están fijadas a
+contrato versionado no coincide con el código del backend; después pasa lint, tests y build.
+Así una deriva de esquema se detecta en el PR, no en producción. Las versiones de FastAPI/pydantic del job están fijadas a
 las que generaron el fichero.
 
 ## Despliegue: un solo origen
@@ -128,9 +130,9 @@ Web/
 ├── Dockerfile · nginx.conf · phoenix-acceso.conf · openapi.json · scripts/exportar_openapi.py
 └── src/
     ├── api/          cliente tipado (openapi-fetch), hooks de TanStack Query, errores por código HTTP
-    ├── dominio/      constantes, regla de cobertura y estados, fechas, formato, citas [Dn]
+    ├── dominio/      constantes, regla de cobertura y estados, fechas, formato, citas [Dn], KPIs
     ├── estado/       tema claro/oscuro, texto del aviso, estación seleccionada
     ├── estilos/      tokens.css (paleta), base.css, componentes.css
-    ├── componentes/  layout · ui · filtros · graficas · chat · hoy
-    └── paginas/      Hoy · Estaciones · DetalleEstacion · Asistente · Metodologia
+    ├── componentes/  layout · ui · filtros · graficas · chat · hoy · kpis
+    └── paginas/      Hoy · Estaciones · DetalleEstacion · Asistente · Metodologia · UsoAsistente
 ```

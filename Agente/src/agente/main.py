@@ -1,5 +1,6 @@
-"""Servicio del agente LLM: FastAPI con /salud, POST /responder, POST /responder/stream (SSE) y
-POST /valoracion (👍/👎 del usuario, anotado en Phoenix sobre el span del turno).
+"""Servicio del agente LLM: FastAPI con /salud, POST /responder, POST /responder/stream (SSE),
+POST /valoracion (👍/👎 del usuario, anotado en Phoenix sobre el span del turno) y GET /kpis
+(KPIs de uso calculados con los spans de Phoenix, sin texto de usuarios).
 
 Un turno a la vez por sesión (`business/sesiones.py`): una segunda pregunta de la misma sesión
 espera a que termine la primera. Los dos endpoints comparten sesión, bloqueo, memoria y log del turno.
@@ -19,12 +20,13 @@ import time
 from contextlib import asynccontextmanager
 from uuid import uuid4
 
-from fastapi import Depends, FastAPI, HTTPException, Request
+from fastapi import Depends, FastAPI, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
 
 from agente import observabilidad
 from agente.api import sse
 from agente.business.bucle import Bucle, LLMNoDisponible, ResultadoTurno
+from agente.business.kpis import ServicioKpis
 from agente.business.memoria import ventana
 from agente.business.sesiones import Sesiones
 from agente.config.settings import Settings, get_settings
@@ -32,9 +34,11 @@ from agente.business.redactor_sql import RedactorSQL
 from agente.business.selector_catalogo import SelectorCatalogo
 from agente.datos.mediciones import Mediciones, crear_motor
 from agente.datos.memoria import AlmacenConversaciones, AlmacenEnMemoria
-from agente.datos.valoraciones import AnotadorPhoenix, PhoenixNoDisponible
+from agente.datos.phoenix import LectorPhoenix, PhoenixNoDisponible
+from agente.datos.valoraciones import AnotadorPhoenix
 from agente.entities.chat import Pregunta, Respuesta, Valoracion
 from agente.entities.eventos import Emisor, EventoEstado, Fase
+from agente.entities.kpis import Dias, Kpis
 from agente.entities.memoria import TurnoGuardado
 from agente.llm.cliente import ConfiguracionLLMInvalida, crear_llm
 from agente.tools.catalogo import HerramientaCatalogo
@@ -47,6 +51,7 @@ log_turnos = observabilidad.configurar_resumen()
 settings = get_settings()
 
 VALORACION_NO_DISPONIBLE = "La valoración no está disponible en este momento"
+KPIS_NO_DISPONIBLES = "Los KPIs no están disponibles: no se pudo leer Phoenix"
 
 
 def construir_bucle(settings: Settings = settings) -> Bucle | None:
@@ -88,6 +93,8 @@ async def lifespan(app_: FastAPI):
     app_.state.sesiones = Sesiones()
     app_.state.memoria = AlmacenEnMemoria(settings.memoria_max_turnos, settings.memoria_ttl_h * 3600)
     app_.state.anotador = AnotadorPhoenix(settings.phoenix_url) if settings.phoenix_url else None
+    app_.state.kpis = (ServicioKpis(LectorPhoenix(settings.phoenix_url), settings.phoenix_proyecto)
+                       if settings.phoenix_url else None)
     yield
     observabilidad.cerrar()
 
@@ -114,6 +121,10 @@ def get_memoria(request: Request) -> AlmacenConversaciones:
 
 def get_anotador(request: Request) -> AnotadorPhoenix | None:
     return getattr(request.app.state, "anotador", None)
+
+
+def get_kpis(request: Request) -> ServicioKpis | None:
+    return getattr(request.app.state, "kpis", None)
 
 
 @app.get("/salud", summary="Estado del servicio")
@@ -173,6 +184,18 @@ async def valorar(entrada: Valoracion, anotador: AnotadorPhoenix | None = Depend
     except PhoenixNoDisponible as exc:
         raise HTTPException(status_code=503, detail=VALORACION_NO_DISPONIBLE) from exc
     log_turnos.info("valoracion traza=%s valor=%s", entrada.traza_id, entrada.valor)
+
+
+@app.get("/kpis", response_model=Kpis, summary="KPIs de uso del asistente en los últimos días")
+async def kpis(dias: Dias = Query(Dias.SIETE, description="Días hacia atrás"),
+               servicio: ServicioKpis | None = Depends(get_kpis)) -> Kpis:
+    """KPIs con caché de 60 s. Devuelve 503 si Phoenix no está disponible."""
+    if servicio is None:
+        raise HTTPException(status_code=503, detail=KPIS_NO_DISPONIBLES)
+    try:
+        return await servicio.obtener(int(dias))
+    except PhoenixNoDisponible as exc:
+        raise HTTPException(status_code=503, detail=KPIS_NO_DISPONIBLES) from exc
 
 
 def _comprobar_llm(bucle: Bucle | None) -> None:

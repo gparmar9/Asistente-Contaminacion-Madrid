@@ -8,12 +8,14 @@
 import { useQueries, useQuery } from '@tanstack/react-query'
 
 import { interpretarEventoChat, textoFase, type EventoChat } from '../dominio/chat'
+import type { DiasKpis } from '../dominio/kpis'
 import { crearParserSSE } from '../dominio/sse'
 import { cliente } from './cliente'
 import { ErrorApi } from './errores'
 import type {
   Contaminante,
   Estacion,
+  Kpis,
   ParametrosSerie,
   RespuestaChat,
   Salud,
@@ -28,6 +30,7 @@ export const claves = {
   salud: ['salud'] as const,
   estaciones: ['estaciones'] as const,
   serie: (codigo: number | undefined, params: ParametrosSerie) => ['serie', codigo, params] as const,
+  kpis: (dias: DiasKpis) => ['kpis', dias] as const,
 }
 
 export async function obtenerSalud(signal?: AbortSignal): Promise<Salud> {
@@ -181,6 +184,16 @@ export async function valorar(valoracion: ValoracionChat): Promise<void> {
   }
 }
 
+export async function obtenerKpis(dias: DiasKpis, signal?: AbortSignal): Promise<Kpis> {
+  try {
+    const { data, error, response } = await cliente.GET('/kpis', { params: { query: { dias } }, signal })
+    if (!response.ok || data === undefined) throw ErrorApi.desdeRespuesta(response, error)
+    return data
+  } catch (error) {
+    throw ErrorApi.desdeExcepcion(error)
+  }
+}
+
 // ---------------------------------------------------------------- hooks
 
 export function useSalud() {
@@ -238,5 +251,16 @@ export function useSeriesPorEstacion(codigos: readonly number[], params: Paramet
       queryFn: ({ signal }: { signal: AbortSignal }) => obtenerSerie(codigo, params, signal),
       retry: 1,
     })),
+  })
+}
+
+/** KPIs del asistente. El agente ya los cachea 60 s: refrescar antes no trae nada nuevo. */
+export function useKpis(dias: DiasKpis) {
+  return useQuery({
+    queryKey: claves.kpis(dias),
+    queryFn: ({ signal }) => obtenerKpis(dias, signal),
+    staleTime: 60_000,
+    retry: 0,
+    placeholderData: (anterior) => anterior,
   })
 }
