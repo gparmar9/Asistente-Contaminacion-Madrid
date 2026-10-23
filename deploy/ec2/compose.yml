@@ -26,9 +26,10 @@ services:
     restart: unless-stopped
     <<: *logs
 
-  # Bedrock con el rol de la máquina: sin claves. El modelo y el resto de su configuración
-  # (LLM_MODELO, DATABASE_URL con el rol agente_lectura...) salen de config-agente.env. Sin
-  # LLM_MODELO arranca igual y /responder devuelve 503.
+  # Bedrock con el rol de la máquina: sin claves. En SSM (config-agente.env) solo va lo secreto o
+  # lo que se cambia sin tocar código: LLM_MODELO, DATABASE_URL con el rol agente_lectura...
+  # Lo fijo de esta máquina va en environment, que manda sobre env_file. Sin LLM_MODELO arranca
+  # igual y /responder devuelve 503.
   agente:
     image: ${REGISTRO}/jupiter-agente:${VERSION_AGENTE}
     restart: unless-stopped
@@ -39,6 +40,8 @@ services:
       LLM_PROVEEDOR: bedrock
       AWS_REGION: eu-west-1
       RAG_URL: http://rag:8010
+      # Por la red interna, sin el prefijo /phoenix (ese solo existe a través de nginx).
+      PHOENIX_ENDPOINT: http://phoenix:6006/v1/traces
     depends_on:
       rag:
         condition: service_healthy
@@ -75,8 +78,8 @@ services:
     <<: *logs
 
   # Trazas del agente. Para cambiar la imagen de Docker Hub, editar la versión y desplegar "phoenix".
-  # /jupiter/agente/phoenix_endpoint activa el envío a http://phoenix:6006/v1/traces.
-  # El agente puede arrancar sin Phoenix. Su interfaz se abre en /phoenix/ a través de web.
+  # El agente le envía las trazas (PHOENIX_ENDPOINT, arriba), pero puede arrancar sin Phoenix.
+  # Su interfaz se abre en /phoenix/ a través de web.
   phoenix:
     image: arizephoenix/phoenix:version-20.19.0
     restart: unless-stopped

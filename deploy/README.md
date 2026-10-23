@@ -308,7 +308,7 @@ De dónde sale cada cosa (todo con el rol de la máquina, `jupiter-ec2-api`, sin
 | `s3://jupiter-calidad-aire-madrid/ec2/` | Los ficheros de esta carpeta, copiados desde el repositorio |
 | SSM `/jupiter/versiones/<servicio>` | Qué imagen está activa (tag = commit). La escribe el despliegue |
 | SSM `/jupiter/database_url` | La misma cadena de conexión que usa la Lambda (la usa `api-usuario`) |
-| SSM `/jupiter/agente/<variable>` | Configuración del agente: cada parámetro se convierte en una variable de entorno (`/jupiter/agente/llm_modelo` → `LLM_MODELO`). Una variable nueva del agente se da de alta creando el parámetro, sin tocar ningún script |
+| SSM `/jupiter/agente/<variable>` | Configuración del agente que es secreta o se cambia sin tocar código: cada parámetro se convierte en una variable de entorno (`/jupiter/agente/llm_modelo` → `LLM_MODELO`). Una variable nueva del agente se da de alta creando el parámetro, sin tocar ningún script. Lo que es fijo de la máquina (proveedor, región, URL del RAG y de Phoenix) va en `compose.yml` y manda sobre SSM |
 | SSM `/jupiter/web/contrasena` (SecureString, opcional) | Contraseña de la web y de `/phoenix/`, usuario `demo` (ver [Usuario y contraseña de la web](#usuario-y-contraseña-de-la-web)) |
 | Docker Hub `arizephoenix/phoenix` | Imagen pública de Phoenix; la versión está en `compose.yml`, no en SSM |
 
@@ -319,11 +319,9 @@ Parámetros del agente que hacen falta (los demás, como en [`Agente/.env.exampl
 | `/jupiter/agente/llm_modelo` | `mistral.ministral-3-14b-instruct` | `/chat` responde 503 |
 | `/jupiter/agente/llm_modelo_clasificador` | `openai.gpt-oss-120b-1:0` | El clasificador usa `llm_modelo` |
 | `/jupiter/agente/database_url` (SecureString) | `postgresql://agente_lectura:…@<RDS>:5432/postgres` | Las preguntas de datos reciben la frase de datos no disponibles |
-| `/jupiter/agente/phoenix_endpoint` | `http://phoenix:6006/v1/traces` | El agente no envía trazas (Phoenix se ve vacío) |
-| `/jupiter/agente/phoenix_proyecto` (opcional) | `produccion` | Las trazas van al proyecto `agente` |
 
-El proveedor (`LLM_PROVEEDOR=bedrock`) y la región están fijos en el compose: Bedrock se usa con el
-rol de la máquina, sin claves. La `database_url` del agente usa el rol de solo lectura
+El proveedor (`LLM_PROVEEDOR=bedrock`), la región y las URL internas del RAG y de Phoenix están
+fijos en el compose: Bedrock se usa con el rol de la máquina, sin claves. La `database_url` del agente usa el rol de solo lectura
 `agente_lectura` ([`sql/rol_agente_lectura.sql`](sql/rol_agente_lectura.sql)) sobre la vista
 `mediciones_bloques` ([`sql/vista_mediciones_bloques.sql`](sql/vista_mediciones_bloques.sql)),
 nunca el usuario administrador.
@@ -373,21 +371,15 @@ en `http://<ip>/phoenix/`.
   responde 403, aunque la web esté abierta: guarda las preguntas y respuestas de los usuarios y no
   tiene autenticación propia.
 - **Envío**: el agente manda las trazas a `http://phoenix:6006/v1/traces` por la red interna, sin
-  pasar por nginx ni por el prefijo. Se activa con el parámetro `/jupiter/agente/phoenix_endpoint`;
-  sin él el agente funciona igual, sin trazas. El agente no depende de Phoenix para arrancar.
+  pasar por nginx ni por el prefijo. La dirección está fija en `compose.yml` (`PHOENIX_ENDPOINT`),
+  sin parámetro de SSM. El agente no depende de Phoenix para arrancar: si no está, pierde las trazas
+  y sigue respondiendo. Van al proyecto `agente`.
 - **Datos**: SQLite en el volumen Docker `phoenix_data` (disco de la EC2): sobrevive a apagar y
   encender, se pierde si se recrea la máquina. Retención de 30 días, pero la purga corre los
   domingos a las 00:00 UTC y con la EC2 apagada a esa hora no se ejecuta: las trazas crecen.
 - **Versión**: fijada en `compose.yml` (`arizephoenix/phoenix:version-20.19.0`, la misma que en
   local). Cambiarla = commit + **Desplegar → `phoenix`**; volver atrás = revertir el commit y
   desplegar otra vez. No pasa por ECR ni por el rollback.
-
-Activarlo (una vez; luego **Desplegar → `agente`** o apagar y encender para que lo lea):
-
-```powershell
-aws ssm put-parameter --name /jupiter/agente/phoenix_endpoint --type String --value "http://phoenix:6006/v1/traces"
-aws ssm put-parameter --name /jupiter/agente/phoenix_proyecto --type String --value "produccion"   # opcional
-```
 
 ### Operarla desde GitHub Actions
 
