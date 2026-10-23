@@ -1,0 +1,24 @@
+# Observabilidad de la aplicación de la EC2 en CloudWatch (pila jupiter-observabilidad).
+#
+#   aws cloudformation deploy --template-file deploy/cloudwatch/observabilidad.yaml \
+#       --stack-name jupiter-observabilidad
+#
+# De momento solo el grupo de logs de los contenedores. Los filtros de métricas, las alarmas y el
+# panel se añaden aquí más adelante: así todo lo de CloudWatch se crea, se revisa y se borra junto.
+# El grupo lo crea esta plantilla y no Docker (awslogs-create-group sigue en false): si existiera
+# antes, CloudFormation no podría crearlo y fallaría la pila.
+AWSTemplateFormatVersion: "2010-09-09"
+Description: Jupiter - logs de los contenedores de la EC2
+
+Resources:
+  # web (log de acceso de nginx en JSON), api-usuario y rag; un stream por contenedor.
+  # agente y phoenix no envían: lo del agente ya está en Phoenix.
+  LogsEc2:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: /jupiter/ec2
+      RetentionInDays: 14   # como /aws/lambda/jupiter-pipeline
+
+Outputs:
+  GrupoLogs:
+    Value: !Ref LogsEc2

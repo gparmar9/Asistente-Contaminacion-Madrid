@@ -61,6 +61,24 @@
       "Effect": "Allow",
       "Action": "s3:GetObject",
       "Resource": "arn:aws:s3:::jupiter-calidad-aire-madrid/ec2/*"
+    },
+    {
+      "Sid": "EscribirLogsDeLosContenedoresEnSuGrupo",
+      "Effect": "Allow",
+      "Action": [
+        "logs:CreateLogStream",
+        "logs:PutLogEvents"
+      ],
+      "Resource": "arn:aws:logs:eu-west-1:*:log-group:/jupiter/ec2:*"
+    },
+    {
+      "Sid": "PublicarMetricasDeMemoriaYDiscoSoloEnCWAgent",
+      "Effect": "Allow",
+      "Action": "cloudwatch:PutMetricData",
+      "Resource": "*",
+      "Condition": {
+        "StringEquals": { "cloudwatch:namespace": "CWAgent" }
+      }
     }
   ]
 }

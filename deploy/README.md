@@ -299,7 +299,8 @@ el equipo lo sustituyó por el `Agente` (ver `docs/notas_memoria.md` §2).
 | [`compose.yml`](ec2/compose.yml) | Los servicios con imágenes de ECR (`jupiter-web`, `jupiter-api-usuario`, `jupiter-agente`, `jupiter-rag`) y `phoenix` (Docker Hub, versión fijada aquí). Sin base de datos: usa RDS |
 | [`arrancar.sh`](ec2/arrancar.sh) | Lee de SSM qué versión de cada servicio está activa y la configuración, inicia sesión en ECR y levanta los contenedores. Con un argumento (`arrancar.sh rag`) actualiza solo ese servicio. nginx resuelve los nombres de los contenedores en cada petición, así que recrear `api-usuario` o `phoenix` no obliga a reiniciar `web` |
 | [`jupiter.service`](ec2/jupiter.service) | Servicio de systemd: en cada arranque de la máquina trae de S3 el `arrancar.sh` actual y lo ejecuta. `arrancar.sh` reinstala a su vez este fichero si cambió en S3, así que un despliegue con la EC2 apagada se aplica completo al encenderla |
-| [`user-data.sh`](ec2/user-data.sh) | Primer arranque: instala Docker y Compose y deja instalado lo anterior |
+| [`cloudwatch-agent.json`](ec2/cloudwatch-agent.json) | Configuración del agente de CloudWatch: memoria y disco de la máquina (ver [Logs y métricas en CloudWatch](#logs-y-métricas-en-cloudwatch)) |
+| [`user-data.sh`](ec2/user-data.sh) | Primer arranque: instala Docker, Compose y el agente de CloudWatch y deja instalado lo anterior |
 
 De dónde sale cada cosa (todo con el rol de la máquina, `jupiter-ec2-api`, sin claves en disco):
 
@@ -328,7 +329,8 @@ nunca el usuario administrador.
 
 Permisos del rol ([`permisos-ec2-api.json`](iam/permisos-ec2-api.json)): descargar **solo** esas
 cuatro imágenes, leer **solo** esos parámetros y la carpeta `ec2/` del bucket, invocar modelos de
-Bedrock en `eu-west-1`, más la política
+Bedrock en `eu-west-1`, escribir logs **solo** en el grupo `/jupiter/ec2` y publicar métricas **solo**
+en el namespace `CWAgent`, más la política
 gestionada `AmazonSSMManagedInstanceCore` para entrar con *Session Manager* (sin SSH ni puerto 22).
 
 Los ficheros de `ec2/` llevan finales de línea LF aunque se trabaje en Windows
@@ -380,6 +382,52 @@ en `http://<ip>/phoenix/`.
 - **Versión**: fijada en `compose.yml` (`arizephoenix/phoenix:version-20.19.0`, la misma que en
   local). Cambiarla = commit + **Desplegar → `phoenix`**; volver atrás = revertir el commit y
   desplegar otra vez. No pasa por ECR ni por el rollback.
+
+### Logs y métricas en CloudWatch
+
+Lo del asistente se mira en Phoenix; CloudWatch recoge el resto: el borde HTTP y la máquina.
+
+- **Logs**: `web`, `api-usuario` y `rag` escriben en el grupo `/jupiter/ec2` (driver `awslogs` de
+  Docker, un *stream* por contenedor: `jupiter-web-1`, `jupiter-api-usuario-1`, `jupiter-rag-1`;
+  14 días de retención). El de `web` es el log de acceso de nginx en JSON (`status`, `uri`,
+  `request_time`, `upstream_response_time`), listo para filtros de métricas. `agente` y `phoenix`
+  se quedan en la máquina: lo del agente ya está en sus trazas. Docker guarda además una copia
+  local, así que `docker compose logs` funciona igual para todos.
+- **Si CloudWatch falla**: los logs van en modo `non-blocking`, así que un contenedor no se para
+  si CloudWatch no responde (se pierden líneas). Sin permisos de escritura, en cambio, Docker no
+  llega a crear el contenedor: el rol se amplía **antes** de desplegar este `compose.yml`.
+- **Métricas de la máquina**: `AWS/EC2` no mide memoria ni disco. El agente de CloudWatch publica
+  `mem_used_percent` y `disk_used_percent` (de `/`) cada 60 s en `CWAgent`, con la dimensión
+  `InstanceId`: exactamente 2 métricas, dentro de las 10 gratuitas. `arrancar.sh` lo instala si
+  falta y le aplica [`cloudwatch-agent.json`](ec2/cloudwatch-agent.json) en cada ejecución; si
+  algo falla, avisa en el log y la aplicación arranca igual.
+- **El grupo de logs** lo crea la pila de CloudFormation `jupiter-observabilidad`
+  ([`cloudwatch/observabilidad.yaml`](cloudwatch/observabilidad.yaml)), no Docker ni un comando
+  suelto: si existiera antes, la pila no podría crearlo. Ahí irán también los filtros, las
+  alarmas y el panel.
+
+Activarlo (una vez, en este orden):
+
+```powershell
+# 0. Comprobar que la sesión apunta a la cuenta del máster (con varios perfiles, AWS_PROFILE)
+aws sts get-caller-identity --query Account --output text
+# 1. El grupo de logs (crea o actualiza la pila; no toca nada más)
+aws cloudformation deploy --template-file deploy/cloudwatch/observabilidad.yaml --stack-name jupiter-observabilidad
+# 2. Los permisos nuevos del rol de la EC2 (sustituye la política en línea por la del repositorio)
+aws iam put-role-policy --role-name jupiter-ec2-api --policy-name ec2-api --policy-document file://deploy/iam/permisos-ec2-api.json
+```
+
+Después, **Desplegar → `phoenix`** publica `ec2/` en S3 e instala el agente de CloudWatch sin
+recrear los demás contenedores; **Apagar entorno** y **Encender entorno** aplican los logs a todos.
+
+Consultar un log (Logs Insights sobre `/jupiter/ec2`):
+
+```
+fields @timestamp, status, request_time, uri
+| filter @logStream like /web/ and uri like /^\/api\/chat/
+| sort @timestamp desc
+| limit 20
+```
 
 ### Operarla desde GitHub Actions
 
