@@ -51,9 +51,13 @@ def cargar_bundles(directorio: Path = RUTA_MODELOS) -> dict[int, dict]:
     return bundles
 
 
-def ultimo_dia_completo(bloques: pd.DataFrame) -> pd.Timestamp | None:
-    """La última fecha con los cuatro bloques presentes (el ancla de los horizontes)."""
-    por_dia = bloques.groupby("FECHA")["BLOQUE"].nunique()
+def ultimo_dia_completo(bloques: pd.DataFrame, cobertura_min: float = 0.7) -> pd.Timestamp | None:
+    """La última fecha cuyos cuatro bloques están medidos de forma fiable (cobertura >= umbral).
+    Exigir cobertura, y no solo presencia, evita anclar en un día a medio ingerir: con ingesta en
+    tiempo real el bloque en curso aparece con una o dos horas; sin este filtro el día contaría como
+    completo antes de tiempo y «esta noche» saldría como «ya medido»."""
+    fiables = bloques[bloques["COBERTURA"] >= cobertura_min]
+    por_dia = fiables.groupby("FECHA")["BLOQUE"].nunique()
     completos = por_dia[por_dia == len(ORDEN_BLOQUES)]
     return None if completos.empty else completos.index.max()
 
@@ -72,9 +76,10 @@ class Motor:
         self._bundles = bundles
         self._leer = leer_bloques
         self._ventana = ventana_dias
+        self._cobertura_min = min(b.get("cobertura_min", 0.7) for b in bundles.values())
 
     def salud(self) -> dict:
-        ancla = ultimo_dia_completo(self._leer_ventana())
+        ancla = ultimo_dia_completo(self._leer_ventana(), self._cobertura_min)
         return {
             "horizontes": sorted(self._bundles),
             "bundles": {h: {"configuracion": b.get("configuracion", {}).get("nombre"),
@@ -87,7 +92,7 @@ class Motor:
     def predecir(self, fecha_objetivo: date, estacion: int | str | None = None,
                  contaminante: str | None = None, bloque: str | None = None) -> dict:
         bloques = self._leer_ventana()
-        ancla = ultimo_dia_completo(bloques)
+        ancla = ultimo_dia_completo(bloques, self._cobertura_min)
         objetivo = pd.Timestamp(fecha_objetivo)
         horizonte = (objetivo - ancla).days
         base = {"fecha_objetivo": str(objetivo.date()), "ultima_fecha_completa": str(ancla.date())}
@@ -126,7 +131,7 @@ class Motor:
         bloques = self._leer(self._ventana)
         if bloques is None or bloques.empty:
             raise DatosNoDisponibles("La vista no devolvió filas")
-        if ultimo_dia_completo(bloques) is None:
+        if ultimo_dia_completo(bloques, self._cobertura_min) is None:
             raise DatosNoDisponibles("Ningún día completo en la ventana leída")
         return bloques
 

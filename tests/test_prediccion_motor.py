@@ -67,6 +67,14 @@ def test_ultimo_dia_completo_ignora_un_dia_a_medio_ingerir():
     assert motor.ultimo_dia_completo(_bloques(ultimo_parcial=True)) == pd.Timestamp(2026, 3, 15)
 
 
+def test_ultimo_dia_completo_exige_cobertura_no_solo_presencia():
+    """Con ingesta en tiempo real, el bloque en curso llega con poca cobertura: ese día no es ancla."""
+    df = _bloques()
+    ultimo = df["FECHA"].max()
+    df.loc[(df["FECHA"] == ultimo) & (df["BLOQUE"] == "noche"), "COBERTURA"] = 0.25
+    assert motor.ultimo_dia_completo(df, 0.7) == ultimo - pd.Timedelta(days=1)
+
+
 # --------------------------------------------------------------------------- horizontes
 
 def test_el_dia_siguiente_al_ancla_usa_h1():
