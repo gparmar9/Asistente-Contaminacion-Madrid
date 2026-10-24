@@ -38,6 +38,31 @@ function IconoPrediccion() {
 }
 
 /**
+ * Versión compacta para el chat: un único bloque «Fuentes citadas» con los
+ * documentos del corpus, sin el grupo de base de datos ni los marcadores `Dn`
+ * (el texto del chat tampoco los lleva, ver `markdownSinCitas`). Sin
+ * documentos citados no se muestra nada.
+ */
+export function FuentesCitadas({ fuentes }: { fuentes: readonly FuenteChat[] }) {
+  const documentos = fuentes.filter((f) => f.tipo === 'documento')
+  if (documentos.length === 0) return null
+  return (
+    <div className="fuentes" aria-label="Fuentes citadas">
+      <div className="fuentes-grupo-titulo">
+        <IconoDocumento /> Fuentes citadas
+      </div>
+      <ul>
+        {documentos.map((f, i) => (
+          <li key={i} className="fuente fuente-documento">
+            <span>{f.referencia}</span>
+          </li>
+        ))}
+      </ul>
+    </div>
+  )
+}
+
+/**
  * Fuentes de la respuesta separadas por tipo. Una cifra de la base de datos
  * (`sql`) y una afirmación documental (`documento`) no son lo mismo: se
  * presentan en grupos distintos y con estilo distinto.

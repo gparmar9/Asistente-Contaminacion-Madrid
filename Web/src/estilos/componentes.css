@@ -1073,8 +1073,8 @@ th[aria-sort] .tabla-orden {
   right: 20px;
   bottom: 20px;
   z-index: 15; /* por debajo de la cabecera fija: el aviso médico nunca queda tapado */
-  width: 56px;
-  height: 56px;
+  width: 44px;
+  height: 44px;
   border-radius: 50%;
   border: 0;
   background: var(--grad-cielo);
@@ -1122,10 +1122,11 @@ th[aria-sort] .tabla-orden {
 .panel-chat {
   position: fixed;
   right: 20px;
-  bottom: 88px;
+  bottom: 76px; /* 20 de margen + 44 de burbuja + 12 de separación */
   z-index: 15;
-  width: min(440px, calc(100vw - 32px));
-  height: min(640px, calc(100dvh - 180px));
+  width: min(560px, calc(100vw - 32px));
+  /* El hueco superior (180px) deja ver la cabecera fija y el aviso médico. */
+  height: min(780px, calc(100dvh - 180px));
   min-height: 320px;
   display: grid;
   grid-template-rows: auto minmax(0, 1fr) auto;
