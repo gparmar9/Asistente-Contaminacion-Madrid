@@ -111,8 +111,8 @@ navegador ──► web (nginx :80)  ── /           → build estático (SPA
     línea por petición.
 - `phoenix-acceso.conf`: control de acceso de `/phoenix`, incluido dentro de su `location`. En la
   imagen no tiene directivas (abierto, para local); en la EC2 se monta encima uno que exige la
-  contraseña de la web, o `return 403;` si no hay contraseña: las trazas guardan las preguntas de
-  los usuarios y nunca quedan abiertas.
+  contraseña de la web incluso desde la propia máquina, o uno vacío (abierto) si la web no tiene
+  contraseña.
 - `docker-compose.yml` (raíz): perfil `api` (`rag`, `orquestador`, `api-usuario`, `web`) y perfil
   `observabilidad` (`phoenix`).
 
