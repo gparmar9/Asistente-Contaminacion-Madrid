@@ -278,14 +278,14 @@ export interface components {
         };
         /**
          * FuenteChat
-         * @description De dónde salió la información: consulta SQL o documento del corpus RAG.
+         * @description De dónde salió la información: consulta SQL, documento del corpus RAG o predicción del modelo.
          */
         FuenteChat: {
             /**
              * Tipo
              * @enum {string}
              */
-            tipo: "sql" | "documento";
+            tipo: "sql" | "documento" | "prediccion";
             /** Referencia */
             referencia: string;
         };

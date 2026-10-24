@@ -28,6 +28,15 @@ function IconoDocumento() {
   )
 }
 
+function IconoPrediccion() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
+      <path d="M3 17l6-6 4 4 8-8" />
+      <path d="M15 7h6v6" />
+    </svg>
+  )
+}
+
 /**
  * Fuentes de la respuesta separadas por tipo. Una cifra de la base de datos
  * (`sql`) y una afirmación documental (`documento`) no son lo mismo: se
@@ -48,6 +57,7 @@ export function Fuentes({ fuentes, texto, idRespuesta }: Props) {
 
   const sql = fuentes.map((f, i) => ({ f, i })).filter(({ f }) => f.tipo === 'sql')
   const documentos = fuentes.map((f, i) => ({ f, i })).filter(({ f }) => f.tipo === 'documento')
+  const predicciones = fuentes.map((f, i) => ({ f, i })).filter(({ f }) => f.tipo === 'prediccion')
 
   return (
     <div className="fuentes" aria-label="Fuentes de la respuesta">
@@ -79,6 +89,20 @@ export function Fuentes({ fuentes, texto, idRespuesta }: Props) {
             {documentos.map(({ f, i }) => (
               <li key={i} id={idFuente(idRespuesta, i)} className="fuente fuente-documento">
                 <span className="fuente-id">{(marcadoresPorFuente.get(i) ?? []).join(', ') || '·'}</span>
+                <span>{f.referencia}</span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+      {predicciones.length > 0 && (
+        <div>
+          <div className="fuentes-grupo-titulo">
+            <IconoPrediccion /> Estimación del modelo de predicción
+          </div>
+          <ul>
+            {predicciones.map(({ f, i }) => (
+              <li key={i} id={idFuente(idRespuesta, i)} className="fuente fuente-prediccion">
                 <span>{f.referencia}</span>
               </li>
             ))}

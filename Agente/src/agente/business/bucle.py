@@ -71,13 +71,14 @@ from agente.entities.comprobaciones import Hallazgo, MaterialTurno
 from agente.entities.eventos import Emisor, Evento, EventoEstado, EventoTexto, Fase
 from agente.entities.intencion import DESCONOCIDA, Clasificacion, Tema
 from agente.entities.memoria import TurnoGuardado
-from agente.tools import rag, sql_libre
+from agente.tools import prediccion, rag, sql_libre
 from agente.tools.base import Herramienta, ResultadoHerramienta, como_llamaindex
 
 logger = logging.getLogger("agente.bucle")
 
 ID_BUSQUEDA_FORZADA = "busqueda_forzada"  # tool_id de la búsqueda que lanza el código
 ID_CONSULTA_FORZADA = "consulta_forzada"  # tool_id de la consulta de datos que lanza el código
+ID_PREDICCION_FORZADA = "prediccion_forzada"  # tool_id de la predicción que lanza el código
 
 
 class LLMNoDisponible(RuntimeError):
@@ -95,8 +96,9 @@ class ResultadoTurno:
     herramientas_usadas: list[str] = field(default_factory=list)
     busqueda_forzada: bool = False                     # la búsqueda obligada la lanzó el código
     consulta_forzada: bool = False                     # la consulta de datos obligada la lanzó el código
+    prediccion_forzada: bool = False                   # la predicción obligada la lanzó el código
     sintesis_forzada: bool = False
-    ruta: str = "libre"                                # libre | documental | datos | mixta | sin_evidencia | fija
+    ruta: str = "libre"                                # libre | documental | datos | prediccion | mixta | sin_evidencia | fija
     valida: bool | None = None                         # ruta documental: /rag/validar la aceptó
     reparaciones: int = 0                              # ruta documental: reintentos tras validar
     traza_id: str | None = None
@@ -169,18 +171,27 @@ class Bucle:
         """Cada parte obligada (documental, datos) acaba con su contenido o con su frase fija. En una
         mixta, el fallo de una parte no cierra el turno: la otra responde igual (cierre compuesto)."""
         disponibles = await self._herramientas_disponibles(decision)
-        frase_doc: str | None = None    # la parte documental se resuelve con esta frase
-        frase_datos: str | None = None  # la parte de datos se resuelve con esta frase
+        frase_doc: str | None = None          # la parte documental se resuelve con esta frase
+        frase_datos: str | None = None        # la parte de datos se resuelve con esta frase
+        frase_prediccion: str | None = None   # la parte de predicción se resuelve con esta frase
         if decision.busqueda_obligada and rag.NOMBRE not in disponibles:
             observabilidad.decision("documentacion_no_disponible")
             frase_doc = frases.DOCUMENTACION_NO_DISPONIBLE
         if decision.datos_obligados and sql_libre.NOMBRE not in disponibles:
             observabilidad.decision("datos_no_disponibles")
             frase_datos = frases.FRASE_DATOS_NO_DISPONIBLE
+        if decision.prediccion_obligada and prediccion.NOMBRE not in disponibles:
+            # Sin herramienta registrada (PREDICCION_URL vacía): frase fija de siempre (compatibilidad).
+            # Registrada pero sin definición este turno (servicio caído): frase de no disponible.
+            sin_url = prediccion.NOMBRE not in self._herramientas
+            observabilidad.decision("prediccion_sin_servicio" if sin_url else "prediccion_no_disponible")
+            frase_prediccion = frases.FRASE_PREDICCION if sin_url else frases.FRASE_PREDICCION_NO_DISPONIBLE
         queda_doc = decision.busqueda_obligada and frase_doc is None
         queda_datos = decision.datos_obligados and frase_datos is None
-        if (frase_doc or frase_datos) and not (queda_doc or queda_datos):
-            return _fija(resultado, "\n\n".join(f for f in (frase_datos, frase_doc) if f))
+        queda_prediccion = decision.prediccion_obligada and frase_prediccion is None
+        frases_fijas = [f for f in (frase_datos, frase_prediccion, frase_doc) if f]
+        if frases_fijas and not (queda_doc or queda_datos or queda_prediccion):
+            return _fija(resultado, "\n\n".join(frases_fijas))
 
         mensajes = [
             ChatMessage(role=MessageRole.SYSTEM, content=self._prompt_sistema(decision.prompt, disponibles)),
@@ -190,6 +201,7 @@ class Bucle:
         evidencias = EvidenciasTurno()
         consultas: list[str] = []  # resultados en texto para la síntesis forzada
         consultas_datos: list[ResultadoHerramienta] = []  # resultados de consultar_datos
+        consultas_prediccion: list[ResultadoHerramienta] = []  # resultados de predecir_calidad_aire
         final: ChatResponse | None = None  # respuesta del modelo sin peticiones de herramienta
         rag_caido = False  # una búsqueda del modelo encontró el RAG sin servicio
         sin_evidencia = False  # una búsqueda del modelo no encontró nada
@@ -208,7 +220,7 @@ class Bucle:
                 mensajes.append(respuesta.message)
                 hubo_sin_evidencia = False
                 for llamada in llamadas:
-                    if llamada.tool_name == sql_libre.NOMBRE:
+                    if llamada.tool_name in (sql_libre.NOMBRE, prediccion.NOMBRE):
                         llamada = _con_preguntas_usuario(llamada, pregunta, historial)
                     r, vacia = await self._ejecutar_y_anotar(llamada, disponibles, evidencias, resultado, emitir)
                     hubo_sin_evidencia |= vacia
@@ -216,6 +228,8 @@ class Bucle:
                         rag_caido |= bool(r.internos) and r.internos.get("estado") == rag.ESTADO_NO_DISPONIBLE
                     elif llamada.tool_name == sql_libre.NOMBRE:
                         consultas_datos.append(r)
+                    elif llamada.tool_name == prediccion.NOMBRE:
+                        consultas_prediccion.append(r)
                     mensajes.append(_mensaje_tool(llamada, r))
                     consultas.append(f"{llamada.tool_name}: {r.para_el_modelo()}")
                 sin_evidencia |= hubo_sin_evidencia
@@ -248,6 +262,24 @@ class Bucle:
             observabilidad.decision("sin_datos_periodo" if sin_datos else "datos_no_disponibles")
             frase_datos = sin_datos or frases.FRASE_DATOS_NO_DISPONIBLE
 
+        if queda_prediccion and not any(r.internos for r in consultas_prediccion):
+            # El modelo no predijo (o su petición no llegó a la herramienta): predice el código. La
+            # fecha la calcula la herramienta con la pregunta del usuario (no se le pasan argumentos).
+            with observabilidad.span("prediccion_forzada", "chain"):
+                resultado.prediccion_forzada = True
+                llamada = _con_preguntas_usuario(ToolSelection(
+                    tool_id=ID_PREDICCION_FORZADA, tool_name=prediccion.NOMBRE, tool_kwargs={}),
+                    pregunta, historial)
+                r, _ = await self._ejecutar_y_anotar(llamada, disponibles, evidencias, resultado, emitir)
+                consultas_prediccion.append(r)
+        predicciones = [r.para_el_modelo() for r in consultas_prediccion if r.ok]
+        if queda_prediccion and not predicciones:
+            # Fecha ya medida, fuera de alcance, sin datos o servicio caído: su frase la trae la herramienta.
+            frase = next((r.internos["frase"] for r in consultas_prediccion
+                          if r.internos and r.internos.get("frase")), None)
+            observabilidad.decision("prediccion_sin_resultado")
+            frase_prediccion = frase or frases.FRASE_PREDICCION_NO_DISPONIBLE
+
         # El texto libre del modelo se descarta si hay contenido de alguna parte: lo sustituyen las síntesis.
         if (evidencias or frase_doc) and (datos or frase_datos):
             return await self._cerrar_mixta(pregunta, historial, evidencias, frase_doc, datos, frase_datos,
@@ -260,6 +292,10 @@ class Bucle:
             return await self._cerrar_datos(pregunta, historial, datos, resultado, emitir, emitir_texto)
         if frase_datos:
             return _fija(resultado, frase_datos)
+        if predicciones:
+            return await self._cerrar_prediccion(pregunta, historial, predicciones, resultado, emitir, emitir_texto)
+        if frase_prediccion:
+            return _fija(resultado, frase_prediccion)
         if final is not None:
             resultado.respuesta = _texto(final)
             resultado.material = comprobaciones.material_libre(pregunta, consultas, resultado.respuesta)
@@ -363,6 +399,22 @@ class Bucle:
         resultado.ruta = "datos"
         resultado.respuesta = _texto(respuesta)
         resultado.material = comprobaciones.material_libre(pregunta, [contexto, *datos], resultado.respuesta)
+        return resultado
+
+    async def _cerrar_prediccion(self, pregunta: str, historial: list[TurnoGuardado], predicciones: list[str],
+                                 resultado: ResultadoTurno, emitir: Emisor,
+                                 emitir_texto: Emisor | None) -> ResultadoTurno:
+        """Síntesis sin herramientas con las filas estimadas y el contexto (hoy, último día, límite).
+        Respuesta definitiva: sale como tokens. Las cifras se comprueban contra las filas."""
+        contexto = self._herramientas[prediccion.NOMBRE].contexto_prompt()
+        with observabilidad.span("sintesis_prediccion", "chain"):
+            await emitir(EventoEstado(Fase.REDACTANDO))
+            respuesta = await self._llamar(
+                _mensajes_sintesis(frases.PROMPT_SINTESIS_PREDICCION, pregunta, predicciones, historial, contexto),
+                [], emitir_texto)
+        resultado.ruta = "prediccion"
+        resultado.respuesta = _texto(respuesta)
+        resultado.material = comprobaciones.material_libre(pregunta, [contexto, *predicciones], resultado.respuesta)
         return resultado
 
     def _comprobar(self, resultado: ResultadoTurno) -> None:
@@ -531,6 +583,7 @@ def _atributos_turno(resultado: ResultadoTurno) -> dict:
         "agente.vueltas": resultado.vueltas,
         "agente.busqueda_forzada": resultado.busqueda_forzada,
         "agente.consulta_forzada": resultado.consulta_forzada,
+        "agente.prediccion_forzada": resultado.prediccion_forzada,
         "agente.sintesis_forzada": resultado.sintesis_forzada,
         "agente.herramientas": resultado.herramientas_usadas,
     }

@@ -5,6 +5,7 @@
 #   versiones.env       REGISTRO y VERSION_* (qué imagen de cada servicio está activa, desde SSM)
 #   secretos-bd.env     DATABASE_URL de la API (desde SSM, cifrado)
 #   config-agente.env   un VAR=valor por cada parámetro de /jupiter/agente/ en SSM (puede estar vacío)
+#   secretos-prediccion.env  DATABASE_URL de solo lectura del agente, para la predicción
 #   web-acceso.conf     y web.htpasswd: usuario y contraseña de la web (vacíos si no hay)
 #   phoenix-acceso.conf acceso a /phoenix/: la misma contraseña, o 403 si no hay
 #
@@ -55,12 +56,26 @@ services:
       LLM_PROVEEDOR: bedrock
       AWS_REGION: eu-west-1
       RAG_URL: http://rag:8010
+      PREDICCION_URL: http://prediccion:8011
       # Por la red interna, sin el prefijo /phoenix (ese solo existe a través de nginx).
       PHOENIX_ENDPOINT: http://phoenix:6006/v1/traces
     depends_on:
       rag:
         condition: service_healthy
+      # Sin esperar a que esté sano: si la predicción falla, el agente responde lo demás y deja de
+      # ofrecer la herramienta hasta que vuelva.
+      prediccion:
+        condition: service_started
     <<: *logs-local
+
+  # Predicción a corto plazo (src/prediccion). Lleva los modelos dentro de la imagen y lee la vista
+  # mediciones_bloques con el mismo usuario de solo lectura que el agente.
+  prediccion:
+    image: ${REGISTRO}/jupiter-prediccion:${VERSION_PREDICCION}
+    restart: unless-stopped
+    env_file:
+      - secretos-prediccion.env
+    <<: *logs-cloudwatch
 
   api-usuario:
     image: ${REGISTRO}/jupiter-api-usuario:${VERSION_API_USUARIO}

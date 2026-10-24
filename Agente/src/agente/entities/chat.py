@@ -16,9 +16,9 @@ class Pregunta(BaseModel):
 
 
 class Fuente(BaseModel):
-    """De dónde salió la información: consulta SQL o documento del corpus RAG."""
+    """De dónde salió la información: consulta SQL, documento del corpus RAG o predicción del modelo."""
 
-    tipo: Literal["sql", "documento"]
+    tipo: Literal["sql", "documento", "prediccion"]
     referencia: str
 
 

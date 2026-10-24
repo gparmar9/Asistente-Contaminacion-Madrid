@@ -881,14 +881,71 @@ th[aria-sort] .tabla-orden {
   max-width: 90ch;
 }
 
+/* La respuesta se interpreta como markdown: párrafos, listas y tablas. */
 .respuesta-texto {
-  white-space: pre-wrap;
   overflow-wrap: anywhere;
   line-height: 1.6;
 }
 
+.respuesta-texto > :first-child {
+  margin-top: 0;
+}
+
+.respuesta-texto > :last-child {
+  margin-bottom: 0;
+}
+
+.respuesta-texto p,
+.respuesta-texto ul,
+.respuesta-texto ol {
+  margin: 0 0 var(--e-2);
+}
+
+.respuesta-texto ul,
+.respuesta-texto ol {
+  padding-left: 1.4em;
+}
+
+.respuesta-texto h1,
+.respuesta-texto h2,
+.respuesta-texto h3,
+.respuesta-texto h4 {
+  font-size: var(--t-m);
+  margin: var(--e-3) 0 var(--e-2);
+}
+
+.respuesta-texto code {
+  font-family: var(--fuente-mono);
+  font-size: 0.85em;
+  background: var(--superficie-2);
+  padding: 1px 5px;
+  border-radius: var(--radio-xs);
+}
+
+.respuesta-texto table {
+  display: block;
+  max-width: 100%;
+  overflow-x: auto;
+  border-collapse: collapse;
+  margin: var(--e-2) 0;
+  font-size: var(--t-s);
+}
+
+.respuesta-texto th,
+.respuesta-texto td {
+  border: 1px solid var(--borde-fuerte);
+  padding: 4px 10px;
+  text-align: left;
+  white-space: nowrap;
+}
+
+.respuesta-texto th {
+  background: var(--superficie-2);
+  font-weight: 600;
+}
+
 /* Cursor al final del texto mientras la respuesta llega en streaming */
-.cursor-escritura::after {
+.respuesta-recibiendo .respuesta-texto > :last-child::after {
   content: '▍';
   margin-left: 2px;
   color: var(--acento, currentColor);
@@ -971,6 +1028,12 @@ th[aria-sort] .tabla-orden {
 .fuente-documento {
   background: var(--superficie);
   border-left: 3px solid var(--dato);
+}
+
+/* Una estimación, no una medición: borde discontinuo */
+.fuente-prediccion {
+  background: var(--superficie);
+  border-left: 3px dashed var(--tinta-2);
 }
 
 .fuente-id {

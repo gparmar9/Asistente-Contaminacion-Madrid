@@ -158,6 +158,20 @@ def test_chat_con_agente_reenvia_session_id_y_devuelve_traza_id(cliente, con_set
     assert r.json()["span_id"] == "def456"
 
 
+def test_chat_con_agente_acepta_fuentes_de_prediccion(cliente, con_settings, monkeypatch):
+    fuentes = [{"tipo": "prediccion", "referencia": "Predicción de calidad del aire para el 2026-10-25"}]
+
+    def agente(_peticion):
+        return httpx.Response(200, json={"respuesta": "Mañana se espera...", "fuentes": fuentes})
+
+    _con_agente(monkeypatch, agente)
+    con_settings(agente_url="http://agente:8200")
+    r = cliente.post("/chat", json={"pregunta": "¿Cómo estará el aire mañana?"})
+
+    assert r.status_code == 200
+    assert r.json()["fuentes"] == fuentes
+
+
 def test_chat_stream_reenvia_el_sse_tal_cual_y_cierra(cliente, con_settings, monkeypatch):
     # Un evento partido entre dos trozos: se reenvía byte a byte, sin reinterpretarlo
     trozos = [b'event: status\ndata: {"fase": "clasificando"}\n\nevent: tok',

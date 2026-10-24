@@ -1,10 +1,12 @@
-# Empaquetado mínimo del módulo RAG (src/rag) para que sea importable como `rag`
-# desde la raíz del repo, desde ApiUsuario y desde las pruebas sin tocar sys.path.
+# Empaquetado mínimo de los módulos de servicio (src/rag y src/prediccion) para que sean
+# importables como `rag` y `prediccion` desde la raíz, desde ApiUsuario y desde las pruebas.
 #
-#   pip install -e .                 # instala el paquete en modo editable
-#   pip install -r requirements-rag.txt  # dependencias fijadas + el paquete
+#   pip install -e .                 # instala los paquetes en modo editable
+#   pip install -r requirements-rag.txt         # deps del RAG + los paquetes
+#   pip install -r requirements-prediccion.txt  # deps de la predicción + los paquetes
 #
-# Los scripts de src/etl no forman parte del paquete: se ejecutan como hasta ahora.
+# Los scripts de src/etl no forman parte del paquete: se ejecutan como hasta ahora
+# (`prediccion` los añade a sys.path, igual que hacen las pruebas y los notebooks).
 
 [build-system]
 requires = ["setuptools>=68"]
@@ -18,7 +20,7 @@ requires-python = ">=3.11"
 
 [tool.setuptools]
 package-dir = {"" = "src"}
-packages = ["rag"]
+packages = ["rag", "prediccion"]
 
 [tool.pytest.ini_options]
 # `src` en el path hace que `import rag` funcione en pytest aunque no se haya

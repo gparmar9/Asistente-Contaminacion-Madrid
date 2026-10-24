@@ -60,7 +60,7 @@
    "exige": "Contaminante fuera de los 6: decirlo",
    "gold": {"entidad": "Escuelas Aguirre", "contaminante": "SO2: no se mide", "periodo": "2026-04-30", "valor_u_orden": "sin datos; la estación mide NO, NO2, NOx, O3, PM10 y PM2.5"}},
   {"id": "lim-03", "pregunta": "¿Cómo estará el aire mañana en Vallecas?",
-   "esperado": {"intencion": "PREDICCION", "ruta": "fija", "datos": false, "busqueda": false},
-   "exige": "Frase fija de predicción, sin consultar",
-   "gold": null}
+   "esperado": {"intencion": "PREDICCION", "ruta": "prediccion", "prediccion": true, "datos": false, "busqueda": false},
+   "exige": "Estimación de mañana (horizonte 2) en las estaciones de Vallecas; requiere PREDICCION_URL (si no, frase fija). El detalle del caso está en casos_prediccion.json",
+   "gold": {"entidad": "Vallecas", "contaminante": "NO2 y PM10", "periodo": "2026-05-02 (mañana), horizonte 2", "valor_u_orden": "[fijar con la salida del servicio]"}}
 ]

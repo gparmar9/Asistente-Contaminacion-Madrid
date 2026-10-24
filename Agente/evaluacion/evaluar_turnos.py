@@ -26,6 +26,12 @@ Uso, desde la carpeta Agente/, con rag.api levantado y el proveedor en el entorn
     LLM_PROVEEDOR=bedrock LLM_MODELO=mistral.ministral-3-14b-instruct AWS_REGION=eu-west-1 \\
       AWS_PROFILE=pontia RAG_URL=http://localhost:8010 .venv/bin/python evaluacion/evaluar_turnos.py
     ... evaluacion/evaluar_turnos.py --casos evaluacion/casos_conversacion.json
+
+Para el lote de predicción (`casos_prediccion.json`, y `lim-03` de `casos_datos.json`) hace falta
+además PREDICCION_URL y, para que el gold cuadre, FECHA_REFERENCIA = víspera + 1 del último día del
+servicio (p. ej. FECHA_REFERENCIA=2026-05-01 con datos hasta el 2026-04-30):
+    ... PREDICCION_URL=http://localhost:8011 FECHA_REFERENCIA=2026-05-01 \\
+      evaluacion/evaluar_turnos.py --casos evaluacion/casos_prediccion.json --etiqueta prediccion-<modelo>
 """
 from __future__ import annotations
 
@@ -36,7 +42,7 @@ import re
 import sys
 import time
 from dataclasses import dataclass, field, replace
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
 import httpx
@@ -50,7 +56,7 @@ from agente.business.bucle import Bucle, LLMNoDisponible, ResultadoTurno  # noqa
 from agente.business.sesiones import Sesiones  # noqa: E402
 from agente.config.settings import get_settings  # noqa: E402
 from agente.datos.memoria import AlmacenEnMemoria  # noqa: E402
-from agente.tools import rag, sql_libre  # noqa: E402
+from agente.tools import prediccion, rag, sql_libre  # noqa: E402
 from evaluacion import informe_trazas  # noqa: E402
 
 CASOS = Path(__file__).with_name("casos_turno.json")
@@ -76,6 +82,7 @@ def comprobar(esperado: dict, r: ResultadoTurno) -> list[str]:
     obtenido = {"intencion": r.intencion, "ruta": r.ruta,
                 "busqueda": rag.NOMBRE in r.herramientas_usadas,
                 "datos": sql_libre.NOMBRE in r.herramientas_usadas,
+                "prediccion": prediccion.NOMBRE in r.herramientas_usadas,
                 "cita": any(f.tipo == "documento" for f in r.fuentes)}
     return [f"{clave}: esperado {_si_no(valor)}, obtenido {_si_no(obtenido[clave])}"
             for clave, valor in esperado.items() if obtenido[clave] != valor]
@@ -205,6 +212,18 @@ async def ejecutar(args: argparse.Namespace) -> None:
         httpx.get(settings.rag_url.rstrip("/") + "/salud", timeout=5).raise_for_status()
     except httpx.HTTPError as exc:
         sys.exit(f"El RAG no responde en {settings.rag_url} ({exc}): espera a que cargue")
+    if settings.prediccion_url:
+        try:
+            salud = httpx.get(settings.prediccion_url.rstrip("/") + "/salud", timeout=10)
+            salud.raise_for_status()
+        except httpx.HTTPError as exc:
+            sys.exit(f"El servicio de predicción no responde en {settings.prediccion_url} ({exc})")
+        # El ancla del servicio sale de la BD viva; si no es la víspera de FECHA_REFERENCIA, «mañana»
+        # deja de ser el horizonte esperado y el gold de casos_prediccion caduca.
+        ancla = salud.json().get("ultima_fecha_completa")
+        if settings.fecha_referencia and ancla and str(settings.fecha_referencia - timedelta(days=1)) != ancla:
+            print(f"AVISO: el último día del servicio ({ancla}) no es la víspera de FECHA_REFERENCIA "
+                  f"({settings.fecha_referencia}); el gold de predicción puede no cuadrar.\n")
     bucle = construir_bucle(settings)
     if bucle is None:
         sys.exit("LLM sin configurar: revisa LLM_PROVEEDOR y LLM_MODELO")
