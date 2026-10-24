@@ -9,7 +9,7 @@
 #   1. IP elástica (fija) para la EC2: la crea con la etiqueta Name=jupiter-api y la asocia.
 #      Sustituye a la IP pública automática, que cambiaba en cada encendido.
 #   2. Quita la contraseña de la web (/jupiter/web/contrasena): la web queda abierta a todo internet
-#      y /phoenix/ responde 403 a todo el mundo (guarda las preguntas de los usuarios).
+#      y /phoenix/ también (las trazas, con las preguntas de los usuarios, quedan a la vista).
 #   3. Presupuesto diario de Bedrock (jupiter-bedrock-diario): avisa por correo al pasar el 80 % y
 #      el 100 % de -LimiteDia. Solo avisa, no corta nada.
 # Después: «Desplegar → web» desde GitHub para que nginx deje de pedir la contraseña.

@@ -136,9 +136,9 @@ if ! grep '^DATABASE_URL=' config-agente.env > secretos-prediccion.env; then
 fi
 
 # La web pide usuario demo y la contraseña de SSM, salvo al healthcheck de 127.0.0.1.
-# Phoenix guarda preguntas de usuarios: exige contraseña incluso desde 127.0.0.1.
+# Con contraseña, /phoenix/ la exige incluso desde 127.0.0.1 (guarda preguntas de usuarios).
 # Siempre se crean los ficheros que monta compose. Si no existe el parámetro de contraseña,
-# los de la web quedan vacíos y Phoenix devuelve 403. Cualquier otro error detiene el arranque.
+# quedan vacíos y la web y /phoenix/ quedan abiertas. Cualquier otro error detiene el arranque.
 # Elimina los directorios que Docker creó al faltar estos ficheros: impiden arrancar web.
 for f in web.htpasswd web-acceso.conf phoenix-acceso.conf; do
     if [ -d "$f" ]; then
@@ -171,11 +171,8 @@ EOF
 elif [[ "$CONTRASENA" == *ParameterNotFound* ]]; then
     : > web.htpasswd
     : > web-acceso.conf
-    cat > phoenix-acceso.conf <<'EOF'
-# Generado por arrancar.sh: bloquea Phoenix si no hay contraseña.
-return 403;
-EOF
-    log "Sin /jupiter/web/contrasena en SSM: la web no pide contraseña (acceso solo por IP) y /phoenix/ responde 403"
+    : > phoenix-acceso.conf
+    log "Sin /jupiter/web/contrasena en SSM: ni la web ni /phoenix/ piden contraseña"
 else
     log "No se pudo leer /jupiter/web/contrasena: $CONTRASENA"
     exit 1
