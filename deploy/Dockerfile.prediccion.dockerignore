@@ -1,0 +1,10 @@
+# Contexto de construcción de deploy/Dockerfile.prediccion (Docker lo usa en lugar del
+# .dockerignore de la raíz porque se llama igual que el Dockerfile + .dockerignore).
+# Se excluye todo y se permite solo lo que la imagen necesita.
+*
+!src/prediccion/
+!src/etl/
+!models/prediccion_bloques.joblib
+!models/prediccion_bloques_h2.joblib
+**/__pycache__
+**/*.pyc
