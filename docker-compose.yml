@@ -54,8 +54,29 @@ services:
     ports:
       - "127.0.0.1:8010:8010"
 
+  # Servicio de predicción (src/prediccion, ml.api). Lleva los bundles dentro y lee la vista
+  # mediciones_bloques de PostgreSQL (solo lectura). Imagen ligera (sin torch). El agente lo
+  # consume por HTTP con PREDICCION_URL=http://prediccion:8011 (ver la nota del orquestador).
+  prediccion:
+    profiles: ["api"]
+    build:
+      context: .
+      dockerfile: deploy/Dockerfile.prediccion
+    image: jupiter-prediccion:local
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: ${DATABASE_URL_API:-postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@db:5432/${POSTGRES_DB:-postgres}}
+    depends_on:
+      db:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:8011:8011"
+
   # Agente: LLM + tools. Las claves del LLM salen de LLMOrchestrator/.env (LLM_BASE_URL,
   # LLM_API_KEY, LLM_MODEL); lo de `environment` tiene prioridad sobre ese fichero.
+  # NOTA: la herramienta de predicción (predecir_calidad_aire) vive en el agente `Agente/`. Cuando
+  # ese sea el servicio del orquestador, añadir aquí PREDICCION_URL: http://prediccion:8011 y el
+  # depends_on de `prediccion` (hoy este servicio se construye desde ./LLMOrchestrator).
   orquestador:
     profiles: ["api"]
     build: ./LLMOrchestrator

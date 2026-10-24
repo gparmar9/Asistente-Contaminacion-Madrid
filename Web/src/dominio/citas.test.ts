@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 
 import type { FuenteChat } from '../api/tipos'
-import { idFuente, resolverCitas, trocearConCitas } from './citas'
+import { idFuente, markdownConCitas, quitarEvidencias, resolverCitas, trocearConCitas } from './citas'
 
 const fuentes: FuenteChat[] = [
   { tipo: 'sql', referencia: 'resumen_datos_ml' },
@@ -63,5 +63,43 @@ describe('resolverCitas', () => {
 describe('idFuente', () => {
   it('genera un ancla estable por respuesta e índice', () => {
     expect(idFuente('abc', 2)).toBe('fuente-abc-2')
+  })
+})
+
+describe('quitarEvidencias', () => {
+  it('corta la sección "Evidencias citadas:" del final', () => {
+    expect(quitarEvidencias(textoConEvidencias)).toBe(
+      'El ozono irrita las vías respiratorias [D1][D2]. Los niños son más sensibles [D3].',
+    )
+  })
+
+  it('no toca un texto sin la sección', () => {
+    const texto = 'Respuesta sin evidencias [D1].'
+    expect(quitarEvidencias(texto)).toBe(texto)
+  })
+
+  it('no corta si tras la marca no hay líneas de evidencia', () => {
+    const texto = 'Evidencias citadas:\nEsto es prosa normal, no una evidencia.'
+    expect(quitarEvidencias(texto)).toBe(texto)
+  })
+})
+
+describe('markdownConCitas', () => {
+  it('quita las evidencias y enlaza cada [Dn] con el ancla de su fuente', () => {
+    const markdown = markdownConCitas(textoConEvidencias, fuentes, 'abc')
+    expect(markdown).toBe(
+      'El ozono irrita las vías respiratorias ' +
+        '[\\[D1\\]](#fuente-abc-1 "Fuente documental: Ozono troposférico (O3) y salud")' +
+        '[\\[D2\\]](#fuente-abc-1 "Fuente documental: Ozono troposférico (O3) y salud")' +
+        '. Los niños son más sensibles ' +
+        '[\\[D3\\]](#fuente-abc-2 "Fuente documental: Recomendaciones de exposición por perfil de persona")' +
+        '.',
+    )
+  })
+
+  it('escapa las citas sin fuente para que no parezcan enlaces markdown', () => {
+    expect(markdownConCitas('Dato [D1].', [{ tipo: 'sql', referencia: 'resumen_datos_ml' }], 'abc')).toBe(
+      'Dato \\[D1\\].',
+    )
   })
 })

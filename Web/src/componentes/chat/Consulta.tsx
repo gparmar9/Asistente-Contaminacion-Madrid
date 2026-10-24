@@ -22,11 +22,8 @@ export function Consulta({ consulta, onReintentar }: Props) {
         {estado.tipo === 'esperando' && <Espera activo texto={estado.fase} />}
 
         {estado.tipo === 'recibiendo' && (
-          <div className="tarjeta" aria-live="off">
-            <p className="respuesta-texto">
-              {estado.texto}
-              <span className="cursor-escritura" aria-hidden="true" />
-            </p>
+          <div className="tarjeta respuesta-recibiendo" aria-live="off">
+            <TextoConCitas texto={estado.texto} fuentes={[]} idRespuesta={id} />
           </div>
         )}
 

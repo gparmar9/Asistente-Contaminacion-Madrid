@@ -25,6 +25,9 @@ class Settings:
     # Servicio RAG (rag.api). Vacío = la herramienta documental no se ofrece.
     rag_url: str
     rag_timeout_s: float
+    # Servicio de predicción (prediccion.api, ml.api). Vacío = PREDICCION sigue con la frase fija.
+    prediccion_url: str
+    prediccion_timeout_s: float
     # Vueltas máximas del bucle de herramientas; después, síntesis forzada sin herramientas.
     max_vueltas: int
     # Tiempo límite del clasificador de intención; si se agota, el turno sigue como DESCONOCIDA.
@@ -91,6 +94,8 @@ def get_settings() -> Settings:
         aws_profile=os.getenv("AWS_PROFILE", ""),
         rag_url=os.getenv("RAG_URL", ""),
         rag_timeout_s=float(os.getenv("RAG_TIMEOUT_S", "20")),
+        prediccion_url=os.getenv("PREDICCION_URL", ""),
+        prediccion_timeout_s=float(os.getenv("PREDICCION_TIMEOUT_S", "30")),
         max_vueltas=int(os.getenv("MAX_VUELTAS", "3")),
         clasificador_timeout_s=float(os.getenv("CLASIFICADOR_TIMEOUT_S", "10")),
         phoenix_endpoint=os.getenv("PHOENIX_ENDPOINT", ""),

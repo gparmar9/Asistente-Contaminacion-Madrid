@@ -1,12 +1,13 @@
 /**
  * Marcadores de cita `[D1]`, `[D2]`… del texto del asistente.
  *
- * No son markdown: se dejan visibles y se enlazan a la lista de `fuentes`. El
- * texto que devuelve el RAG incluye, al final, una sección "Evidencias
+ * El texto que devuelve el RAG incluye, al final, una sección "Evidencias
  * citadas:" con líneas `[Dn] Título — sección (archivo, fragmento …)`; de ahí
  * se obtiene el título de cada Dn y se casa con la fuente documental del mismo
  * título. Si no hay sección (o no casa), se usa el orden: la n-ésima fuente
- * documental.
+ * documental. La sección es material interno: se analiza pero no se muestra
+ * (`quitarEvidencias`); la lista de fuentes ya la presenta el componente
+ * `Fuentes`.
  */
 import type { FuenteChat } from '../api/tipos'
 
@@ -25,6 +26,22 @@ export type Trozo = TrozoTexto | TrozoCita
 
 const PATRON_CITA = /\[D(\d+)\]/g
 const PATRON_LINEA_EVIDENCIA = /^\[D(\d+)\]\s+(.+?)(?:\s+—\s+.*)?$/
+const MARCA_EVIDENCIAS = 'Evidencias citadas:'
+
+/**
+ * Quita la sección "Evidencias citadas:" del final del texto: es la relación
+ * interna Dn → documento, no parte de la respuesta. Solo se corta si lo que
+ * sigue a la marca son líneas de evidencia (o vacías), para no tocar un texto
+ * que use la frase con otro sentido.
+ */
+export function quitarEvidencias(texto: string): string {
+  const lineas = texto.split('\n')
+  const inicio = lineas.findIndex((l) => l.trim() === MARCA_EVIDENCIAS)
+  if (inicio < 0) return texto
+  const resto = lineas.slice(inicio + 1).filter((l) => l.trim() !== '')
+  if (resto.length === 0 || !resto.every((l) => PATRON_LINEA_EVIDENCIA.test(l.trim()))) return texto
+  return lineas.slice(0, inicio).join('\n').trimEnd()
+}
 
 /** Divide el texto en trozos de texto plano y marcadores de cita. */
 export function trocearConCitas(texto: string): Trozo[] {
@@ -84,4 +101,27 @@ export function resolverCitas(texto: string, fuentes: readonly FuenteChat[]): Ma
 /** Id de ancla estable para enlazar una cita con su fuente dentro de una respuesta. */
 export function idFuente(idRespuesta: string, indice: number): string {
   return `fuente-${idRespuesta}-${indice}`
+}
+
+/**
+ * Prepara la respuesta para mostrarla como markdown: quita la sección de
+ * evidencias y convierte los `[Dn]` en enlaces al ancla de su fuente
+ * (`[\[Dn\]](#fuente-…)`). Las citas se resuelven sobre el texto completo
+ * (los títulos están en la sección que se quita). Las que no casan con
+ * ninguna fuente quedan como texto escapado (`\[Dn\]`) para que markdown no
+ * las confunda con un enlace.
+ */
+export function markdownConCitas(
+  texto: string,
+  fuentes: readonly FuenteChat[],
+  idRespuesta: string,
+): string {
+  const citas = resolverCitas(texto, fuentes)
+  return quitarEvidencias(texto).replace(PATRON_CITA, (_marcador, n) => {
+    const cita = citas.get(Number(n))
+    const escapado = `\\[D${n}\\]`
+    if (!cita || cita.indiceFuente < 0) return escapado
+    const titulo = fuentes[cita.indiceFuente].referencia.replaceAll('"', "'")
+    return `[${escapado}](#${idFuente(idRespuesta, cita.indiceFuente)} "Fuente documental: ${titulo}")`
+  })
 }

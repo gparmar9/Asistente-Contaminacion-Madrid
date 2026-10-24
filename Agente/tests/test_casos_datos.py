@@ -47,7 +47,6 @@ GUIONES = [
      "HAVING SUM(media * n_horas) / SUM(n_horas) > 50) AS d",
      [3],
      "En 2025, la media diaria de PM10 en Plaza de España superó los 50 µg/m³ en 3 días."),
-    ("lim-03", False, None, None, None),
 ]
 
 
@@ -64,10 +63,6 @@ async def test_caso_de_datos_con_llm_falso(bd_mediciones, id_caso, consulta_el_m
 
     assert (r.intencion, r.ruta) == (esperado["intencion"], esperado["ruta"])
     assert (sql_libre.NOMBRE in r.herramientas_usadas) is esperado["datos"]
-    if not esperado["datos"]:  # predicción: frase fija, ni modelo ni redactor
-        assert r.respuesta == frases.FRASE_PREDICCION and llm.registro == [] and llm_sql.registro == []
-        return
-
     assert r.consulta_forzada is not consulta_el_modelo
     assert f"Pregunta del usuario: {caso['pregunta']}" in llm_sql.registro[0]["mensajes"][-1].content
     assert "Fecha de hoy: 2026-05-01" in llm.registro[0]["mensajes"][0].content  # prompt del bucle

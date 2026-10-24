@@ -1,7 +1,10 @@
 import { useMemo } from 'react'
+import ReactMarkdown from 'react-markdown'
+import remarkBreaks from 'remark-breaks'
+import remarkGfm from 'remark-gfm'
 
 import type { FuenteChat } from '../../api/tipos'
-import { idFuente, resolverCitas, trocearConCitas } from '../../dominio/citas'
+import { markdownConCitas } from '../../dominio/citas'
 
 interface Props {
   texto: string
@@ -9,40 +12,37 @@ interface Props {
   idRespuesta: string
 }
 
+const PLUGINS = [remarkGfm, remarkBreaks]
+
 /**
- * Texto de la respuesta con los marcadores `[Dn]` visibles y enlazados a la
- * fuente documental correspondiente. No se interpreta markdown: el texto se
- * muestra tal cual, respetando los saltos de línea.
+ * Texto de la respuesta interpretado como markdown (tablas, listas, negritas),
+ * sin la sección interna de evidencias y con los marcadores `[Dn]` visibles y
+ * enlazados a su fuente documental (ver `markdownConCitas`).
  */
 export function TextoConCitas({ texto, fuentes, idRespuesta }: Props) {
-  const trozos = useMemo(() => trocearConCitas(texto), [texto])
-  const citas = useMemo(() => resolverCitas(texto, fuentes), [texto, fuentes])
-
+  const markdown = useMemo(() => markdownConCitas(texto, fuentes, idRespuesta), [texto, fuentes, idRespuesta])
   return (
-    <p className="respuesta-texto">
-      {trozos.map((t, i) => {
-        if (t.tipo === 'texto') return <span key={i}>{t.valor}</span>
-        const cita = citas.get(t.n)
-        const etiqueta = `[D${t.n}]`
-        if (!cita || cita.indiceFuente < 0) {
-          return (
-            <span key={i} className="cita" title={cita?.titulo ?? 'Cita documental'}>
-              {etiqueta}
-            </span>
-          )
-        }
-        const fuente = fuentes[cita.indiceFuente]
-        return (
-          <a
-            key={i}
-            className="cita"
-            href={`#${idFuente(idRespuesta, cita.indiceFuente)}`}
-            title={`Fuente documental: ${fuente.referencia}`}
-          >
-            {etiqueta}
-          </a>
-        )
-      })}
-    </p>
+    <div className="respuesta-texto">
+      <ReactMarkdown remarkPlugins={PLUGINS} components={{ a: Enlace }}>
+        {markdown}
+      </ReactMarkdown>
+    </div>
+  )
+}
+
+/** Las citas `[Dn]` enlazan a un ancla de la propia página; el resto, fuera y en otra pestaña. */
+function Enlace(props: React.ComponentProps<'a'>) {
+  const { href, title, children } = props
+  if (href?.startsWith('#fuente-')) {
+    return (
+      <a className="cita" href={href} title={title}>
+        {children}
+      </a>
+    )
+  }
+  return (
+    <a href={href} title={title} target="_blank" rel="noopener noreferrer">
+      {children}
+    </a>
   )
 }

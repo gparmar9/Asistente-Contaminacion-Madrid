@@ -33,7 +33,7 @@ from agente.business import frases
 from agente.business.memoria import texto_historial
 from agente.entities.intencion import DESCONOCIDA, Clasificacion, Intencion, Tema
 from agente.entities.memoria import TurnoGuardado
-from agente.tools import rag, sql_libre
+from agente.tools import prediccion, rag, sql_libre
 
 logger = logging.getLogger("agente.intencion")
 
@@ -113,15 +113,17 @@ class Decision:
     herramientas: frozenset[str] | None = None   # las que se pueden ofrecer; None = todas
     busqueda_obligada: bool = False              # si el modelo no busca en el RAG, busca el código
     datos_obligados: bool = False                # si el modelo no consulta los datos, consulta el código
+    prediccion_obligada: bool = False            # si el modelo no predice, predice el código
     prompt: str = frases.PROMPT_SISTEMA
-    nota: str | None = None                      # se añade al final de la respuesta (DATOS, PREDICCION)
+    nota: str | None = None                      # se añade al final de la respuesta (p. ej. DATOS + nota)
 
 
 _DECISIONES = {
     Intencion.DOCUMENTAL: Decision(herramientas=frozenset({rag.NOMBRE}), busqueda_obligada=True),
     Intencion.DATOS: Decision(herramientas=frozenset({sql_libre.NOMBRE}), datos_obligados=True,
                               prompt=frases.PROMPT_DATOS),
-    Intencion.PREDICCION: Decision(frase=frases.FRASE_PREDICCION),
+    Intencion.PREDICCION: Decision(herramientas=frozenset({prediccion.NOMBRE}), prediccion_obligada=True,
+                                   prompt=frases.PROMPT_PREDICCION),
     Intencion.CHARLA: Decision(herramientas=frozenset(), prompt=frases.PROMPT_CHARLA),
     Intencion.FUERA_DE_ALCANCE: Decision(frase=frases.FRASE_FUERA_DE_ALCANCE),
     Intencion.DESCONOCIDA: Decision(),
@@ -129,14 +131,21 @@ _DECISIONES = {
 
 
 # Nota de las intenciones con frase fija cuando van con otra que sí se responde.
-_NOTAS = {Intencion.PREDICCION: frases.NOTA_PREDICCION,
-          Intencion.FUERA_DE_ALCANCE: frases.NOTA_FUERA_DE_ALCANCE}
+_NOTAS = {Intencion.FUERA_DE_ALCANCE: frases.NOTA_FUERA_DE_ALCANCE}
 
 
 def decidir(intenciones: frozenset[Intencion]) -> Decision:
     ordenadas = [i for i in Intencion if i in intenciones]
+    notas: list[str] = []
+    # Diferido: la predicción combinada con otra intención aún no compone una ruta mixta; se responde
+    # la otra parte y la predicción va como nota (el usuario la pide aparte). PREDICCION sola sí usa
+    # su herramienta.
+    if Intencion.PREDICCION in intenciones and len(ordenadas) > 1:
+        ordenadas = [i for i in ordenadas if i is not Intencion.PREDICCION]
+        notas.append(frases.NOTA_PREDICCION)
     con_frase = [i for i in ordenadas if _DECISIONES[i].frase]
     resto = [_DECISIONES[i] for i in ordenadas if not _DECISIONES[i].frase]
+    notas += [_NOTAS[i] for i in con_frase if i in _NOTAS]
     if not resto:
         return _DECISIONES[con_frase[0]]
     if len(resto) == 1:
@@ -146,6 +155,7 @@ def decidir(intenciones: frozenset[Intencion]) -> Decision:
                         else frozenset().union(*(d.herramientas for d in resto)))
         decision = Decision(herramientas=herramientas,
                             busqueda_obligada=any(d.busqueda_obligada for d in resto),
-                            datos_obligados=any(d.datos_obligados for d in resto))
-    nota = " ".join(_NOTAS[i] for i in con_frase)
+                            datos_obligados=any(d.datos_obligados for d in resto),
+                            prediccion_obligada=any(d.prediccion_obligada for d in resto))
+    nota = " ".join(notas)
     return replace(decision, nota=nota) if nota else decision

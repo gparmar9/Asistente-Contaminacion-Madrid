@@ -121,8 +121,10 @@ Hilo conductor de la memoria: cómo y por qué cambió el diseño.
 | 2026-10-09 | Modelo de referencia para SQL | Claude Haiku 5.5 → **MiniMax M2.5** | Haiku no estaba disponible en la cuenta del máster. MiniMax fue elegido por su menor precio entre las alternativas disponibles; GLM 5.3 y Kimi K3 eran más caros |
 | 2026-10-09 | Fechas de las preguntas de datos | Fechas elegidas por el LLM → **periodos calculados en Python a partir de la pregunta original** | Los modelos alteraban los periodos. Un calendario en el prompt o parámetros elegidos por el LLM no eliminaban ese riesgo; `dateparser` y Duckling no daban los rangos definidos por el proyecto, y un único par de fechas no cubría periodos separados |
 | 2026-10-09 | Modelo de referencia para SQL | MiniMax M2.5 → **sin modelo de referencia en los siguientes lotes** | Logró 2/11 aciertos en datos frente a 4/11 del mejor modelo barato, con mayor coste por lote: 0,085 $ frente a 0,023–0,043 $. Se prioriza corregir el diseño |
+| 2026-10-11 | Predicción de calidad del aire | Intent `PREDICCION` con frase fija («no hago predicciones») → **modelo de predicción t+1 por bloques** (`HistGradientBoostingRegressor`, uno por contaminante) con baselines honestos | Es la segunda herramienta de ML que el agente necesita (§6.7). HGB porque ya está en las dependencias, maneja los NaN de los lags sin imputar y no necesita escalado. Descartados: LightGBM (dependencia nueva sin ganancia a este tamaño), SARIMA (≈550 series frágiles con huecos) y LSTM (sin meteorología no hay señal que justifique PyTorch en CI) |
 | 2026-10-13 | Servicios de la EC2 | `api-usuario` + `orquestador` + `rag`, con `api-usuario` publicado en el 8000 y el LLM por `/jupiter/llm/{base_url,model,api_key}` → **`web` + `api-usuario` + `agente` + `rag`**: solo `web` (nginx) publica puerto (80); el agente usa **Bedrock con el rol de la EC2** (sin claves) y lee su configuración de **todo `/jupiter/agente/`** en SSM (cada parámetro, una variable de entorno) | El equipo sustituyó el orquestador por el `Agente` (2026-10-08) y la web ya tiene imagen. Un solo origen para el navegador (nginx hace de proxy de `/api/*`), como en local. Leer la ruta entera evita tocar `arrancar.sh` cada vez que el agente añade una variable. Descartado: mantener el orquestador desplegado (código sin uso) y una clave de API del LLM en SSM (Bedrock no la necesita con el rol de la máquina) |
 | 2026-10-21 | Acceso a la web de la EC2 | Puerto 80 abierto solo a las IP del equipo → **IP del equipo o, para demos, abierto a todo internet con usuario y contraseña** (autenticación básica de nginx, contraseña cifrada en SSM) | La demo la presentan compañeros desde redes cuya IP pública no se conoce de antemano y puede cambiar. Descartados: una contraseña fija en el código (el repositorio es público), abrirlo sin contraseña (la API no tiene autenticación y el chat cuesta dinero), *port forwarding* con Session Manager (cada presentador necesita la CLI de AWS y su plugin) y un balanceador con Cognito o CloudFront con HTTPS (exigen dominio y certificado; demasiado para la víspera de la demo) |
+| 2026-10-22 | Integración de la predicción con el agente | Importar los modelos en el agente → **servicio HTTP propio** (`src/prediccion`, espejo de `rag.api`, herramienta publicada en `/prediccion/herramienta`) | El agente se mantiene ligero (sin scikit-learn ni bundles) y conserva su patrón de herramientas remotas; reentrenar un modelo es redesplegar solo el servicio. El ancla y la elección de horizonte (h1/h2) quedan en código del servicio, nunca en el LLM (§6.7) |
 | 2026-10-22 | Frecuencia de ingesta | Una carga al día a las 23:45 con la RDS encendida de 22:00 a 01:30 → **una carga al cierre de cada franja**: 07:45, 13:45, 20:45 y 23:45 (`cron(45 7,13,20,23 * * ? *)`), escribiendo **solo los bloques cerrados**, **con la RDS siempre encendida** (aplicado en AWS el 2026-10-23) | Datos del día disponibles durante la jornada y cada bloque evaluado completo, sin los falsos positivos del bloque abierto (§6.5). El minuto 45 sale de producción: 36/36 noches con la hora 22 publicada a las 23:45. El ahorro deja de ser prioritario. Descartado: cada hora (evalúa bloques a medias), cada 20 min (diseño inicial), 08:15/14:15/21:15 (primera propuesta: 30 min más de espera sin necesidad) y decidir el cierre por lo publicado en vez de por el reloj (si la API se retrasa, la última carga del día no escribiría la noche) |
 | 2026-10-23 | Cobertura del bloque de noche en tiempo real | Sobre 4 horas (20–23) → **sobre las 3 que publica la API (20–22)** | La hora 23 no llega nunca (§11): con 4, todas las noches tenían cobertura 0,75 y el detector marcaba el 7,19 % (0,44 % en el histórico). Simulado en el histórico: 8,69 % con 4 y 0,49 % con 3. Descartado: reentrenar con la noche en 20–22 (cambia el modelo y el histórico por una hora) y una segunda fuente para la hora 23 (no se ha localizado una publicación diaria `[por confirmar]`) |
 | 2026-10-23 | Logs y métricas de la EC2 | Logs de los contenedores solo en el disco de la máquina (`json-file`) y sin métricas de memoria ni disco → logs de `web`, `api-usuario` y `rag` en CloudWatch Logs y memoria y disco con el agente de CloudWatch; `agente` y `phoenix` siguen en la máquina | Depurar exigía entrar por Session Manager y los fallos de la EC2 no avisaban a nadie. Base para las alarmas. Descartados: Grafana + Loki en la misma EC2 (3-4 contenedores más en 4 GB y duplica Phoenix y CloudWatch), Amazon Managed Grafana (9 $ por usuario y mes), métricas propias del agente con EMF (unos 5-8 $/mes `[estimación]` y repiten Phoenix) y enviar también los logs del agente (duplican sus trazas) |
@@ -428,6 +430,88 @@ limitación permanente ya documentada — no un resto del bug.
 - **Infradetección de episodios ambientales extremos** (§6.4): el IF solo marca el 12,7 % de los
   bloques con |z| > 3 y no marcó la calima del 15-03-2022 en PM2.5. Mejora directa: combinar
   ambos detectores (`IS_ANOMALY` = IF o |z| > 3) y etiquetar el tipo (ambiental u operativa).
+
+### 6.7 Predicción a corto plazo (t+1 por bloques) — en construcción
+
+Segundo modelo de ML del proyecto, para la herramienta `PREDICCION` del agente (hoy una frase
+fija). Predice la **media del día siguiente** por (estación, contaminante, bloque). Rama
+`feature/ml-prediccion`; notebook `04_entrenamiento_prediccion.ipynb`; funciones puras en
+`src/etl/features_prediccion.py` e `inferencia_prediccion.py` (mismo reparto notebook/`src` que el
+detector). **Alcance de esta iteración:** solo el modelo y su evaluación; la conexión con el agente,
+el pipeline y el despliegue quedan para iteraciones posteriores.
+
+**Diseño.** Un modelo por contaminante (convenio del detector), `HistGradientBoostingRegressor`.
+Features (16): la media del día t, lags 1–6 del mismo bloque, medias móviles 3 y 7 días,
+climatología del mes objetivo, cobertura, bloque y estación, y el calendario de la fecha objetivo.
+Rejilla diaria completa por serie para que un hueco de ingesta quede como NaN y no arrastre el valor
+de hace dos días; HGB trabaja con esos NaN sin imputar. Baselines: persistencia (lo de hoy),
+climatología (valor típico del mes, solo train) y persistencia semanal (lag 6).
+
+**Anti-fuga.** La climatología se recalcula **solo con el train** (la columna del parquet se calculó
+con todo el histórico); en la frontera, una fila de train cuyo objetivo cae en el test se descarta
+(`FECHA_OBJETIVO <= corte` para train, `FECHA > corte` para test). La configuración de HGB se elige
+contra una validación **temporal** interna, nunca contra el test.
+
+**Resultados (2026-10-14, histórico completo de S3).** Entrenado con `resumen_bloques.parquet`
+(1.274.644 bloques, 24 estaciones, 2018-01-01 → 2026-04-30, sin huecos de día). Corte temporal
+2025-04-30 → **test de un año completo** (2025-05 → 2026-04, 147.790 filas comparables); train 1,1 M
+filas. Configuración elegida por validación temporal interna: «suave» (`max_iter=120, lr=0,05,
+min_samples_leaf=50`). Se descarta la climatología precalculada del parquet (se computó con todo el
+histórico = fuga) y se recalcula solo con el train.
+
+MAE global en µg/m³: **persistencia 10,46**, climatología 15,00, lag semanal 13,38; **modelo 10,11**
+→ *skill* global **+0,03**. El modelo **bate a la climatología en los 6 contaminantes** y a la
+persistencia en **5 de 6**: O3 +0,12, NO2/PM10/PM2.5 +0,08, NOx +0,01; solo el **NO** pierde
+(−0,18). Por bloque, la mañana es donde más aporta (skill +0,12); noche y tarde quedan a la par
+(−0,01). El criterio propuesto (skill > 0 global y en ≥4/6, y batir a la climatología en todos)
+**se cumple**, con margen modesto. Los peores errores son picos nocturnos extremos de NOx
+(400–580 µg/m³) que ni el modelo ni la persistencia anticipan: episodios puntuales, la limitación
+esperable sin meteorología.
+
+**Lectura.** A 1 día vista la persistencia es un rival fuerte y el modelo la mejora poco pero de
+forma consistente y medida sobre un año fuera de muestra; su valor real frente a la climatología
+(el «¿cómo suele estar?») es claro. Sobre el CSV provisional de ~4 meses (2026-10-11) el modelo
+**perdía** contra la persistencia (skill −0,28): la diferencia la hizo el volumen y la
+estacionalidad del histórico, no un cambio de diseño.
+
+**Hallazgo de calidad del dato** (para el equipo): en el CSV live de CI hay bloques con
+`MEDIA = 0,0` marcados como válidos (flag V) seguidos de valores altos —ceros placeholder que el
+filtro de validez no descarta—; en el parquet histórico no se observó ese problema.
+
+**Segundo horizonte, t+2 (2026-10-21).** El modelo predice el día siguiente al último dato; durante
+el día los datos llegan hasta ayer, así que h1 cae en **hoy** y «¿cómo estará mañana?» —la pregunta
+más probable— quedaba sin respuesta. Se entrena un segundo bundle idéntico con `HORIZONTE = 2`
+(`models/prediccion_bloques_h2.joblib`; el nb04 queda parametrizado para reproducirlo). Mismo año de
+test: MAE modelo 11,86 vs 12,80 de la persistencia → **skill global +0,07**, mejor que a t+1: al
+alejar el objetivo la persistencia se degrada más deprisa (+22 %) que el modelo (+17 %). Bate a la
+climatología en los 6 contaminantes y a la persistencia en 5 de 6 (NO −0,18, igual que a t+1);
+configuración elegida por validación interna: «sin regularizar». La persistencia semanal a h=2 es el
+lag 5 (t−5 → t+2 = 7 días). Verificado con un replay en terminal (datos hasta ayer → h1 = hoy,
+h2 = mañana, comparado contra lo medido). La herramienta del agente debe elegir el horizonte en
+código: `fecha pedida − último día completo de datos` (0 → ya está medido, consultar datos; >2 →
+fuera de alcance), nunca el LLM — el mismo convenio que las fechas de `consultar_datos`.
+
+**Servicio HTTP (2026-10-22).** La predicción se expone como servicio propio, `src/prediccion`
+(paquete `prediccion`, puerto 8011), **espejo de `src/rag`**: publica su definición de herramienta
+en `GET /prediccion/herramienta` (función `predecir_calidad_aire`), `GET /salud` y
+`POST /prediccion` con `{fecha_objetivo, estacion?, contaminante?, bloque?}`. Alternativa
+descartada: importar los modelos en el propio agente — habría metido scikit-learn y los bundles en
+un servicio deliberadamente ligero y acoplado los despliegues. El servicio concentra las dos reglas
+que no deben decidir ni el agente ni el LLM: el **ancla** (último día con los 4 bloques: un día a
+medio ingerir desplazaría los horizontes) y el **horizonte** (`fecha_objetivo − ancla` → bundle h1
+o h2; `<=0` → `ya_medido`, `>2` → `fuera_de_alcance`). Lee la misma vista `mediciones_bloques` del
+agente (solo lectura); la fecha objetivo la calculará el código del cliente, nunca el LLM. Se
+corrigieron de paso los dos pendientes: la climatología del train ya viaja **dentro de los bundles**
+y `preparar_dataset` descarta una `MEDIA_ESPERADA` precalculada en la entrada (la colisión que
+rompía la inferencia con el parquet). 21 tests nuevos (motor + contrato HTTP, sin base de datos ni
+sklearn: lector inyectado y modelos dobles); suite unit 150 en verde.
+
+**Pendiente:** cerrar el criterio de éxito con el equipo; el cliente del agente (herramienta fina
+tipo `tools/rag.py`, cambio de la frase fija en `intencion.py` y `periodos.py` con expresiones de
+futuro, donde «mañana» exige desambiguar día frente a bloque matinal); y el despliegue del servicio
+(Dockerfile + compose, como el RAG). Trabajo futuro: valorar predecir la **probabilidad de superar
+un umbral** (aviso de episodio), que es lo que más piden los usuarios y donde la persistencia no
+ayuda.
 
 ---
 
@@ -2487,6 +2571,10 @@ equipo la encendía a mano para trabajar o hacer una demo.
 | 2026-10-09 | **Segunda evaluación SQL** (Carlos con Claude Code): Tres combinaciones: todas logran 4/11 en datos. Mejoran periodos, aviso de recorte y SQL; persisten errores al reformular y redactar. Coste estimado: 0,10 $. Veredictos pendientes de revisión humana. |
 | 2026-10-09 | **Correcciones tras la segunda evaluación** (Carlos con Claude Code): Descripción de herramienta simplificada, periodo explícito, respuesta fija fuera del histórico y rechazo de medias que mezclan contaminantes. 126 tests e integración con PostgreSQL en verde; falta otro lote con Bedrock. |
 | 2026-10-09 | **Tercera evaluación SQL** (Carlos con Claude Code): Tres combinaciones; ninguna cumple. Mejor resultado 6/11 en datos (gpt-oss-120b · mismo); límites 3/3 con Ministral · Qwen3 Coder. Resueltos el caso fuera del histórico, el filtro de anomalías y las medias mezcladas; quedan rankings recortados, filas sin agregar y medias sin ponderar. Coste 0,10 $. Veredictos pendientes de revisión humana. |
+| 2026-10-11 | **Modelo de predicción t+1 (parte ML del agente)** (Sheila con Claude Code, rama `feature/ml-prediccion`): notebook `04_entrenamiento_prediccion.ipynb`, funciones puras `src/etl/features_prediccion.py` e `inferencia_prediccion.py` (lags con rejilla anti-hueco, split temporal sin fuga, climatología solo-train) y bundle `models/prediccion_bloques.joblib`. `HistGradientBoostingRegressor` por contaminante, 16 features. Evaluado con el CSV live de CI (provisional, ~4 meses): MAE global 5,99 µg/m³ frente a 4,69 de la persistencia → skill −0,28 (solo O3 la supera). 11 tests nuevos; suite unit 129 en verde. Pendiente reentrenar con el histórico de S3 y conectar la herramienta al agente (fuera de alcance de esta iteración) |
+| 2026-10-14 | **Predicción reentrenada con el histórico completo de S3** (Sheila con Claude Code): `resumen_bloques.parquet` (1,27 M bloques, 2018–2026, sin huecos), test de un año (2025-05 → 2026-04). El resultado se da la vuelta frente al lote provisional: MAE modelo 10,11 vs 10,46 de la persistencia → **skill global +0,03**, batiendo a la climatología en los 6 contaminantes y a la persistencia en 5 de 6 (solo NO pierde). Se cumple el criterio propuesto, con margen modesto. Se detecta y corrige una fuga: el parquet traía la climatología calculada con todo el histórico, se descarta y se recalcula solo con el train (§6.7) |
+| 2026-10-21 | **Segundo bundle de predicción, t+2** (Sheila con Claude Code): el nb04 parametrizado por horizonte y reentrenado con `HORIZONTE=2` para poder responder «mañana» cuando los datos llegan hasta ayer (h1 cae en hoy). Mismo año de test: MAE 11,86 vs 12,80 de la persistencia → **skill +0,07** (5/6 contaminantes; climatología 6/6). Verificado con un replay en terminal contra lo medido de verdad (§6.7) |
+| 2026-10-22 | **Servicio de predicción `src/prediccion` (ml.api)** (Sheila con Claude Code): servicio FastAPI espejo del RAG con la herramienta `predecir_calidad_aire` publicada, `/salud` y `POST /prediccion`; ancla por último día completo y elección de bundle por horizonte en código. De paso, la climatología del train entra en los bundles y `preparar_dataset` se protege de una `MEDIA_ESPERADA` precalculada. 21 tests nuevos sin red ni sklearn; suite 150 en verde. Verificado de punta a punta con los bundles reales sobre el histórico. Pendiente: cliente en el agente y despliegue (§6.7) |
 | 2026-10-12 | **Arreglos deterministas del SQL libre** (Carlos con Claude Code): el validador impone siempre el tope de filas, rechaza `AVG(media)` y, sin periodo en la pregunta, cualquier filtro de fecha; descripción de la herramienta y regla de contaminantes por defecto ajustadas. 133 tests. |
 | 2026-10-12 | **Cuarta evaluación SQL** (Carlos con Claude Code): tres combinaciones; ninguna cumple. Mejor resultado 8/11 en datos y 1/2 mixtas (gpt-oss-120b · mismo), con todo el SQL válido a la primera. Quedan definición de hora punta, clasificador, mixta y síntesis. Coste 0,09 $. Siguiente: catálogo para comparar. Veredictos pendientes de revisión humana. |
 | 2026-10-12 | **Catálogo de consultas SQL** (Carlos con Claude Code): siete consultas cerradas que elige un LLM en JSON; el código construye el SQL con media ponderada, periodo calculado y parámetros. Se activa con `HERRAMIENTA_DATOS=catalogo`, sin cambiar el bucle. Con la elección correcta reproduce el gold del lote en PostgreSQL local. 143 tests. Pendiente: lote con Bedrock para compararlo con el SQL libre. |

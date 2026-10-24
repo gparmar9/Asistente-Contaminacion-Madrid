@@ -42,6 +42,7 @@ from agente.entities.kpis import Dias, Kpis
 from agente.entities.memoria import TurnoGuardado
 from agente.llm.cliente import ConfiguracionLLMInvalida, crear_llm
 from agente.tools.catalogo import HerramientaCatalogo
+from agente.tools.prediccion import HerramientaPrediccion
 from agente.tools.rag import HerramientaRag
 from agente.tools.sql_libre import HerramientaDatos
 
@@ -81,6 +82,12 @@ def construir_bucle(settings: Settings = settings) -> Bucle | None:
                                                  settings.fecha_referencia, settings.db_max_filas))
     else:
         logger.warning("DATABASE_URL vacía: las preguntas de datos recibirán la frase de datos no disponibles")
+    if settings.prediccion_url:
+        herramientas.append(HerramientaPrediccion(settings.prediccion_url,
+                                                  timeout_s=settings.prediccion_timeout_s,
+                                                  fecha_referencia=settings.fecha_referencia))
+    else:
+        logger.warning("PREDICCION_URL vacía: PREDICCION seguirá respondiendo con la frase fija")
     return Bucle(llm, herramientas, max_vueltas=settings.max_vueltas, llm_clasificador=llm_clasificador,
                  clasificador_timeout_s=settings.clasificador_timeout_s,
                  comprobaciones_bloquean=settings.comprobaciones_bloquean)
@@ -136,6 +143,7 @@ def salud() -> dict:
         "entorno": settings.app_env,
         "llm": {"proveedor": settings.llm_proveedor, "modelo": settings.llm_modelo or None},
         "rag_url": settings.rag_url or None,
+        "prediccion_url": settings.prediccion_url or None,
         "datos": bool(settings.database_url),  # la URL lleva la contraseña: no se publica
         "herramienta_datos": settings.herramienta_datos if settings.database_url else None,
     }

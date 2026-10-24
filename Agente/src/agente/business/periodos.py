@@ -15,6 +15,10 @@ Definiciones (2026-10-08 y 2026-10-09), con `ultima` = último día con datos:
 - «hace N días»: ese día, literal; «hace N semanas/meses/años»: la semana, el mes o el año natural
   de hace N (como «la semana pasada»); «desde hace N …»: desde ese punto hasta `ultima`.
 
+`resolver_futuro` (al final) es el gemelo para la herramienta de predicción: expresiones de futuro
+(«mañana», «esta tarde», «pasado mañana») → la fecha objetivo. Aislado de `resolver` para que la
+ruta SQL no cambie y para que «mañana» (día) no choque con «esta mañana» (bloque).
+
 Funciones puras, sin LLM ni base de datos.
 """
 from __future__ import annotations
@@ -265,6 +269,7 @@ _REGLAS = [(re.compile(p), r) for p, r in (
     (r"\bveranos?\b", _veranos),
 )]
 
+
 # Para `menciona_tiempo`: palabras de periodo, un determinante con unidad de tiempo, años y meses.
 _RE_TIEMPO = re.compile(
     r"\b(?:invierno|primavera|otono|veranos?|trimestre|semestre|navidad|ayer|anteayer|anoche|hoy|ahora|"
@@ -272,3 +277,79 @@ _RE_TIEMPO = re.compile(
     r"|\b(?:este|esta|estos|estas|ese|esa|aquel|aquella|el|la|los|las|cada) "
     r"(?:dias?(?! (?:laborables?|festivos?))|semanas?|mes|meses|anos?)\b"
     r"|\b(?:19|20)\d{2}\b|\b\d{1,2}/\d{1,2}\b|\b(?:" + "|".join(MESES) + r")\b")
+
+
+# ---------------------------------------------------------------------- futuro (PREDICCION)
+
+def _un_dia(dia: date) -> Rangos:
+    return ((dia, dia),)
+
+
+def _manana(m, hoy) -> Rangos:
+    return _un_dia(hoy + UN_DIA)
+
+
+def _pasado_manana(m, hoy) -> Rangos:
+    return _un_dia(hoy + 2 * UN_DIA)
+
+
+def _hoy_futuro(m, hoy) -> Rangos:
+    return _un_dia(hoy)
+
+
+def _fin_de_semana(m, hoy) -> Rangos:
+    """El próximo sábado; si hoy ya es sábado o domingo, hoy (sábado=5, domingo=6)."""
+    dia = hoy if hoy.weekday() >= 5 else hoy + timedelta(days=5 - hoy.weekday())
+    return _un_dia(dia)
+
+
+def _proxima_semana(m, hoy) -> Rangos:
+    """El lunes de la semana natural siguiente (primer día del rango; el servicio decide si llega)."""
+    return _un_dia(hoy + timedelta(days=7 - hoy.weekday()))
+
+
+def _proximo_mes(m, hoy) -> Rangos:
+    return _un_dia(date(hoy.year + hoy.month // 12, hoy.month % 12 + 1, 1))
+
+
+# De la más larga/específica a la más corta; «mañana por la X» y «esta X» antes que «mañana» suelta.
+_REGLAS_FUTURO = [(re.compile(p), r) for p, r in (
+    (r"\b(?P<a>\d{4})-(?P<mm>\d{1,2})-(?P<d>\d{1,2})\b", lambda m, hoy: _fecha_numerica(m, hoy, hoy, hoy)),
+    (r"\b(?P<d>\d{1,2})/(?P<mm>\d{1,2})/(?P<a>\d{4})\b", lambda m, hoy: _fecha_numerica(m, hoy, hoy, hoy)),
+    (r"\bpasado manana\b", _pasado_manana),
+    (r"\bmanana por la (?P<b>madrugada|manana|tarde|noche)\b", _manana),
+    (r"\besta (?P<b>madrugada|manana|tarde|noche)\b", _hoy_futuro),
+    (r"\b(?:las )?proximas 48 ?h(?:oras)?\b", _pasado_manana),
+    (r"\b(?:las )?proximas 24 ?h(?:oras)?\b", _manana),
+    (rf"\b(?:los )?proximos (?:\d{{1,2}}|{'|'.join(NUMEROS)}) dias\b", _manana),
+    (r"\b(?:la )?proxima semana\b|\bsemana que viene\b", _proxima_semana),
+    (r"\b(?:el )?proximo mes\b|\bmes que viene\b", _proximo_mes),
+    (r"\b(?:este )?fin de semana\b|\bfinde\b", _fin_de_semana),
+    (r"\bmanana\b", _manana),
+    (r"\bhoy\b|\bahora(?: mismo)?\b|\ben este momento\b|\bactualmente\b", _hoy_futuro),
+)]
+
+
+def resolver_futuro(texto: str, hoy: date) -> list[Periodo]:
+    """Expresiones de FUTURO para la herramienta de predicción: «mañana», «esta tarde», «pasado
+    mañana», «el fin de semana»… → la fecha objetivo (un día) y, si la trae, el bloque.
+
+    Aislado de `resolver` (pasado/presente): aquí «mañana» suelta es el día siguiente y «por la
+    mañana» es el bloque, sin chocar con el «esta mañana» del otro resolutor. Solo necesita `hoy`;
+    si la fecha cae fuera del horizonte del modelo lo decide el servicio de predicción, no esto.
+    Devuelve una lista en el orden de aparición (varias expresiones → el llamador elige la fecha
+    máxima); vacía si no reconoce nada (el llamador aplica el valor por defecto, hoy)."""
+    original = unicodedata.normalize("NFC", texto)
+    normalizado = _normalizar(original)
+    encontrados: list[tuple[int, Periodo]] = []
+    for patron, regla in _REGLAS_FUTURO:
+        for m in patron.finditer(normalizado):
+            if rangos := regla(m, hoy):
+                expresion = original[m.start():m.end()].lower()
+                encontrados.append((m.start(), Periodo(expresion, rangos, m.groupdict().get("b"))))
+        normalizado = patron.sub(lambda m: " " * len(m.group(0)), normalizado)
+    periodos: list[Periodo] = []
+    for _, periodo in sorted(encontrados, key=lambda e: e[0]):
+        if periodo not in periodos:
+            periodos.append(periodo)
+    return periodos
