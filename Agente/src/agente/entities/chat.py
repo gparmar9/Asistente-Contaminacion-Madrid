@@ -27,4 +27,14 @@ class Respuesta(BaseModel):
     fuentes: list[Fuente] = []
     advertencia: str | None = None
     traza_id: str | None = Field(default=None, description="Traza del turno en Phoenix y en el JSONL")
+    span_id: str | None = Field(default=None, description="Span `turno` en Phoenix: el que recibe la valoración")
     session_id: str = Field(description="Sesión del turno: la recibida o la generada")
+
+
+class Valoracion(BaseModel):
+    """👍/👎 del usuario sobre un turno. Se anota en Phoenix sobre el span `turno` (`span_id`)."""
+
+    session_id: str = Field(min_length=1, max_length=64, pattern=r"^[A-Za-z0-9_-]+$")
+    traza_id: str = Field(pattern=r"^[0-9a-f]{32}$")
+    span_id: str = Field(pattern=r"^[0-9a-f]{16}$")
+    valor: Literal["positiva", "negativa"]

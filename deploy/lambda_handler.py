@@ -12,9 +12,12 @@ en frío), no en cada invocación: Lambda reutiliza el contenedor mientras esté
 caliente, así que el modelo y la conexión se pagan una sola vez.
 """
 import os
+import time
 from pathlib import Path
 
 import boto3
+
+from metricas_emf import linea_emf
 
 BUCKET    = os.environ["S3_BUCKET"]
 MODEL_KEY = os.environ.get("MODEL_KEY", "models/isolation_forest.joblib")
@@ -42,10 +45,17 @@ BUNDLE = pipe.cargar_bundle(MODELO)
 
 
 def handler(event, context):
-    """Una ejecución del pipeline: API -> Postgres -> inferencia -> upsert."""
+    """Una ejecución del pipeline: API -> Postgres -> inferencia -> upsert.
+
+    Cada ejecución termina con una línea EMF (métricas de negocio en Jupiter/Pipeline).
+    """
+    inicio_ms = int(time.time() * 1000)
     df_ancho = pipe.bajar_de_api()
     if df_ancho.empty:
         print("La API no devolvió datos válidos. Se omite esta ejecución.")
+        # Sin excepción la alarma de errores no salta: las métricas a cero son lo que avisa
+        # (jupiter-pipeline-sin-datos) y lo que deja el hueco visible en el panel.
+        print(linea_emf(pipe.resultado_sin_datos(), inicio_ms))
         return {"ok": False, "motivo": "la API no devolvió registros"}
 
     df_limpio = pipe.limpiar_datos_live(df_ancho, str(pipe.RUTA_ESTACIONES))
@@ -54,4 +64,5 @@ def handler(event, context):
     print(f"Horario: {res['horas_nuevas']} filas nuevas | "
           f"Resumen: {res['bloques_upsert']} bloques upsert "
           f"({res['anomalias']} anomalías detectadas).")
+    print(linea_emf(res, inicio_ms))
     return {"ok": True, **res}

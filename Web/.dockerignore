@@ -1,0 +1,12 @@
+# Contexto de construcción de la imagen `web`: solo lo necesario para `npm ci` y `npm run build`.
+node_modules/
+dist/
+.vite/
+.eslintcache
+*.local
+*.log
+.git/
+.idea/
+.vscode/
+scripts/
+README.md

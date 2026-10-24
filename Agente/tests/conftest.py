@@ -285,3 +285,14 @@ def herramienta_datos(engine, guion_sql: list, max_filas: int = 60):
     llm_sql = LLMFalso(guion=list(guion_sql))
     return llm_sql, HerramientaDatos(Mediciones(engine), RedactorSQL(llm_sql, max_filas), FECHA_REFERENCIA,
                                      max_filas)
+
+
+def herramienta_catalogo(engine, guion: list, max_filas: int = 60):
+    """`consultar_datos` con el catálogo sobre SQLite y un selector falso que responde el JSON del guion."""
+    from agente.business.selector_catalogo import SelectorCatalogo
+    from agente.datos.mediciones import Mediciones
+    from agente.llm.falso import LLMFalso
+    from agente.tools.catalogo import HerramientaCatalogo
+
+    llm = LLMFalso(guion=list(guion))
+    return llm, HerramientaCatalogo(Mediciones(engine), SelectorCatalogo(llm), FECHA_REFERENCIA, max_filas)

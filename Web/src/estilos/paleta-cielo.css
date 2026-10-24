@@ -1,0 +1,9 @@
+/* Paleta alternativa «Cielo» — RETIRADA.
+ *
+ * La paleta cielo pasó a ser la ÚNICA paleta del frontend: sus tokens viven
+ * ahora en tokens.css y el degradado/decoración del hero en componentes.css.
+ * Este fichero queda vacío a propósito para que un `?paleta=cielo` recordado
+ * en localStorage no sobrescriba los tokens actuales con los antiguos.
+ * Limpieza pendiente: borrar este fichero, su import en main.tsx y las líneas
+ * de `paleta` del script de index.html.
+ */

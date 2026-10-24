@@ -263,8 +263,11 @@ PROMPT_REDACTOR_SQL = (
     "4. Filtra estaciones y distritos con ILIKE sobre las columnas de la vista, por ejemplo "
     "nombre_estacion ILIKE '%retiro%'. No copies la lista de estaciones en el SQL (ni VALUES, ni "
     "CASE, ni JOIN) y no consultes otras tablas.\n"
-    "5. Si la pregunta no nombra un contaminante, usa contaminante IN ('NO2', 'PM10') y agrupa "
-    "también por contaminante: un resultado por contaminante, nunca mezclados.\n"
+    "5. Si la pregunta pide niveles o la calidad del aire y no nombra un contaminante, usa "
+    "contaminante IN ('NO2', 'PM10') y agrupa también por contaminante: un resultado por contaminante, "
+    "nunca mezclados. Excepción: en preguntas sobre anomalías, sobre qué estaciones miden o qué "
+    "contaminantes se miden, o sobre la cobertura de los datos, no filtres por contaminante (si "
+    "agregas medias, agrupa por contaminante).\n"
     "6. Anomalías: is_anomaly AND cobertura >= 0.7.\n"
     "7. Copia tal cual el periodo calculado que acompaña a la pregunta, con sus fechas literales. "
     "No calcules fechas y no uses CURRENT_DATE, NOW() ni otras funciones de la fecha actual: la de "
@@ -272,8 +275,9 @@ PROMPT_REDACTOR_SQL = (
     "día = media diaria ponderada mayor que el umbral.\n"
     "8. Usa el periodo que pide la pregunta aunque no tenga datos: no lo sustituyas por otro.\n"
     "9. Nombra las columnas con claridad (fecha, nombre_estacion, distrito, contaminante, media...), "
-    "nunca SELECT *, y ordena el resultado. Se entregan como mucho {max_filas} filas y se avisa si "
-    "hay más: pon LIMIT solo si la pregunta pide un número de resultados («las 5 estaciones...»).\n"
+    "nunca SELECT *, y ordena el resultado. No pongas LIMIT, aunque la pregunta pida «la estación» "
+    "o «las 5 estaciones»: se entregan las {max_filas} primeras filas en el orden del ORDER BY, se "
+    "avisa si hay más y la respuesta elige las primeras.\n"
     "10. PostgreSQL: no redondees (el sistema redondea las cifras); si necesitas ROUND, convierte "
     "antes a numeric: ROUND(x::numeric, 1). Nunca pongas un agregado dentro de otro: para agregar en "
     "dos pasos (por ejemplo, la media de cada día y después contar días), calcula el primero en un "
@@ -296,6 +300,9 @@ MENSAJE_REDACTOR_SQL = "Pregunta del usuario: {usuario}\n{reescrita}Periodo calc
 PREGUNTA_REESCRITA_SQL = (
     "Pregunta reescrita por el asistente (úsala para lugares y contaminantes, no para fechas): {pregunta}\n"
 )
+PERIODO_TODO_EL_HISTORICO = (
+    "ninguno: la pregunta no pide un periodo. Usa todo el histórico, sin filtrar por fecha, ano ni mes."
+)
 PERIODO_SIN_CALCULAR = (
     "ninguno. Si la pregunta no pide un periodo, usa todo el histórico sin filtrar por fecha; si lo "
     "pide, toma sus fechas del calendario."
@@ -315,6 +322,65 @@ REINTENTO_SQL = (
     "La consulta anterior falló.\nConsulta:\n{sql}\nError: {error}\n"
     "Escribe otra consulta que lo corrija. Devuelve solo la consulta."
 )
+
+# Selector del catálogo (business/selector_catalogo.py). Huecos: estaciones, hoy, primera, ultima,
+# calendario. El modelo elige consulta y parámetros; el código construye el SQL (business/catalogo_sql.py).
+PROMPT_SELECTOR_CATALOGO = (
+    "Eliges la consulta del catálogo que responde a una pregunta sobre las mediciones de calidad del "
+    "aire de Madrid y rellenas sus parámetros. El sistema construye la consulta, calcula las medias "
+    "ponderadas y aplica el periodo.\n"
+    "Consultas:\n"
+    "- ranking: qué estaciones o distritos tienen más o menos contaminación en un periodo («la peor», "
+    "«dónde se respira mejor», «qué zona»). Una media por estación (o distrito) y contaminante. "
+    "Parámetros: agrupar_por, orden.\n"
+    "- serie: cómo evoluciona la media día a día, mes a mes o año a año («cómo ha estado», «ha "
+    "empeorado», comparar años o veranos). Parámetros: granularidad, agrupar_por (por defecto, por "
+    "estación si nombra lugares y toda la ciudad si no).\n"
+    "- patron_horario: un bloque horario frente al resto del día, con la diferencia, por estación "
+    "(«hora punta» = bloque manana). Parámetros: bloque, agrupar_por.\n"
+    "- fin_de_semana: días laborables frente a fines de semana, con la diferencia. Parámetro: agrupar_por.\n"
+    "- dias_superados: cuántos días la media diaria superó un umbral. Parámetros: umbral (obligatorio, "
+    "en µg/m³), agrupar_por.\n"
+    "- anomalias: bloques anómalos detectados por el modelo de ML. Parámetro: agrupar_por.\n"
+    "- estaciones: qué estaciones hay y qué contaminantes mide cada una; con contaminantes, las que los miden.\n"
+    "Parámetros (todos opcionales salvo consulta):\n"
+    "- contaminantes: lista con los que nombra el usuario: 'NO', 'NO2', 'NOx', 'O3' (ozono), 'PM10' o "
+    "'PM2.5'. Si nombra otro (SO2, CO...), ponlo igual: el sistema dirá que no se mide. Si no nombra "
+    "ninguno, lista vacía: el sistema elige.\n"
+    "- estaciones, distritos: listas con los lugares que nombra el usuario, con los nombres de abajo. "
+    "Vacías para todo Madrid.\n"
+    "- agrupar_por: 'estacion', 'distrito' o 'madrid' (una cifra para toda la ciudad).\n"
+    "- orden: 'peor' (más contaminación primero, por defecto) o 'mejor'.\n"
+    "- bloque: 'madrugada' (0 a 6 h), 'manana' (7 a 12 h), 'tarde' (13 a 19 h) o 'noche' (20 a 23 h); "
+    "solo si la pregunta pide una franja.\n"
+    "- granularidad: 'dia', 'mes' o 'ano'.\n"
+    "- umbral: número en µg/m³.\n"
+    "- fecha_inicio, fecha_fin (YYYY-MM-DD): solo si el mensaje dice que no hay periodo calculado y la "
+    "pregunta pide uno; tómalas del calendario.\n"
+    "Estaciones (nombre | distrito):\n{estaciones}\n"
+    "Hoy es {hoy}. Hay datos del {primera} al {ultima}, que es el último día disponible.\n"
+    "Calendario:\n{calendario}\n"
+    "Responde solo con un objeto JSON, sin explicaciones ni bloque de código. Ejemplo de formato: "
+    '{{"consulta": "ranking", "contaminantes": ["O3"], "estaciones": [], "distritos": ["Centro"], '
+    '"agrupar_por": "estacion", "orden": "mejor"}}'
+)
+MENSAJE_SELECTOR = "Pregunta del usuario: {usuario}\n{reescrita}Periodo: {periodo}"
+PERIODO_CALCULADO_SELECTOR = "{periodo}. Ya calculado: el sistema lo aplica; no pongas fechas."
+PERIODO_HISTORICO_SELECTOR = "ninguno: la pregunta no pide un periodo; se usa todo el histórico. No pongas fechas."
+PERIODO_SIN_CALCULAR_SELECTOR = (
+    "no calculado. Si la pregunta pide un periodo, pon fecha_inicio y fecha_fin del calendario; si "
+    "no, no pongas fechas."
+)
+REINTENTO_CATALOGO = (
+    "Tu respuesta anterior no es válida.\nRespuesta:\n{respuesta}\nError: {error}\n"
+    "Corrígela. Responde solo con el objeto JSON."
+)
+# Notas del catálogo para la síntesis (van en el resultado de la consulta).
+NOTA_NO_MEDIDO = (
+    "No se miden: {pedidos}. Las estaciones de Madrid de estos datos miden solo {medidos}."
+)
+NOTA_LUGAR_DESCONOCIDO = "No hay ninguna estación ni distrito con datos que se llame: {lugares}."
+DESCRIPCION_VACIA = "Consulta sin ejecutar: lo que se pide no está en las mediciones"
 
 # ------------------------------------------------------------------ ruta documental
 
@@ -351,5 +417,6 @@ AVISO_SANITARIO = (
 # Prompts del sistema que el modelo no debe repetir (regla de fuga) y las frases suyas que sí puede.
 PROMPTS = (PROMPT_SISTEMA, PROMPT_SINTESIS_FORZADA, PROMPT_CLASIFICADOR, PROMPT_CLASIFICADOR_CONTEXTO,
            PROMPT_CHARLA, PROMPT_SINTESIS_DOCUMENTAL, PROMPT_DATOS, PROMPT_SINTESIS_DATOS,
-           SINTESIS_DATOS_MIXTA, PROMPT_REDACTOR_SQL, PROMPT_PREDICCION, PROMPT_SINTESIS_PREDICCION)
+           SINTESIS_DATOS_MIXTA, PROMPT_REDACTOR_SQL, PROMPT_SELECTOR_CATALOGO,
+           PROMPT_PREDICCION, PROMPT_SINTESIS_PREDICCION)
 FRASES_PUBLICAS = (IDENTIDAD, CAPACIDADES_CHARLA)

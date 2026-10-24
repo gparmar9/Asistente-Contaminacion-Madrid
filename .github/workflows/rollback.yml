@@ -8,9 +8,15 @@
 # anterior es justo la que estaba mal. Primero se consulta y luego se elige.
 #
 # Componentes:
-#   lambda  apunta la función a la imagen de esa versión (por digest) y publica una versión nueva
-#           con el motivo.
-# Para añadir uno nuevo: sumarlo a `options` y crear su job con `if: inputs.componente == '<nombre>'`.
+#   lambda       versión = número de versión de la función. Apunta la función a la imagen de esa
+#                versión (por digest) y publica una versión nueva con el motivo.
+#   web          versión = commit corto de la imagen (p. ej. 3b27c7c). Cambia la versión activa en
+#   api-usuario  SSM (con el motivo en el historial del parámetro) y, si la EC2 está encendida,
+#   agente       actualiza solo ese contenedor. La imagen ya está en ECR: no se reconstruye nada.
+#   rag
+# Phoenix fija su versión en deploy/ec2/compose.yml. Para volver atrás,
+# revertir el commit y ejecutar "Desplegar" → phoenix.
+# Para añadir uno nuevo: sumarlo a `options` y a un job con `if:`.
 #
 # Usa el mismo rol OIDC que desplegar.yml y comparte su bloqueo por componente: nunca coinciden
 # un despliegue y un rollback de la misma pieza.
@@ -27,8 +33,12 @@ on:
         default: lambda
         options:
           - lambda
+          - web
+          - api-usuario
+          - agente
+          - rag
       version:
-        description: "Versión a la que volver (vacío = solo consultar, no cambia nada)"
+        description: "Versión a la que volver: número (lambda) o commit corto (resto). Vacío = solo consultar"
         required: false
         default: ""
       motivo:
@@ -169,6 +179,115 @@ jobs:
             echo "| Vuelta a la versión | $VERSION (imagen \`${DESTINO:0:12}\`) |"
             echo "| Imagen que se retira | \`${ACTUAL:0:12}\` |"
             echo "| Versión publicada con el rollback | $NUEVA |"
+            echo "| Motivo | $MOTIVO |"
+            echo "| Lanzado por | @$GITHUB_ACTOR |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  # Servicios de la API que corren en la EC2: la "versión" es el tag de la imagen (commit corto).
+  contenedor:
+    name: ${{ inputs.componente }} · consultar versiones o volver atrás
+    if: inputs.componente != 'lambda'
+    runs-on: ubuntu-latest
+    env:
+      COMPONENTE: ${{ inputs.componente }}
+      ECR_REPOSITORY: jupiter-${{ inputs.componente }}
+      PARAM: /jupiter/versiones/${{ inputs.componente }}
+      BUCKET: jupiter-calidad-aire-madrid
+    steps:
+      - name: Validar la entrada
+        env:
+          VERSION: ${{ inputs.version }}
+          MOTIVO: ${{ inputs.motivo }}
+        run: |
+          if [ -n "$VERSION" ]; then
+            [[ "$VERSION" =~ ^[0-9a-f]{7}$ ]] || { echo "::error::La versión es el commit corto de la imagen (7 caracteres, p. ej. 3b27c7c), no '$VERSION'."; exit 1; }
+            [ -n "${MOTIVO// }" ] || { echo "::error::Indica el motivo del rollback."; exit 1; }
+          fi
+
+      - name: Checkout repositorio
+        uses: actions/checkout@v4
+
+      - name: Credenciales de AWS (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::${{ secrets.AWS_ACCOUNT_ID }}:role/jupiter-github-actions-deploy
+          role-session-name: rollback-${{ github.run_id }}
+          aws-region: ${{ env.AWS_REGION }}
+          mask-aws-account-id: true
+
+      - name: Versiones disponibles
+        run: |
+          ACTIVA=$(aws ssm get-parameter --name "$PARAM" --query Parameter.Value --output text 2> /dev/null || echo "")
+          echo "ACTIVA=$ACTIVA" >> "$GITHUB_ENV"
+          aws ecr describe-images --repository-name "$ECR_REPOSITORY" \
+            --query "imageDetails[?imageTags].{tags:imageTags,fecha:imagePushedAt,bytes:imageSizeInBytes}" \
+            --output json > imagenes.json
+          aws ssm get-parameter-history --name "$PARAM" \
+            --query "Parameters[].{v:Value,fecha:LastModifiedDate,desc:Description}" \
+            --output json > historial.json 2> /dev/null || echo "[]" > historial.json
+          {
+            echo "### Imágenes de \`$ECR_REPOSITORY\`"
+            echo
+            echo "| Versión | Subida | Tamaño | |"
+            echo "|---|---|---|---|"
+            jq -r --arg a "$ACTIVA" 'sort_by(.fecha) | reverse | .[] | "| `\(.tags | join(", "))` | \(.fecha[0:16] | sub("T"; " ")) | \(.bytes / 1048576 | floor) MB | \(if (.tags | index($a)) then "**activa**" else "" end) |"' imagenes.json
+            echo
+            echo "### Últimos cambios de versión activa"
+            echo
+            echo "| Fecha | Versión | Quién y por qué |"
+            echo "|---|---|---|"
+            jq -r 'reverse | .[:8][] | "| \(.fecha[0:16] | sub("T"; " ")) | `\(.v)` | \(.desc // "—") |"' historial.json
+          } | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - name: Modo consulta
+        if: inputs.version == ''
+        run: |
+          echo "No se ha cambiado nada. Para volver atrás, relanza el workflow indicando versión y motivo." \
+            | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - name: Volver a la versión elegida
+        if: inputs.version != ''
+        env:
+          VERSION: ${{ inputs.version }}
+          MOTIVO: ${{ inputs.motivo }}
+        run: |
+          if ! aws ecr describe-images --repository-name "$ECR_REPOSITORY" --image-ids imageTag="$VERSION" > /dev/null 2>&1; then
+            echo "::error::La imagen $ECR_REPOSITORY:$VERSION no existe en ECR. Consulta la tabla del paso anterior."
+            exit 1
+          fi
+          if [ "$VERSION" = "$ACTIVA" ]; then
+            echo "::error::La versión activa ya es $VERSION: no hay nada que deshacer."
+            exit 1
+          fi
+          DESCRIPCION="rollback a $VERSION: $MOTIVO (@$GITHUB_ACTOR)"
+          aws ssm put-parameter --name "$PARAM" --type String --overwrite --value "$VERSION" \
+            --description "${DESCRIPCION:0:1024}" --query Version --output text
+
+          EC2=$(bash .github/scripts/ec2.sh instancia)   # si la consulta falla, el paso falla
+          read -r INSTANCIA ESTADO <<< "$EC2"
+          if [ "${ESTADO:-}" != "running" ]; then
+            echo "EC2_RESULTADO=EC2 ${ESTADO:-inexistente}: usará esta versión al encenderse" >> "$GITHUB_ENV"
+            exit 0
+          fi
+          bash .github/scripts/ec2.sh ejecutar \
+            "aws s3 cp s3://$BUCKET/ec2/arrancar.sh /opt/jupiter/arrancar.sh --region $AWS_REGION --only-show-errors && chmod 700 /opt/jupiter/arrancar.sh && /opt/jupiter/arrancar.sh $COMPONENTE"
+          echo "EC2_RESULTADO=actualizado y sano en $INSTANCIA" >> "$GITHUB_ENV"
+
+      - name: Resumen
+        if: inputs.version != ''
+        env:
+          VERSION: ${{ inputs.version }}
+          MOTIVO: ${{ inputs.motivo }}
+        run: |
+          {
+            echo
+            echo "### Rollback hecho"
+            echo
+            echo "| | |"
+            echo "|---|---|"
+            echo "| Vuelta a la versión | \`$VERSION\` |"
+            echo "| Versión que se retira | \`${ACTIVA:-—}\` |"
+            echo "| EC2 | $EC2_RESULTADO |"
             echo "| Motivo | $MOTIVO |"
             echo "| Lanzado por | @$GITHUB_ACTOR |"
           } >> "$GITHUB_STEP_SUMMARY"

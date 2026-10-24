@@ -149,3 +149,54 @@ jobs:
 
       - name: Ejecutar tests
         run: pytest tests -v
+
+  # Web: comprueba que backend, contrato y frontend siguen encajando. Regenera openapi.json desde
+  # ApiUsuario y schema.d.ts desde ese JSON; si difieren de lo versionado, el contrato está
+  # desincronizado y el job falla. Después lint, tests y build (tsc rompe ante un cambio de tipos).
+  frontend:
+    name: Web · contrato, lint, tests y build
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: Web
+    steps:
+      - name: Checkout repositorio
+        uses: actions/checkout@v4
+
+      - name: Configurar Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+          cache-dependency-path: ApiUsuario/requirements*.txt
+
+      # fastapi y pydantic fijados a las versiones que generaron openapi.json: una versión nueva
+      # puede cambiar el JSON exportado sin que cambie el backend y daría un falso positivo.
+      # Si se actualizan, hay que regenerar el contrato (`npm run contrato`) en el mismo PR.
+      - name: Instalar dependencias de ApiUsuario
+        run: pip install -r ../ApiUsuario/requirements.txt fastapi==0.161.1 pydantic==2.14.1
+
+      - name: Configurar Node 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+          cache-dependency-path: Web/package-lock.json
+
+      - name: Instalar dependencias
+        run: npm ci --no-audit --no-fund
+
+      - name: Comprobar contrato con la API
+        run: |
+          npm run contrato
+          git diff --exit-code -- openapi.json src/api/schema.d.ts \
+            || { echo "::error::Contrato desincronizado: ejecuta 'npm run contrato' en Web/ y versiona el resultado"; exit 1; }
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Tests
+        run: npm test
+
+      - name: Build
+        run: npm run build

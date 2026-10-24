@@ -1,0 +1,77 @@
+import { useEffect, useRef } from 'react'
+
+import { AvisoValoracion } from '../componentes/chat/AvisoValoracion'
+import { ChipsSugeridas } from '../componentes/chat/ChipsSugeridas'
+import { Consulta } from '../componentes/chat/Consulta'
+import { EntradaChat } from '../componentes/chat/EntradaChat'
+import { useChat } from '../estado/hooks'
+
+/**
+ * Asistente a pantalla completa. Comparte estado con el panel flotante
+ * (misma conversación).
+ *
+ * Las preguntas forman una CONVERSACIÓN: el agente recuerda los turnos
+ * anteriores (session_id del ChatProvider), así que los seguimientos
+ * ("¿y ayer?") funcionan. La lista vive solo en el estado de React y
+ * desaparece al recargar; «Nueva conversación» también borra el contexto.
+ */
+export default function Asistente() {
+  const { consultas, enviando, enviar, vaciar, marcarVisto } = useChat()
+  const finalRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    // En esta pantalla las respuestas se ven directamente: no cuentan como novedades del panel.
+    marcarVisto()
+    finalRef.current?.scrollIntoView({ block: 'nearest', behavior: 'smooth' })
+  }, [consultas, marcarVisto])
+
+  return (
+    <div className="asistente">
+      <header className="pagina-cabecera">
+        <div className="apilado-s">
+          <h1>Asistente</h1>
+          <p>
+            Pregunta en lenguaje natural sobre los datos de las estaciones o sobre salud y normativa. El asistente
+            consulta la base de datos y la documentación del proyecto y cita sus fuentes.
+          </p>
+        </div>
+      </header>
+
+      <div className="aviso-bloque" role="note">
+        <strong>El asistente recuerda esta conversación.</strong> Puedes hacer preguntas de seguimiento («¿y ayer?»,
+        «¿y en El Retiro?») sin repetir la estación o el contaminante. «Nueva conversación» empieza de cero; lo que
+        ves aquí solo existe en esta pestaña y se pierde al recargar.
+      </div>
+
+      <section aria-labelledby="sugeridas">
+        <h2 id="sugeridas" className="campo-etiqueta" style={{ marginBottom: 8 }}>
+          Preguntas de ejemplo
+        </h2>
+        <ChipsSugeridas deshabilitado={enviando} onElegir={(p) => enviar(p)} />
+      </section>
+
+      {consultas.length > 0 && (
+        <section className="consultas" aria-label="Consultas de esta sesión" aria-live="polite">
+          {consultas.map((c) => (
+            <Consulta key={c.id} consulta={c} onReintentar={(con) => enviar(con.pregunta, con.id)} />
+          ))}
+          <div ref={finalRef} />
+        </section>
+      )}
+
+      <AvisoValoracion />
+      <EntradaChat enviando={enviando} onEnviar={(p) => enviar(p)} />
+
+      {consultas.length > 0 && (
+        <div className="fila-entre t-xs texto-apagado">
+          <span>
+            {consultas.length} {consultas.length === 1 ? 'consulta' : 'consultas'} en esta conversación
+          </span>
+          <button type="button" className="boton boton-suave boton-s" onClick={vaciar} disabled={enviando}>
+            Nueva conversación
+          </button>
+        </div>
+      )}
+    </div>
+  )
+}

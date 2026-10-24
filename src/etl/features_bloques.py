@@ -16,7 +16,7 @@ from limpiar_datos import MAGNITUDES_OBJETIVO   # {7: 'NO', 8: 'NO2', ...}
 # Los 4 bloques del día: nombre -> (hora_inicio, hora_fin), ambas incluidas
 BLOQUES = {"madrugada": (0, 6), "manana": (7, 12), "tarde": (13, 19), "noche": (20, 23)}
 ORDEN_BLOQUES = ["madrugada", "manana", "tarde", "noche"]
-_DURACION = {b: fin - ini + 1 for b, (ini, fin) in BLOQUES.items()}
+DURACION = {b: fin - ini + 1 for b, (ini, fin) in BLOQUES.items()}
 _LIMITES = [-1, 6, 12, 19, 23]   # (-1,6]=madrugada ... (19,23]=noche
 
 CLAVES = ["ESTACION", "MAGNITUD", "FECHA", "BLOQUE"]
@@ -24,8 +24,13 @@ CLAVES_BASE = ["ESTACION", "MAGNITUD", "BLOQUE", "MES"]
 FEATURES_MODELO = ["Z_SCORE", "COBERTURA", "CV"]
 
 
-def a_bloques(largo: pd.DataFrame) -> pd.DataFrame:
-    """Agrega el horario válido a una fila por (estación, magnitud, fecha, bloque)."""
+def a_bloques(largo: pd.DataFrame, horas_por_bloque: dict | None = None) -> pd.DataFrame:
+    """Agrega el horario válido a una fila por (estación, magnitud, fecha, bloque).
+
+    `horas_por_bloque` es el denominador de la COBERTURA; por defecto, la duración
+    de cada bloque. El tiempo real lo cambia para la noche (la hora 23 no llega).
+    """
+    horas_por_bloque = horas_por_bloque or DURACION
     df = largo.copy()
     df["BLOQUE"] = pd.cut(df["HORA"], bins=_LIMITES, labels=ORDEN_BLOQUES).astype(str)
 
@@ -43,7 +48,7 @@ def a_bloques(largo: pd.DataFrame) -> pd.DataFrame:
 
     resumen["HORA_INICIO"] = resumen["BLOQUE"].map(lambda b: BLOQUES[b][0])
     resumen["HORA_FIN"]    = resumen["BLOQUE"].map(lambda b: BLOQUES[b][1])
-    resumen["COBERTURA"]   = (resumen["N_HORAS"] / resumen["BLOQUE"].map(_DURACION)).round(3)
+    resumen["COBERTURA"]   = (resumen["N_HORAS"] / resumen["BLOQUE"].map(horas_por_bloque)).round(3)
     resumen["RANGO"]       = resumen["MAXIMO"] - resumen["MINIMO"]
 
     # Calendario

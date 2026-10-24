@@ -20,7 +20,7 @@ COPY src/etl/*.py                       ${LAMBDA_TASK_ROOT}/
 # descargarse de S3 en cada arranque en frío.
 COPY data/raw/estaciones-de-control.csv ${LAMBDA_TASK_ROOT}/
 
-COPY deploy/lambda_handler.py           ${LAMBDA_TASK_ROOT}/
+COPY deploy/lambda_handler.py deploy/metricas_emf.py ${LAMBDA_TASK_ROOT}/
 
 # <fichero>.<función> que Lambda invoca en cada ejecución.
 CMD ["lambda_handler.handler"]

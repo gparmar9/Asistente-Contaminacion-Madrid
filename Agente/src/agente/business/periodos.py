@@ -6,7 +6,7 @@ calculado (`condicion_sql`) y el validador comprueba que el SQL lo respeta. Lo q
 cae al calendario del prompt (`calendario`): el modelo elige una fila, no calcula.
 
 Definiciones (2026-10-08 y 2026-10-09), con `ultima` = último día con datos:
-- «ahora mismo», «hoy», «esta tarde»: `ultima` (el pipeline cierra el día a las 23:45), con su bloque;
+- «ahora mismo», «hoy», «esta tarde»: `ultima` (el pipeline carga cada franja al cerrarse), con su bloque;
 - «ayer», «este mes», años y meses con año: literales respecto a `hoy`; sin filas → «sin datos»;
 - «esta semana»: los 7 últimos días disponibles; «la semana pasada»: semana natural anterior a `hoy`;
 - «los últimos N días/semanas/meses/años», «media anual»: hasta `ultima`;
@@ -95,6 +95,16 @@ def calendario(hoy: date, primera: date, ultima: date,
                formato: Callable[[Sequence[Periodo]], str] = texto) -> str:
     """Las expresiones habituales ya calculadas, una por línea."""
     return "\n".join(f"- {formato(resolver(e, hoy, primera, ultima))}" for e in EXPRESIONES_CALENDARIO)
+
+
+def menciona_tiempo(texto: str) -> bool:
+    """El texto parece pedir un periodo, aunque `resolver` no lo reconozca («el invierno pasado»).
+
+    Sin periodo calculado ni mención de tiempo, la pregunta va contra todo el histórico y el validador
+    rechaza los filtros de fecha. Con mención no reconocida, el redactor toma las fechas del calendario.
+    Ante la duda, mención: el fallo es no comprobar, como antes. «Días laborables» y «fines de semana»
+    no cuentan: no piden un periodo."""
+    return _RE_TIEMPO.search(_normalizar(texto)) is not None
 
 
 # ---------------------------------------------------------------------- reglas
@@ -258,6 +268,15 @@ _REGLAS = [(re.compile(p), r) for p, r in (
     (rf"\b{_MES}\b", _mes_sin_ano),
     (r"\bveranos?\b", _veranos),
 )]
+
+
+# Para `menciona_tiempo`: palabras de periodo, un determinante con unidad de tiempo, años y meses.
+_RE_TIEMPO = re.compile(
+    r"\b(?:invierno|primavera|otono|veranos?|trimestre|semestre|navidad|ayer|anteayer|anoche|hoy|ahora|"
+    r"actualmente|ultim[oa]s?|pasad[oa]s?|anterior(?:es)?|recientes?|recientemente|desde|hasta|durante|hace)\b"
+    r"|\b(?:este|esta|estos|estas|ese|esa|aquel|aquella|el|la|los|las|cada) "
+    r"(?:dias?(?! (?:laborables?|festivos?))|semanas?|mes|meses|anos?)\b"
+    r"|\b(?:19|20)\d{2}\b|\b\d{1,2}/\d{1,2}\b|\b(?:" + "|".join(MESES) + r")\b")
 
 
 # ---------------------------------------------------------------------- futuro (PREDICCION)

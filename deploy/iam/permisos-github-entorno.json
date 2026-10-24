@@ -10,6 +10,45 @@
         "rds:StopDBInstance"
       ],
       "Resource": "arn:aws:rds:eu-west-1:*:db:jupiter-postgres"
+    },
+    {
+      "Sid": "LocalizarLaEC2",
+      "Effect": "Allow",
+      "Action": "ec2:DescribeInstances",
+      "Resource": "*"
+    },
+    {
+      "Sid": "EncenderYApagarSoloLaEC2DeLaApi",
+      "Effect": "Allow",
+      "Action": [
+        "ec2:StartInstances",
+        "ec2:StopInstances"
+      ],
+      "Resource": "arn:aws:ec2:eu-west-1:*:instance/*",
+      "Condition": {
+        "StringEquals": { "aws:ResourceTag/Name": "jupiter-api" }
+      }
+    },
+    {
+      "Sid": "ComprobarLaApiSoloConElDocumentoDeShell",
+      "Effect": "Allow",
+      "Action": "ssm:SendCommand",
+      "Resource": "arn:aws:ssm:eu-west-1::document/AWS-RunShellScript"
+    },
+    {
+      "Sid": "ComprobarLaApiSoloEnLaEC2DeLaApi",
+      "Effect": "Allow",
+      "Action": "ssm:SendCommand",
+      "Resource": "arn:aws:ec2:eu-west-1:*:instance/*",
+      "Condition": {
+        "StringEquals": { "ssm:resourceTag/Name": "jupiter-api" }
+      }
+    },
+    {
+      "Sid": "LeerElResultadoDeLosComandos",
+      "Effect": "Allow",
+      "Action": "ssm:GetCommandInvocation",
+      "Resource": "*"
     }
   ]
 }

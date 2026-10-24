@@ -14,7 +14,10 @@ Sin `configurar()` (tests) los spans se crean pero no se exportan.
 
 Las decisiones del código (frase fija, sin evidencia, límite de vueltas...) son eventos
 `decision` en el span en curso, y cada hallazgo de las comprobaciones posteriores, un evento
-`comprobacion` en el span `turno`. La herramienta SQL deja un span `redactar_sql` por intento,
+`comprobacion` en el span `turno`; en el stream, el primer texto enviado al cliente deja el
+evento `primer_token` en ese mismo span. Todos los spans de un turno llevan `session.id` (vista
+de sesiones de Phoenix); la valoración del usuario se anota sobre el span `turno` por su id
+(`span_id_actual`). La herramienta SQL deja un span `redactar_sql` por intento,
 un evento `sql_invalido` por cada SQL rechazado y el SQL ejecutado en su span (`agente.sql`).
 """
 from __future__ import annotations
@@ -26,13 +29,14 @@ from pathlib import Path
 from typing import Any, Iterator, Sequence
 
 from llama_index.core.base.llms.types import ChatMessage, ChatResponse, ThinkingBlock, ToolCallBlock
-from openinference.instrumentation import OITracer, TraceConfig, TracerProvider, get_llm_attributes
+from openinference.instrumentation import (OITracer, TraceConfig, TracerProvider, get_llm_attributes,
+                                          using_session)
 from openinference.semconv.resource import ResourceAttributes
 from openinference.semconv.trace import SpanAttributes
 from opentelemetry import trace
 from opentelemetry.sdk.resources import Resource
 from opentelemetry.sdk.trace.export import BatchSpanProcessor
-from opentelemetry.trace import Span, Status, StatusCode, format_trace_id
+from opentelemetry.trace import Span, Status, StatusCode, format_span_id, format_trace_id
 
 from agente.config.settings import Settings
 from agente.observabilidad.jsonl import ExportadorJsonl
@@ -106,6 +110,13 @@ def turno(pregunta: str) -> Iterator[Span]:
 
 
 @contextmanager
+def sesion(session_id: str) -> Iterator[None]:
+    """Asocia los spans creados en este contexto con la sesión."""
+    with using_session(session_id):
+        yield
+
+
+@contextmanager
 def herramienta(nombre: str, argumentos: dict) -> Iterator[Span]:
     with span(nombre, "tool", entrada=argumentos) as s:
         s.set_attribute(SpanAttributes.TOOL_NAME, nombre)
@@ -151,6 +162,12 @@ def comprobacion(regla: str, detalle: str, bloquea: bool) -> None:
         "agente.regla": regla, "agente.detalle": detalle, "agente.bloquea": bloquea})
 
 
+def primer_token(s: Span) -> None:
+    """Evento `primer_token` en el span del turno: el primer texto sale hacia el cliente (stream).
+    Su hora menos el inicio del turno es la latencia percibida en el chat."""
+    s.add_event("primer_token")
+
+
 def sql_invalido(origen: str, error: str) -> None:
     """SQL rechazado por el validador o por PostgreSQL, como evento en el span en curso."""
     trace.get_current_span().add_event("sql_invalido", {"agente.origen": origen, "agente.error": error})
@@ -168,6 +185,12 @@ def consulta_sql(sql: str, intentos: int) -> None:
 def trace_id_actual() -> str | None:
     contexto = trace.get_current_span().get_span_context()
     return format_trace_id(contexto.trace_id) if contexto.is_valid else None
+
+
+def span_id_actual() -> str | None:
+    """Id del span en curso: Phoenix anota por span, no por traza."""
+    contexto = trace.get_current_span().get_span_context()
+    return format_span_id(contexto.span_id) if contexto.is_valid else None
 
 
 def configurar_resumen() -> logging.Logger:

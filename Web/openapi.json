@@ -1,0 +1,1420 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "ApiUsuario",
+    "version": "1.0.0"
+  },
+  "paths": {
+    "/health": {
+      "get": {
+        "tags": [
+          "health"
+        ],
+        "summary": "Endpoint para comprobar que la api funciona",
+        "operationId": "get_health_health_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": {
+                    "type": "string"
+                  },
+                  "type": "object",
+                  "title": "Response Get Health Health Get"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/estaciones": {
+      "get": {
+        "tags": [
+          "estaciones"
+        ],
+        "summary": "Catálogo de estaciones de control",
+        "operationId": "get_estaciones_estaciones_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/Estacion"
+                  },
+                  "type": "array",
+                  "title": "Response Get Estaciones Estaciones Get"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/estaciones/{codigo_corto}/series": {
+      "get": {
+        "tags": [
+          "estaciones"
+        ],
+        "summary": "Serie por bloques horarios de una estación",
+        "description": "Bloques (madrugada/manana/tarde/noche) con estadísticos y salida del detector de anomalías, desde `resumen_datos_ml`. Sin fechas, devuelve los últimos 7 días. Interpretar `is_anomaly` solo con `cobertura >= 0.7`.",
+        "operationId": "get_serie_estaciones__codigo_corto__series_get",
+        "parameters": [
+          {
+            "name": "codigo_corto",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Codigo Corto"
+            }
+          },
+          {
+            "name": "contaminante",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/Contaminante",
+              "description": "Uno de los 6 contaminantes objetivo"
+            },
+            "description": "Uno de los 6 contaminantes objetivo"
+          },
+          {
+            "name": "desde",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "date"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Primer día del rango (incluido)",
+              "title": "Desde"
+            },
+            "description": "Primer día del rango (incluido)"
+          },
+          {
+            "name": "hasta",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "date"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Último día del rango (incluido); por defecto, hoy",
+              "title": "Hasta"
+            },
+            "description": "Último día del rango (incluido); por defecto, hoy"
+          },
+          {
+            "name": "bloque",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/Bloque"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Filtrar por un único bloque del día",
+              "title": "Bloque"
+            },
+            "description": "Filtrar por un único bloque del día"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SerieBloques"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/chat": {
+      "post": {
+        "tags": [
+          "chat"
+        ],
+        "summary": "Pregunta en lenguaje natural al asistente",
+        "operationId": "post_chat_chat_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PreguntaChat"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RespuestaChat"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/chat/stream": {
+      "post": {
+        "tags": [
+          "chat"
+        ],
+        "summary": "Pregunta al asistente con la respuesta en streaming (SSE)",
+        "description": "Eventos: status, token, passthrough, error y done (ver README). Con el agente se\nreenvían byte a byte; sin él, la respuesta de `/chat` sale como passthrough + done.\n\nCómo leerlo desde un frontend:\n- El texto llega de una de dos formas, nunca de las dos: como `token` (fragmentos que se\n  concatenan) o como un único `passthrough` con el texto entero.\n- Las fuentes y la advertencia definitivas están en `done`: los `token` no las llevan.\n  `passthrough` también las trae, pero son las mismas; muéstralas una sola vez, las de `done`.\n- `status` solo sirve para el indicador de progreso y puede repetirse (heartbeat).\n- `error` cierra el stream sin `done`: la respuesta no se completó; muestra su `detalle`.\n- Si el stream se corta sin `done` ni `error`, la respuesta está incompleta.",
+        "operationId": "post_chat_stream_chat_stream_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PreguntaChat"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/chat/valoracion": {
+      "post": {
+        "tags": [
+          "chat"
+        ],
+        "summary": "Valoración 👍/👎 del usuario sobre una respuesta del asistente",
+        "description": "Se reenvía al agente. 503 si no la guarda: la web no reintenta, la valoración no es crítica.",
+        "operationId": "post_valoracion_chat_valoracion_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ValoracionChat"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/kpis": {
+      "get": {
+        "tags": [
+          "kpis"
+        ],
+        "summary": "KPIs de uso del asistente en los últimos días",
+        "description": "Devuelve 503 si el servicio falla y 502 si la respuesta no cumple el contrato.",
+        "operationId": "get_kpis_kpis_get",
+        "parameters": [
+          {
+            "name": "dias",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/Dias",
+              "description": "Días hacia atrás",
+              "default": 7
+            },
+            "description": "Días hacia atrás"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Kpis"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "Bloque": {
+        "type": "string",
+        "enum": [
+          "madrugada",
+          "manana",
+          "tarde",
+          "noche"
+        ],
+        "title": "Bloque"
+      },
+      "Calidad": {
+        "properties": {
+          "sintesis_documentales": {
+            "type": "integer",
+            "title": "Sintesis Documentales"
+          },
+          "validas_a_la_primera": {
+            "type": "integer",
+            "title": "Validas A La Primera"
+          },
+          "reparaciones_medias": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reparaciones Medias"
+          },
+          "busquedas_forzadas": {
+            "type": "integer",
+            "title": "Busquedas Forzadas"
+          },
+          "consultas_forzadas": {
+            "type": "integer",
+            "title": "Consultas Forzadas"
+          },
+          "sintesis_forzadas": {
+            "type": "integer",
+            "title": "Sintesis Forzadas",
+            "description": "Cerradas por el código al agotar las vueltas"
+          }
+        },
+        "type": "object",
+        "required": [
+          "sintesis_documentales",
+          "validas_a_la_primera",
+          "reparaciones_medias",
+          "busquedas_forzadas",
+          "consultas_forzadas",
+          "sintesis_forzadas"
+        ],
+        "title": "Calidad"
+      },
+      "Comprobaciones": {
+        "properties": {
+          "turnos_bloqueados": {
+            "type": "integer",
+            "title": "Turnos Bloqueados"
+          },
+          "reglas": {
+            "items": {
+              "$ref": "#/components/schemas/Regla"
+            },
+            "type": "array",
+            "title": "Reglas"
+          }
+        },
+        "type": "object",
+        "required": [
+          "turnos_bloqueados",
+          "reglas"
+        ],
+        "title": "Comprobaciones"
+      },
+      "Contaminante": {
+        "type": "string",
+        "enum": [
+          "NO",
+          "NO2",
+          "NOx",
+          "O3",
+          "PM10",
+          "PM2.5"
+        ],
+        "title": "Contaminante"
+      },
+      "Conteo": {
+        "properties": {
+          "categoria": {
+            "type": "string",
+            "title": "Categoria"
+          },
+          "n": {
+            "type": "integer",
+            "title": "N"
+          }
+        },
+        "type": "object",
+        "required": [
+          "categoria",
+          "n"
+        ],
+        "title": "Conteo"
+      },
+      "Coste": {
+        "properties": {
+          "turnos_con_coste": {
+            "type": "integer",
+            "title": "Turnos Con Coste"
+          },
+          "total_usd": {
+            "type": "number",
+            "title": "Total Usd"
+          },
+          "por_resuelta_usd": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Por Resuelta Usd",
+            "description": "Coste total / turnos resueltos con coste"
+          },
+          "modelos": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Modelos"
+          },
+          "valores_usd": {
+            "items": {
+              "type": "number"
+            },
+            "type": "array",
+            "title": "Valores Usd",
+            "description": "Coste de cada turno, para el histograma"
+          }
+        },
+        "type": "object",
+        "required": [
+          "turnos_con_coste",
+          "total_usd",
+          "por_resuelta_usd",
+          "modelos",
+          "valores_usd"
+        ],
+        "title": "Coste"
+      },
+      "Dia": {
+        "properties": {
+          "dia": {
+            "type": "string",
+            "format": "date",
+            "title": "Dia",
+            "description": "Día en hora de Madrid"
+          },
+          "preguntas": {
+            "type": "integer",
+            "title": "Preguntas"
+          },
+          "resueltas": {
+            "type": "integer",
+            "title": "Resueltas"
+          }
+        },
+        "type": "object",
+        "required": [
+          "dia",
+          "preguntas",
+          "resueltas"
+        ],
+        "title": "Dia"
+      },
+      "Dias": {
+        "type": "integer",
+        "enum": [
+          1,
+          7,
+          30
+        ],
+        "title": "Dias",
+        "description": "Periodos que se pueden pedir. Phoenix retiene 30 días."
+      },
+      "Distribucion": {
+        "properties": {
+          "n": {
+            "type": "integer",
+            "title": "N"
+          },
+          "p50": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "P50"
+          },
+          "p90": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "P90"
+          },
+          "p95": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "P95"
+          }
+        },
+        "type": "object",
+        "required": [
+          "n"
+        ],
+        "title": "Distribucion"
+      },
+      "Estacion": {
+        "properties": {
+          "codigo_corto": {
+            "type": "integer",
+            "title": "Codigo Corto"
+          },
+          "nombre": {
+            "type": "string",
+            "title": "Nombre"
+          },
+          "direccion": {
+            "type": "string",
+            "title": "Direccion"
+          },
+          "tipo": {
+            "type": "string",
+            "title": "Tipo"
+          },
+          "distrito": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Distrito"
+          },
+          "latitud": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Latitud"
+          },
+          "longitud": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Longitud"
+          },
+          "altitud": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Altitud"
+          },
+          "contaminantes_medidos": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Contaminantes Medidos",
+            "default": []
+          }
+        },
+        "type": "object",
+        "required": [
+          "codigo_corto",
+          "nombre",
+          "direccion",
+          "tipo"
+        ],
+        "title": "Estacion"
+      },
+      "FalloHerramienta": {
+        "properties": {
+          "herramienta": {
+            "type": "string",
+            "title": "Herramienta"
+          },
+          "causa": {
+            "type": "string",
+            "title": "Causa",
+            "description": "`agente.estado` del span, o `vetada`"
+          },
+          "fallos": {
+            "type": "integer",
+            "title": "Fallos"
+          }
+        },
+        "type": "object",
+        "required": [
+          "herramienta",
+          "causa",
+          "fallos"
+        ],
+        "title": "FalloHerramienta"
+      },
+      "FuenteChat": {
+        "properties": {
+          "tipo": {
+            "type": "string",
+            "enum": [
+              "sql",
+              "documento"
+            ],
+            "title": "Tipo"
+          },
+          "referencia": {
+            "type": "string",
+            "title": "Referencia"
+          }
+        },
+        "type": "object",
+        "required": [
+          "tipo",
+          "referencia"
+        ],
+        "title": "FuenteChat",
+        "description": "De dónde salió la información: consulta SQL o documento del corpus RAG."
+      },
+      "HTTPValidationError": {
+        "properties": {
+          "detail": {
+            "items": {
+              "$ref": "#/components/schemas/ValidationError"
+            },
+            "type": "array",
+            "title": "Detail"
+          }
+        },
+        "type": "object",
+        "title": "HTTPValidationError"
+      },
+      "Herramientas": {
+        "properties": {
+          "llamadas": {
+            "type": "integer",
+            "title": "Llamadas"
+          },
+          "fallos": {
+            "items": {
+              "$ref": "#/components/schemas/FalloHerramienta"
+            },
+            "type": "array",
+            "title": "Fallos"
+          },
+          "preguntas_de_datos": {
+            "type": "integer",
+            "title": "Preguntas De Datos"
+          },
+          "datos_no_disponibles": {
+            "type": "integer",
+            "title": "Datos No Disponibles",
+            "description": "Preguntas de datos sin base (decisión `datos_no_disponibles`)"
+          }
+        },
+        "type": "object",
+        "required": [
+          "llamadas",
+          "fallos",
+          "preguntas_de_datos",
+          "datos_no_disponibles"
+        ],
+        "title": "Herramientas"
+      },
+      "Kpis": {
+        "properties": {
+          "periodo": {
+            "$ref": "#/components/schemas/Periodo"
+          },
+          "precios": {
+            "type": "string",
+            "title": "Precios",
+            "description": "Fecha y origen de la tabla de precios"
+          },
+          "huerfanas": {
+            "type": "integer",
+            "title": "Huerfanas",
+            "description": "Trazas sin span `turno` (turno cortado o fuera del intervalo)"
+          },
+          "resumen": {
+            "$ref": "#/components/schemas/Resumen"
+          },
+          "por_dia": {
+            "items": {
+              "$ref": "#/components/schemas/Dia"
+            },
+            "type": "array",
+            "title": "Por Dia"
+          },
+          "intenciones": {
+            "items": {
+              "$ref": "#/components/schemas/Conteo"
+            },
+            "type": "array",
+            "title": "Intenciones"
+          },
+          "rutas": {
+            "items": {
+              "$ref": "#/components/schemas/Conteo"
+            },
+            "type": "array",
+            "title": "Rutas"
+          },
+          "temas": {
+            "items": {
+              "$ref": "#/components/schemas/Conteo"
+            },
+            "type": "array",
+            "title": "Temas"
+          },
+          "resultados": {
+            "items": {
+              "$ref": "#/components/schemas/Conteo"
+            },
+            "type": "array",
+            "title": "Resultados",
+            "description": "respondida, frase_fija, sin_evidencia, servicio_no_disponible, bloqueada, error"
+          },
+          "coste": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Coste"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "latencia_por_ruta": {
+            "items": {
+              "$ref": "#/components/schemas/PorRuta"
+            },
+            "type": "array",
+            "title": "Latencia Por Ruta"
+          },
+          "primer_token_por_ruta": {
+            "items": {
+              "$ref": "#/components/schemas/PorRuta"
+            },
+            "type": "array",
+            "title": "Primer Token Por Ruta"
+          },
+          "calidad": {
+            "$ref": "#/components/schemas/Calidad"
+          },
+          "comprobaciones": {
+            "$ref": "#/components/schemas/Comprobaciones"
+          },
+          "herramientas": {
+            "$ref": "#/components/schemas/Herramientas"
+          },
+          "sesiones": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Sesiones"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "null si los spans no llevan `session.id`"
+          },
+          "satisfaccion": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Satisfaccion"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "null si no hay votos en el periodo"
+          }
+        },
+        "type": "object",
+        "required": [
+          "periodo",
+          "precios",
+          "huerfanas",
+          "resumen",
+          "por_dia",
+          "intenciones",
+          "rutas",
+          "temas",
+          "resultados",
+          "coste",
+          "latencia_por_ruta",
+          "primer_token_por_ruta",
+          "calidad",
+          "comprobaciones",
+          "herramientas",
+          "sesiones",
+          "satisfaccion"
+        ],
+        "title": "Kpis"
+      },
+      "Periodo": {
+        "properties": {
+          "dias": {
+            "type": "integer",
+            "title": "Dias"
+          },
+          "desde": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Desde"
+          },
+          "hasta": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Hasta"
+          },
+          "generado": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Generado"
+          }
+        },
+        "type": "object",
+        "required": [
+          "dias",
+          "desde",
+          "hasta",
+          "generado"
+        ],
+        "title": "Periodo"
+      },
+      "PorRuta": {
+        "properties": {
+          "ruta": {
+            "type": "string",
+            "title": "Ruta"
+          },
+          "ms": {
+            "$ref": "#/components/schemas/Distribucion"
+          }
+        },
+        "type": "object",
+        "required": [
+          "ruta",
+          "ms"
+        ],
+        "title": "PorRuta"
+      },
+      "PreguntaChat": {
+        "properties": {
+          "pregunta": {
+            "type": "string",
+            "maxLength": 2000,
+            "minLength": 1,
+            "title": "Pregunta",
+            "description": "Pregunta del usuario en lenguaje natural"
+          },
+          "session_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 64,
+                "minLength": 1,
+                "pattern": "^[A-Za-z0-9_-]+$"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Session Id",
+            "description": "Sesión de la conversación; si no llega, se genera una"
+          }
+        },
+        "type": "object",
+        "required": [
+          "pregunta"
+        ],
+        "title": "PreguntaChat"
+      },
+      "PuntoSerie": {
+        "properties": {
+          "fecha": {
+            "type": "string",
+            "format": "date",
+            "title": "Fecha"
+          },
+          "bloque": {
+            "type": "string",
+            "title": "Bloque"
+          },
+          "media": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Media"
+          },
+          "maximo": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Maximo"
+          },
+          "minimo": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Minimo"
+          },
+          "n_horas": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "N Horas"
+          },
+          "cobertura": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cobertura"
+          },
+          "z_score": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Z Score"
+          },
+          "anomaly_score": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Anomaly Score"
+          },
+          "is_anomaly": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Is Anomaly"
+          }
+        },
+        "type": "object",
+        "required": [
+          "fecha",
+          "bloque"
+        ],
+        "title": "PuntoSerie",
+        "description": "Un bloque horario de un día: estadísticos + salida del detector de anomalías."
+      },
+      "Regla": {
+        "properties": {
+          "regla": {
+            "type": "string",
+            "title": "Regla"
+          },
+          "turnos": {
+            "type": "integer",
+            "title": "Turnos",
+            "description": "Turnos con algún hallazgo de la regla"
+          },
+          "bloqueados": {
+            "type": "integer",
+            "title": "Bloqueados"
+          }
+        },
+        "type": "object",
+        "required": [
+          "regla",
+          "turnos",
+          "bloqueados"
+        ],
+        "title": "Regla"
+      },
+      "RespuestaChat": {
+        "properties": {
+          "respuesta": {
+            "type": "string",
+            "title": "Respuesta"
+          },
+          "fuentes": {
+            "items": {
+              "$ref": "#/components/schemas/FuenteChat"
+            },
+            "type": "array",
+            "title": "Fuentes",
+            "default": []
+          },
+          "advertencia": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Advertencia"
+          },
+          "session_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Session Id"
+          },
+          "traza_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Traza Id",
+            "description": "Traza del turno en el agente; null sin agente"
+          },
+          "span_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Span Id",
+            "description": "Span del turno en el agente, el que recibe la valoración; null sin agente"
+          }
+        },
+        "type": "object",
+        "required": [
+          "respuesta"
+        ],
+        "title": "RespuestaChat"
+      },
+      "Resumen": {
+        "properties": {
+          "preguntas": {
+            "type": "integer",
+            "title": "Preguntas",
+            "description": "Turnos del periodo"
+          },
+          "dias_con_uso": {
+            "type": "integer",
+            "title": "Dias Con Uso"
+          },
+          "resueltas": {
+            "type": "integer",
+            "title": "Resueltas",
+            "description": "Respondidas o con frase fija del código (respuesta correcta por diseño)"
+          },
+          "latencia_ms": {
+            "$ref": "#/components/schemas/Distribucion"
+          },
+          "primer_token_ms": {
+            "$ref": "#/components/schemas/Distribucion",
+            "description": "Solo turnos en streaming con el texto en tokens"
+          },
+          "coste_usd": {
+            "$ref": "#/components/schemas/Distribucion",
+            "description": "Solo turnos con tokens completos y modelo con precio"
+          }
+        },
+        "type": "object",
+        "required": [
+          "preguntas",
+          "dias_con_uso",
+          "resueltas",
+          "latencia_ms",
+          "primer_token_ms",
+          "coste_usd"
+        ],
+        "title": "Resumen"
+      },
+      "Satisfaccion": {
+        "properties": {
+          "votos": {
+            "type": "integer",
+            "title": "Votos"
+          },
+          "positivos": {
+            "type": "integer",
+            "title": "Positivos"
+          },
+          "por_ruta": {
+            "items": {
+              "$ref": "#/components/schemas/Votos"
+            },
+            "type": "array",
+            "title": "Por Ruta"
+          },
+          "por_tema": {
+            "items": {
+              "$ref": "#/components/schemas/Votos"
+            },
+            "type": "array",
+            "title": "Por Tema"
+          },
+          "sesiones_elegibles": {
+            "type": "integer",
+            "title": "Sesiones Elegibles",
+            "description": "Sesiones con 2 o más respuestas completas: pueden ver el aviso"
+          },
+          "sesiones_con_voto": {
+            "type": "integer",
+            "title": "Sesiones Con Voto"
+          }
+        },
+        "type": "object",
+        "required": [
+          "votos",
+          "positivos",
+          "por_ruta",
+          "por_tema",
+          "sesiones_elegibles",
+          "sesiones_con_voto"
+        ],
+        "title": "Satisfaccion"
+      },
+      "SerieBloques": {
+        "properties": {
+          "estacion": {
+            "type": "integer",
+            "title": "Estacion"
+          },
+          "contaminante": {
+            "type": "string",
+            "title": "Contaminante"
+          },
+          "desde": {
+            "type": "string",
+            "format": "date",
+            "title": "Desde"
+          },
+          "hasta": {
+            "type": "string",
+            "format": "date",
+            "title": "Hasta"
+          },
+          "puntos": {
+            "items": {
+              "$ref": "#/components/schemas/PuntoSerie"
+            },
+            "type": "array",
+            "title": "Puntos"
+          }
+        },
+        "type": "object",
+        "required": [
+          "estacion",
+          "contaminante",
+          "desde",
+          "hasta",
+          "puntos"
+        ],
+        "title": "SerieBloques"
+      },
+      "Sesiones": {
+        "properties": {
+          "sesiones": {
+            "type": "integer",
+            "title": "Sesiones"
+          },
+          "turnos_mediana": {
+            "type": "number",
+            "title": "Turnos Mediana"
+          },
+          "turnos_maximo": {
+            "type": "integer",
+            "title": "Turnos Maximo"
+          },
+          "de_un_turno": {
+            "type": "integer",
+            "title": "De Un Turno"
+          },
+          "duracion_s": {
+            "$ref": "#/components/schemas/Distribucion",
+            "description": "Sesiones con 2 o más turnos"
+          },
+          "turnos_con_previo": {
+            "type": "integer",
+            "title": "Turnos Con Previo",
+            "description": "Turnos que no abren su sesión"
+          },
+          "tras_rechazo": {
+            "type": "integer",
+            "title": "Tras Rechazo",
+            "description": "Turnos tras un rechazo (reformulación)"
+          },
+          "resueltos_tras_rechazo": {
+            "type": "integer",
+            "title": "Resueltos Tras Rechazo",
+            "description": "De ellos, resueltos: el rechazo pudo ser evitable"
+          }
+        },
+        "type": "object",
+        "required": [
+          "sesiones",
+          "turnos_mediana",
+          "turnos_maximo",
+          "de_un_turno",
+          "duracion_s",
+          "turnos_con_previo",
+          "tras_rechazo",
+          "resueltos_tras_rechazo"
+        ],
+        "title": "Sesiones"
+      },
+      "ValidationError": {
+        "properties": {
+          "loc": {
+            "items": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer"
+                }
+              ]
+            },
+            "type": "array",
+            "title": "Location"
+          },
+          "msg": {
+            "type": "string",
+            "title": "Message"
+          },
+          "type": {
+            "type": "string",
+            "title": "Error Type"
+          },
+          "input": {
+            "title": "Input"
+          },
+          "ctx": {
+            "type": "object",
+            "title": "Context"
+          }
+        },
+        "type": "object",
+        "required": [
+          "loc",
+          "msg",
+          "type"
+        ],
+        "title": "ValidationError"
+      },
+      "ValoracionChat": {
+        "properties": {
+          "session_id": {
+            "type": "string",
+            "maxLength": 64,
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9_-]+$",
+            "title": "Session Id"
+          },
+          "traza_id": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{32}$",
+            "title": "Traza Id"
+          },
+          "span_id": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{16}$",
+            "title": "Span Id"
+          },
+          "valor": {
+            "type": "string",
+            "enum": [
+              "positiva",
+              "negativa"
+            ],
+            "title": "Valor"
+          }
+        },
+        "type": "object",
+        "required": [
+          "session_id",
+          "traza_id",
+          "span_id",
+          "valor"
+        ],
+        "title": "ValoracionChat",
+        "description": "👍/👎 del usuario sobre un turno del agente, con los ids que devolvió ese turno."
+      },
+      "Votos": {
+        "properties": {
+          "grupo": {
+            "type": "string",
+            "title": "Grupo"
+          },
+          "positivos": {
+            "type": "integer",
+            "title": "Positivos"
+          },
+          "votos": {
+            "type": "integer",
+            "title": "Votos"
+          }
+        },
+        "type": "object",
+        "required": [
+          "grupo",
+          "positivos",
+          "votos"
+        ],
+        "title": "Votos"
+      }
+    }
+  }
+}

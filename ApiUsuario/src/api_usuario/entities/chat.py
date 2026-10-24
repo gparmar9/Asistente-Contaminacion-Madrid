@@ -29,3 +29,14 @@ class RespuestaChat(BaseModel):
     advertencia: str | None = None
     session_id: str | None = None
     traza_id: str | None = Field(default=None, description="Traza del turno en el agente; null sin agente")
+    span_id: str | None = Field(default=None, description="Span del turno en el agente, el que recibe la valoración; "
+                                                          "null sin agente")
+
+
+class ValoracionChat(BaseModel):
+    """👍/👎 del usuario sobre un turno del agente, con los ids que devolvió ese turno."""
+
+    session_id: str = Field(min_length=1, max_length=64, pattern=r"^[A-Za-z0-9_-]+$")
+    traza_id: str = Field(pattern=r"^[0-9a-f]{32}$")
+    span_id: str = Field(pattern=r"^[0-9a-f]{16}$")
+    valor: Literal["positiva", "negativa"]

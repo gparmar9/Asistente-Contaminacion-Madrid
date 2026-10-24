@@ -1,0 +1,23 @@
+# Servicio de systemd: levanta la API cada vez que arranca la EC2.
+# Se instala en /etc/systemd/system/ desde user-data.sh.
+[Unit]
+Description=Jupiter: aplicación en contenedores (web, api-usuario, agente, rag, phoenix)
+Requires=docker.service
+After=docker.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+WorkingDirectory=/opt/jupiter
+# Descarga arrancar.sh de S3 para aplicar los despliegues hechos con la EC2 apagada.
+# El prefijo "-" permite continuar con la copia local si falla la descarga.
+ExecStartPre=-/usr/bin/aws s3 cp s3://jupiter-calidad-aire-madrid/ec2/arrancar.sh /opt/jupiter/arrancar.sh --region eu-west-1 --only-show-errors
+ExecStartPre=/usr/bin/chmod 700 /opt/jupiter/arrancar.sh
+ExecStart=/opt/jupiter/arrancar.sh
+ExecStop=/usr/bin/docker compose --env-file /opt/jupiter/versiones.env -f /opt/jupiter/compose.yml down
+# La primera vez descarga ~3 GB de imágenes.
+TimeoutStartSec=900
+
+[Install]
+WantedBy=multi-user.target

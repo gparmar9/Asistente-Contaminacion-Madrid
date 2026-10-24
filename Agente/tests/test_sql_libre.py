@@ -42,10 +42,11 @@ async def test_resultado_con_mas_filas_que_el_tope_avisa_de_truncado(bd_medicion
 async def test_sin_periodo_en_la_pregunta_se_dice_todo_el_historico(bd_mediciones, spans):
     # Sin periodo, la síntesis se inventaba la ventana («últimos 12 meses» con los 2 años)
     sql = "SELECT nombre_estacion, media FROM mediciones_bloques WHERE contaminante = 'NO2'"
-    _, herramienta = herramienta_datos(bd_mediciones, [texto(sql)])
+    llm_sql, herramienta = herramienta_datos(bd_mediciones, [texto(sql)])
     r = await herramienta.ejecutar({"pregunta": "¿Qué estación tiene más NO2?"})
 
     assert r.ok and r.datos["periodo"] == "todo el histórico: del 2024-04-30 al 2026-04-30"
+    assert "Usa todo el histórico, sin filtrar por fecha" in llm_sql.registro[0]["mensajes"][-1].content
 
 
 async def test_periodo_fuera_de_las_mediciones_responde_sin_datos_sin_redactor(bd_mediciones, spans):

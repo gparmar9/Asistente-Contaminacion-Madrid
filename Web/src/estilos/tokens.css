@@ -1,0 +1,143 @@
+/* Tokens de diseño del frontend.
+ *
+ * Una sola fuente de verdad para color, tipografía y espaciado. Paleta «cielo»
+ * (azul cielo + slate, alineada con la landing de AireMadrid). El modo oscuro
+ * define sus PROPIOS valores (slate nocturno): no es un filtro invertido.
+ * La paleta de estado (good/warning/serious/critical) es fija en ambos modos y
+ * se reserva para el ESTADO DE ANOMALÍA; nunca para bandas de calidad del aire.
+ */
+:root {
+  color-scheme: light;
+
+  /* Superficies y tinta (slate sobre fondo azul muy pálido) */
+  --plano: #f0f9ff;
+  --superficie: #ffffff;
+  --superficie-2: #e0f2fe;
+  --tinta-1: #0f172a;
+  --tinta-2: #475569;
+  --apagado: #64748b;
+  --rejilla: #e2e8f0;
+  --linea-base: #cbd5e1;
+  --borde: rgba(15, 23, 42, 0.08);
+  --borde-fuerte: rgba(15, 23, 42, 0.2);
+
+  /* Fondo de la cabecera y la navegación (translúcido, con blur en el CSS) */
+  --superficie-nav: rgba(255, 255, 255, 0.82);
+
+  /* Dato principal (una sola serie) */
+  --dato: #2563eb;
+  --dato-suave: #dbeafe;
+  --sobre-dato: #ffffff;
+
+  /* Botones y enlaces */
+  --interactivo: #0284c7;
+  --interactivo-hover: #0369a1;
+  --sobre-interactivo: #ffffff;
+
+  /* Acento decorativo y degradado de marca (cielo) */
+  --acento: #38bdf8;
+  --grad-cielo: linear-gradient(135deg, #38bdf8 0%, #2563eb 100%);
+  --hero-degradado: linear-gradient(180deg, #ffffff 0%, #e0f2fe 100%);
+
+  /* Categóricos: comparar estaciones (máximo 3, orden fijo) */
+  --cat-1: #2563eb;
+  --cat-2: #eb6834;
+  --cat-3: #1baf7a;
+
+  /* Rampa secuencial: magnitud (heatmap). Orden canónico claro → oscuro */
+  --seq-1: #dbeafe;
+  --seq-2: #bfdbfe;
+  --seq-3: #93c5fd;
+  --seq-4: #60a5fa;
+  --seq-5: #3b82f6;
+  --seq-6: #2563eb;
+  --seq-7: #1d4ed8;
+
+  /* Pasos del heatmap según el tema: --heat-1 = "bajo" … --heat-7 = "alto".
+     En claro, más = más oscuro. En oscuro se invierte el orden de los mismos
+     pasos para que más = más luminoso y el valor alto no desaparezca sobre el fondo. */
+  --heat-1: var(--seq-1);
+  --heat-2: var(--seq-2);
+  --heat-3: var(--seq-3);
+  --heat-4: var(--seq-4);
+  --heat-5: var(--seq-5);
+  --heat-6: var(--seq-6);
+  --heat-7: var(--seq-7);
+
+  /* Estado de anomalía (fijo, con icono y texto siempre) */
+  --good: #16a34a;
+  --warning: #f59e0b;
+  --serious: #ec835a;
+  --critical: #ef4444;
+
+  /* Forma (radios y sombras suaves de la landing) */
+  --sombra: 0 1px 3px rgba(15, 23, 42, 0.08), 0 10px 30px rgba(15, 23, 42, 0.06);
+  --radio: 16px;
+  --radio-s: 10px;
+  --radio-xs: 4px;
+
+  /* Tipografía: sin fuente display; tabular-nums solo en tablas y ticks */
+  --fuente: system-ui, -apple-system, "Segoe UI", sans-serif;
+  --fuente-mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  --t-xs: 11px;
+  --t-s: 12px;
+  --t-base: 14px;
+  --t-m: 16px;
+  --t-l: 20px;
+  --t-xl: 26px;
+  --t-hero: 56px;
+
+  /* Espaciado (un poco más de aire entre bloques que la paleta original) */
+  --e-1: 4px;
+  --e-2: 8px;
+  --e-3: 12px;
+  --e-4: 16px;
+  --e-5: 24px;
+  --e-6: 36px;
+  --e-7: 48px;
+
+  --ancho-max: 1200px;
+}
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
+
+  --plano: #0b1220;
+  --superficie: #131e33;
+  --superficie-2: #1d2c49;
+  --tinta-1: #f1f5f9;
+  --tinta-2: #b6c2d4;
+  --apagado: #8294ab;
+  --rejilla: #223150;
+  --linea-base: #2c3d60;
+  --borde: rgba(255, 255, 255, 0.08);
+  --borde-fuerte: rgba(255, 255, 255, 0.22);
+
+  --superficie-nav: rgba(11, 18, 32, 0.82);
+
+  --dato: #60a5fa;
+  --dato-suave: #1e3a8a;
+  --sobre-dato: #0b1220;
+  --interactivo: #38bdf8;
+  --interactivo-hover: #7dd3fc;
+  --sobre-interactivo: #082f49;
+
+  --acento: #0ea5e9;
+  --grad-cielo: linear-gradient(135deg, #0ea5e9 0%, #2563eb 100%);
+  --hero-degradado: linear-gradient(180deg, #131e33 0%, #1a2a4a 100%);
+
+  /* Categóricos validados sobre #131e33 */
+  --cat-1: #60a5fa;
+  --cat-2: #fb923c;
+  --cat-3: #34d399;
+
+  --heat-1: var(--seq-7);
+  --heat-2: var(--seq-6);
+  --heat-3: var(--seq-5);
+  --heat-4: var(--seq-4);
+  --heat-5: var(--seq-3);
+  --heat-6: var(--seq-2);
+  --heat-7: var(--seq-1);
+
+  --sombra: none;
+}

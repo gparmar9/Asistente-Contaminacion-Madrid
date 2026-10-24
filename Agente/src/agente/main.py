@@ -1,4 +1,6 @@
-"""Servicio del agente LLM: FastAPI con /salud, POST /responder y POST /responder/stream (SSE).
+"""Servicio del agente LLM: FastAPI con /salud, POST /responder, POST /responder/stream (SSE),
+POST /valoracion (👍/👎 del usuario, anotado en Phoenix sobre el span del turno) y GET /kpis
+(KPIs de uso calculados con los spans de Phoenix, sin texto de usuarios).
 
 Un turno a la vez por sesión (`business/sesiones.py`): una segunda pregunta de la misma sesión
 espera a que termine la primera. Los dos endpoints comparten sesión, bloqueo, memoria y log del turno.
@@ -18,22 +20,28 @@ import time
 from contextlib import asynccontextmanager
 from uuid import uuid4
 
-from fastapi import Depends, FastAPI, HTTPException, Request
+from fastapi import Depends, FastAPI, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
 
 from agente import observabilidad
 from agente.api import sse
 from agente.business.bucle import Bucle, LLMNoDisponible, ResultadoTurno
+from agente.business.kpis import ServicioKpis
 from agente.business.memoria import ventana
 from agente.business.sesiones import Sesiones
 from agente.config.settings import Settings, get_settings
 from agente.business.redactor_sql import RedactorSQL
+from agente.business.selector_catalogo import SelectorCatalogo
 from agente.datos.mediciones import Mediciones, crear_motor
 from agente.datos.memoria import AlmacenConversaciones, AlmacenEnMemoria
-from agente.entities.chat import Pregunta, Respuesta
+from agente.datos.phoenix import LectorPhoenix, PhoenixNoDisponible
+from agente.datos.valoraciones import AnotadorPhoenix
+from agente.entities.chat import Pregunta, Respuesta, Valoracion
 from agente.entities.eventos import Emisor, EventoEstado, Fase
+from agente.entities.kpis import Dias, Kpis
 from agente.entities.memoria import TurnoGuardado
 from agente.llm.cliente import ConfiguracionLLMInvalida, crear_llm
+from agente.tools.catalogo import HerramientaCatalogo
 from agente.tools.prediccion import HerramientaPrediccion
 from agente.tools.rag import HerramientaRag
 from agente.tools.sql_libre import HerramientaDatos
@@ -42,6 +50,9 @@ logger = logging.getLogger("agente")
 log_turnos = observabilidad.configurar_resumen()
 
 settings = get_settings()
+
+VALORACION_NO_DISPONIBLE = "La valoración no está disponible en este momento"
+KPIS_NO_DISPONIBLES = "Los KPIs no están disponibles: no se pudo leer Phoenix"
 
 
 def construir_bucle(settings: Settings = settings) -> Bucle | None:
@@ -61,8 +72,14 @@ def construir_bucle(settings: Settings = settings) -> Bucle | None:
         logger.warning("RAG_URL vacía: el agente no tendrá la herramienta documental")
     if settings.database_url:
         mediciones = Mediciones(crear_motor(settings.database_url, settings.db_timeout_s), settings.db_max_filas)
-        herramientas.append(HerramientaDatos(mediciones, RedactorSQL(llm_sql, settings.db_max_filas),
-                                             settings.fecha_referencia, settings.db_max_filas))
+        if settings.herramienta_datos == "catalogo":
+            herramientas.append(HerramientaCatalogo(mediciones, SelectorCatalogo(llm_sql), settings.fecha_referencia,
+                                                    settings.db_max_filas))
+        else:
+            if settings.herramienta_datos != "libre":
+                logger.warning("HERRAMIENTA_DATOS=%r no existe: se usa el SQL libre", settings.herramienta_datos)
+            herramientas.append(HerramientaDatos(mediciones, RedactorSQL(llm_sql, settings.db_max_filas),
+                                                 settings.fecha_referencia, settings.db_max_filas))
     else:
         logger.warning("DATABASE_URL vacía: las preguntas de datos recibirán la frase de datos no disponibles")
     if settings.prediccion_url:
@@ -82,6 +99,9 @@ async def lifespan(app_: FastAPI):
     app_.state.bucle = construir_bucle()
     app_.state.sesiones = Sesiones()
     app_.state.memoria = AlmacenEnMemoria(settings.memoria_max_turnos, settings.memoria_ttl_h * 3600)
+    app_.state.anotador = AnotadorPhoenix(settings.phoenix_url) if settings.phoenix_url else None
+    app_.state.kpis = (ServicioKpis(LectorPhoenix(settings.phoenix_url), settings.phoenix_proyecto)
+                       if settings.phoenix_url else None)
     yield
     observabilidad.cerrar()
 
@@ -106,6 +126,14 @@ def get_memoria(request: Request) -> AlmacenConversaciones:
     return request.app.state.memoria
 
 
+def get_anotador(request: Request) -> AnotadorPhoenix | None:
+    return getattr(request.app.state, "anotador", None)
+
+
+def get_kpis(request: Request) -> ServicioKpis | None:
+    return getattr(request.app.state, "kpis", None)
+
+
 @app.get("/salud", summary="Estado del servicio")
 def salud() -> dict:
     return {
@@ -117,6 +145,7 @@ def salud() -> dict:
         "rag_url": settings.rag_url or None,
         "prediccion_url": settings.prediccion_url or None,
         "datos": bool(settings.database_url),  # la URL lleva la contraseña: no se publica
+        "herramienta_datos": settings.herramienta_datos if settings.database_url else None,
     }
 
 
@@ -131,7 +160,8 @@ async def responder(entrada: Pregunta, bucle: Bucle | None = Depends(get_bucle),
     except LLMNoDisponible as exc:
         raise HTTPException(status_code=503, detail=sse.NO_DISPONIBLE) from exc
     return Respuesta(respuesta=resultado.respuesta, fuentes=resultado.fuentes,
-                     advertencia=resultado.advertencia, traza_id=resultado.traza_id, session_id=session_id)
+                     advertencia=resultado.advertencia, traza_id=resultado.traza_id, span_id=resultado.span_id,
+                     session_id=session_id)
 
 
 @app.post("/responder/stream", summary="Pregunta al agente con la respuesta en streaming (SSE)",
@@ -150,6 +180,30 @@ async def responder_stream(entrada: Pregunta, bucle: Bucle | None = Depends(get_
     return StreamingResponse(
         sse.eventos(turno, session_id, settings.stream_heartbeat_s, settings.stream_cola),
         media_type="text/event-stream", headers=sse.CABECERAS)
+
+
+@app.post("/valoracion", status_code=204, summary="Valoración 👍/👎 del usuario sobre un turno")
+async def valorar(entrada: Valoracion, anotador: AnotadorPhoenix | None = Depends(get_anotador)) -> None:
+    """Se anota en Phoenix. Sin Phoenix (configurado o accesible), 503: la web la da por perdida."""
+    if anotador is None:
+        raise HTTPException(status_code=503, detail=VALORACION_NO_DISPONIBLE)
+    try:
+        await anotador.anotar(entrada)
+    except PhoenixNoDisponible as exc:
+        raise HTTPException(status_code=503, detail=VALORACION_NO_DISPONIBLE) from exc
+    log_turnos.info("valoracion traza=%s valor=%s", entrada.traza_id, entrada.valor)
+
+
+@app.get("/kpis", response_model=Kpis, summary="KPIs de uso del asistente en los últimos días")
+async def kpis(dias: Dias = Query(Dias.SIETE, description="Días hacia atrás"),
+               servicio: ServicioKpis | None = Depends(get_kpis)) -> Kpis:
+    """KPIs con caché de 60 s. Devuelve 503 si Phoenix no está disponible."""
+    if servicio is None:
+        raise HTTPException(status_code=503, detail=KPIS_NO_DISPONIBLES)
+    try:
+        return await servicio.obtener(int(dias))
+    except PhoenixNoDisponible as exc:
+        raise HTTPException(status_code=503, detail=KPIS_NO_DISPONIBLES) from exc
 
 
 def _comprobar_llm(bucle: Bucle | None) -> None:
@@ -172,7 +226,8 @@ async def _turno_en_sesion(bucle: Bucle, sesiones: Sesiones, session_id: str, pr
             historial = []
             if memoria is not None:
                 historial = ventana(await memoria.cargar(session_id), settings.memoria_presupuesto_tokens)
-            resultado = await bucle.responder(pregunta, emitir, historial)
+            with observabilidad.sesion(session_id):
+                resultado = await bucle.responder(pregunta, emitir, historial)
             if memoria is not None:
                 await memoria.guardar(session_id, _turno_guardado(pregunta, resultado))
     except LLMNoDisponible:
