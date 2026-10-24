@@ -7,13 +7,13 @@
 # raíz del repositorio. Se puede repetir: lo que ya existe se salta o se actualiza.
 #
 # Crea o actualiza:
-#   1. 4 repositorios de ECR (jupiter-web, -api-usuario, -agente, -rag), con limpieza automática
+#   1. 5 repositorios de ECR (jupiter-web, -api-usuario, -agente, -rag, -prediccion), con limpieza automática
 #   2. El rol de la EC2 (jupiter-ec2-api) y su perfil de instancia
 #   3. Los permisos nuevos de los roles de GitHub Actions (despliegue y entorno)
 #   4. El grupo de seguridad jupiter-api-sg: puerto 80 abierto solo a tu IP
 #   5. Los parámetros del agente en SSM (/jupiter/agente/llm_modelo y llm_modelo_clasificador)
 #   6. Los ficheros de arranque en s3://jupiter-calidad-aire-madrid/ec2/
-# No crea la EC2: eso es 2_crear_ec2.ps1, después de desplegar las 4 imágenes.
+# No crea la EC2: eso es 2_crear_ec2.ps1, después de desplegar las 5 imágenes.
 param(
     [string]$MiIp = ""
 )
@@ -22,7 +22,7 @@ $PSNativeCommandUseErrorActionPreference = $true   # un comando aws que falla de
 $Env:AWS_DEFAULT_REGION = "eu-west-1"
 
 $Bucket = "jupiter-calidad-aire-madrid"
-$Servicios = "web", "api-usuario", "agente", "rag"
+$Servicios = "web", "api-usuario", "agente", "rag", "prediccion"
 $ModeloAgente = "mistral.ministral-3-14b-instruct"
 $ModeloClasificador = "openai.gpt-oss-120b-1:0"
 
@@ -87,7 +87,7 @@ aws iam put-role-policy --role-name jupiter-github-actions-deploy --policy-name 
     --policy-document file://deploy/iam/permisos-github-actions.json
 aws iam put-role-policy --role-name jupiter-github-actions-entorno --policy-name encender-entorno `
     --policy-document file://deploy/iam/permisos-github-entorno.json
-Write-Host "Despliegue: ECR de los 4 servicios, versiones en SSM, ficheros en S3 y comandos en la EC2"
+Write-Host "Despliegue: ECR de los 5 servicios, versiones en SSM, ficheros en S3 y comandos en la EC2"
 Write-Host "Entorno: encender y apagar también la EC2"
 
 # --- 4. Grupo de seguridad --------------------------------------------------------------------

@@ -506,10 +506,10 @@ y `preparar_dataset` descarta una `MEDIA_ESPERADA` precalculada en la entrada (l
 rompía la inferencia con el parquet). 21 tests nuevos (motor + contrato HTTP, sin base de datos ni
 sklearn: lector inyectado y modelos dobles); suite unit 150 en verde.
 
-**Pendiente:** cerrar el criterio de éxito con el equipo; el cliente del agente (herramienta fina
-tipo `tools/rag.py`, cambio de la frase fija en `intencion.py` y `periodos.py` con expresiones de
-futuro, donde «mañana» exige desambiguar día frente a bloque matinal); y el despliegue del servicio
-(Dockerfile + compose, como el RAG). Trabajo futuro: valorar predecir la **probabilidad de superar
+**Pendiente:** cerrar el criterio de éxito con el equipo. El cliente del agente
+(`Agente/src/agente/tools/prediccion.py`, con las fechas de futuro resueltas en código) y la imagen
+(`deploy/Dockerfile.prediccion`) ya existen; el despliegue en la EC2 está preparado (§8.9) y queda
+aplicarlo en AWS `[por confirmar]`. Trabajo futuro: valorar predecir la **probabilidad de superar
 un umbral** (aviso de episodio), que es lo que más piden los usuarios y donde la persistencia no
 ayuda.
 
@@ -1983,7 +1983,8 @@ equipo la encendía a mano para trabajar o hacer una demo.
   `[estimación]`. Se apagaba cada noche a la 01:30 (`jupiter-ec2-apagar`); **desde el 2026-10-23,
   encendida siempre** para la entrega, con esa programación desactivada (no borrada). Unos
   32 $/mes más mientras dure `[estimación: 0,045 $/h × 720 h]`.
-- **Un contenedor por servicio** (`web`, `api-usuario`, `agente`, `rag`), con las imágenes de ECR
+- **Un contenedor por servicio** (`web`, `api-usuario`, `agente`, `rag` y, desde el 2026-10-24,
+  `prediccion`), con las imágenes de ECR
   y la versión activa de cada uno en SSM (`/jupiter/versiones/<servicio>`): se despliega o se
   vuelve atrás una pieza sin tocar las demás. La máquina no construye nada. El `LLMOrchestrator`
   no se despliega (descartado, §2). Desde el 2026-10-23, un quinto contenedor, `phoenix`, con
@@ -2039,7 +2040,17 @@ equipo la encendía a mano para trabajar o hacer una demo.
   las trazas crecen (aceptado; lo vigilará una alarma de disco). Memoria: unos 450-500 MB en
   reposo, medidos en local; con los cuatro contenedores y el modelo del RAG cargado la EC2 usaba
   1279 MB de 3835, así que cabe sin cambiar de instancia `[estimación: suma de medidas]`.
-  **Pendiente de aplicar en AWS** `[por confirmar]`.
+  Aplicado en AWS el 2026-10-23 (§12).
+- **Predicción** (contenedor `prediccion`, preparado el 2026-10-24): imagen sin torch, con los dos
+  modelos dentro (h1 y h2, ~5 MB). Lee la vista `mediciones_bloques` con el **mismo usuario de solo
+  lectura que el agente**: `arrancar.sh` copia su `DATABASE_URL` de `/jupiter/agente/database_url`,
+  sin parámetro nuevo en SSM. Descartado usar la conexión de `api-usuario` (no es de solo lectura).
+  El agente lo llama por `http://prediccion:8011` y **no espera a que esté sano**: si la predicción
+  cae, el resto del chat sigue y la herramienta deja de ofrecerse. Requiere un repositorio de ECR
+  más y ese repositorio en los permisos de GitHub y de la EC2 (`deploy/aws/4_prediccion.ps1`).
+  Probado contra la RDS con el usuario de solo lectura: último día completo 2026-10-23, predecible
+  hasta el 2026-10-25; NO₂ de mañana, 92 filas (23 estaciones × 4 bloques), entre 1 y 3 s por
+  consulta. `[por confirmar: despliegue en la EC2 y pregunta real en el chat]`
 - **Verificado en AWS (2026-10-13):** web (200), `/estaciones` desde RDS y chat de punta a punta
   con Bedrock: pregunta documental con cita `[D1]` validada por el RAG (18 s) y pregunta de datos
   por SQL con el rol `agente_lectura` (5,6 s; media de NO₂ en Plaza de España, 29,3 µg/m³ en 27
@@ -2609,6 +2620,7 @@ equipo la encendía a mano para trabajar o hacer una demo.
 | 2026-10-23 | **Ingesta por franjas aplicada en AWS** (Guille con Claude Code): desactivadas `jupiter-rds-encender`, `jupiter-rds-apagar` y, para la entrega, `jupiter-ec2-apagar`; RDS y EC2 quedan siempre encendidas. Lambda desplegada desde `main` y `jupiter-pipeline-diario` cambiada a `cron(45 7,13,20,23 * * ? *)`. `--reprocesar 2026-09-16`: 15.869 bloques reescritos; la noche pasa del 7,19 % al **0,74 %** de bloques marcados y su cobertura media de 0,75 a 0,989 (§6.5 bis). Invocación manual a media tarde: 214 bloques (madrugada y mañana; la tarde, abierta, no se escribe), 0 anomalías, 23 estaciones, frente a las 107 anomalías de la tarde a medias en la prueba de las 16:07 |
 | 2026-10-23 | **Web pública para la corrección del TFM** (Guille con Claude Code, rama `feature/web-publica`): script `deploy/aws/3_web_publica.ps1` que crea una IP elástica para la EC2 y la asocia, borra la contraseña de la web (`/phoenix/` pasa a 403 para todos) y crea el presupuesto diario `jupiter-bedrock-diario` (2 $/día, correo al 80 % y al 100 %); después, «Desplegar → `web`». Sin cambios de código: el acceso sin contraseña ya estaba previsto en `arrancar.sh`. Guía de despliegue y workflow «Encender entorno» actualizados (la IP ya no cambia). Validado sin AWS: sintaxis del script y JSON del presupuesto. Aplicado el mismo día: IP elástica asociada a la EC2 y «Desplegar → `web`» desde `main`; desde fuera, la web y `/api/estaciones` responden 200 sin contraseña y `https://` agota el tiempo (443 cerrado), así que el enlace se da con `http://` delante. `[por confirmar: presupuesto creado y correo de suscripción recibido]` |
 | 2026-10-23 | **Subdominio de la web** (Guille con Claude Code, rama `feature/readme-simplificado`): `madrid-respira.duckdns.org`, gratuito, apuntando a la IP elástica de la EC2, dado de alta a mano en DuckDNS. Comprobado desde fuera: resuelve a la IP elástica, la web y `/api/estaciones` responden 200 sin contraseña y `/phoenix/` 403. URL en el README y en la guía de despliegue |
+| 2026-10-24 | **Predicción preparada para producción** (Guille con Claude Code, rama `feature/prediccion-produccion`): contenedor `prediccion` en el compose de la EC2, `arrancar.sh` (le pasa la conexión de solo lectura del agente), «Desplegar» y «Rollback» con el componente `prediccion`, el repositorio `jupiter-prediccion` en los permisos de GitHub y de la EC2 y el script `deploy/aws/4_prediccion.ps1`. Hallazgo: `api-usuario` solo aceptaba fuentes `sql` y `documento`, así que `/chat` habría respondido 502 a toda pregunta de predicción y la web habría descartado su fuente; corregido el contrato (OpenAPI y tipos regenerados) y la web muestra el grupo «Estimación del modelo de predicción». Tests: ApiUsuario 35, web 61 (lint y build), raíz 178, agente 207. Motor probado contra la RDS (ver §8.9). `[por confirmar: aplicado en AWS]` |
 
 ---
 

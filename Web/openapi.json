@@ -669,7 +669,8 @@
             "type": "string",
             "enum": [
               "sql",
-              "documento"
+              "documento",
+              "prediccion"
             ],
             "title": "Tipo"
           },
@@ -684,7 +685,7 @@
           "referencia"
         ],
         "title": "FuenteChat",
-        "description": "De dónde salió la información: consulta SQL o documento del corpus RAG."
+        "description": "De dónde salió la información: consulta SQL, documento del corpus RAG o predicción del modelo."
       },
       "HTTPValidationError": {
         "properties": {

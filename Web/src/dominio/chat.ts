@@ -82,13 +82,15 @@ export function interpretarEventoChat({ evento, datos }: EventoSSE): EventoChat 
   }
 }
 
+const TIPOS_FUENTE: readonly FuenteChat['tipo'][] = ['sql', 'documento', 'prediccion']
+
 function fuentesDe(d: Record<string, unknown>): FuenteChat[] {
   if (!Array.isArray(d.fuentes)) return []
   return d.fuentes.filter(
     (f): f is FuenteChat =>
       f !== null &&
       typeof f === 'object' &&
-      ((f as FuenteChat).tipo === 'sql' || (f as FuenteChat).tipo === 'documento') &&
+      TIPOS_FUENTE.includes((f as FuenteChat).tipo) &&
       typeof (f as FuenteChat).referencia === 'string',
   )
 }

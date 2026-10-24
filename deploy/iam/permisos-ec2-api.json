@@ -19,7 +19,8 @@
         "arn:aws:ecr:eu-west-1:*:repository/jupiter-web",
         "arn:aws:ecr:eu-west-1:*:repository/jupiter-api-usuario",
         "arn:aws:ecr:eu-west-1:*:repository/jupiter-agente",
-        "arn:aws:ecr:eu-west-1:*:repository/jupiter-rag"
+        "arn:aws:ecr:eu-west-1:*:repository/jupiter-rag",
+        "arn:aws:ecr:eu-west-1:*:repository/jupiter-prediccion"
       ]
     },
     {
