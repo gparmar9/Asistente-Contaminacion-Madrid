@@ -1,7 +1,7 @@
 import { mensajeErrorChat } from '../../api/errores'
 import type { ConsultaChat } from '../../dominio/chat'
 import { Espera } from './Espera'
-import { Fuentes } from './Fuentes'
+import { FuentesCitadas } from './Fuentes'
 import { TextoConCitas } from './TextoConCitas'
 
 interface Props {
@@ -23,7 +23,7 @@ export function Consulta({ consulta, onReintentar }: Props) {
 
         {estado.tipo === 'recibiendo' && (
           <div className="tarjeta respuesta-recibiendo" aria-live="off">
-            <TextoConCitas texto={estado.texto} fuentes={[]} idRespuesta={id} />
+            <TextoConCitas texto={estado.texto} sinCitas />
           </div>
         )}
 
@@ -43,8 +43,8 @@ export function Consulta({ consulta, onReintentar }: Props) {
 
         {estado.tipo === 'ok' && (
           <div className="tarjeta">
-            <TextoConCitas texto={estado.respuesta.respuesta} fuentes={estado.respuesta.fuentes ?? []} idRespuesta={id} />
-            <Fuentes fuentes={estado.respuesta.fuentes ?? []} texto={estado.respuesta.respuesta} idRespuesta={id} />
+            <TextoConCitas texto={estado.respuesta.respuesta} sinCitas />
+            <FuentesCitadas fuentes={estado.respuesta.fuentes ?? []} />
             {estado.respuesta.advertencia && (
               <p className="t-xs texto-2" style={{ marginTop: 12 }}>
                 {estado.respuesta.advertencia}

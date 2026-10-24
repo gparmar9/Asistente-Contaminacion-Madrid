@@ -125,3 +125,35 @@ export function markdownConCitas(
     return `[${escapado}](#${idFuente(idRespuesta, cita.indiceFuente)} "Fuente documental: ${titulo}")`
   })
 }
+
+/**
+ * Prepara la respuesta para el chat: markdown sin material de citas. Quita
+ * toda sección de evidencias y elimina los marcadores `[Dn]` (con el espacio
+ * que los precede, para no dejar huecos antes de la puntuación). La
+ * trazabilidad no se pierde: sigue en el backend y en el informe del día.
+ */
+export function markdownSinCitas(texto: string): string {
+  return quitarSeccionesEvidencias(texto).replace(/\s*\[D\d+\]/g, '')
+}
+
+/**
+ * Versión para el chat de `quitarEvidencias`: elimina la marca y sus líneas
+ * de evidencia contiguas estén donde estén. En las respuestas compuestas la
+ * sección puede no quedar al final (p. ej. con una nota añadida después), y
+ * ahí el corte conservador del final no la elimina.
+ */
+function quitarSeccionesEvidencias(texto: string): string {
+  const lineas = texto.split('\n')
+  const resultado: string[] = []
+  let i = 0
+  while (i < lineas.length) {
+    if (lineas[i].trim() === MARCA_EVIDENCIAS) {
+      i += 1
+      while (i < lineas.length && (lineas[i].trim() === '' || PATRON_LINEA_EVIDENCIA.test(lineas[i].trim()))) i += 1
+      continue
+    }
+    resultado.push(lineas[i])
+    i += 1
+  }
+  return resultado.join('\n').replace(/\n{3,}/g, '\n\n').trimEnd()
+}

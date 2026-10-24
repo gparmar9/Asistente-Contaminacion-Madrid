@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 
 import type { FuenteChat } from '../api/tipos'
-import { idFuente, markdownConCitas, quitarEvidencias, resolverCitas, trocearConCitas } from './citas'
+import { idFuente, markdownConCitas, markdownSinCitas, quitarEvidencias, resolverCitas, trocearConCitas } from './citas'
 
 const fuentes: FuenteChat[] = [
   { tipo: 'sql', referencia: 'resumen_datos_ml' },
@@ -100,6 +100,39 @@ describe('markdownConCitas', () => {
   it('escapa las citas sin fuente para que no parezcan enlaces markdown', () => {
     expect(markdownConCitas('Dato [D1].', [{ tipo: 'sql', referencia: 'resumen_datos_ml' }], 'abc')).toBe(
       'Dato \\[D1\\].',
+    )
+  })
+})
+
+describe('markdownSinCitas', () => {
+  it('quita las evidencias y los marcadores [Dn] sin dejar huecos ante la puntuación', () => {
+    expect(markdownSinCitas(textoConEvidencias)).toBe(
+      'El ozono irrita las vías respiratorias. Los niños son más sensibles.',
+    )
+  })
+
+  it('quita un marcador en mitad de la frase conservando un solo espacio', () => {
+    expect(markdownSinCitas('Según el corpus [D2] los niños son más sensibles.')).toBe(
+      'Según el corpus los niños son más sensibles.',
+    )
+  })
+
+  it('no toca un texto sin marcadores ni evidencias', () => {
+    const texto = 'Respuesta normal con **markdown** y una | tabla |.'
+    expect(markdownSinCitas(texto)).toBe(texto)
+  })
+
+  it('quita la sección aunque no esté al final (respuesta compuesta con nota posterior)', () => {
+    const compuesta = [
+      'Los niños son más sensibles [D1].',
+      '',
+      'Evidencias citadas:',
+      '[D1] Ozono troposférico (O3) y salud — Grupos sensibles (ozono_salud.md, fragmento x:0)',
+      '',
+      'Nota: la predicción para mañana estará disponible en cuanto haya datos.',
+    ].join('\n')
+    expect(markdownSinCitas(compuesta)).toBe(
+      'Los niños son más sensibles.\n\nNota: la predicción para mañana estará disponible en cuanto haya datos.',
     )
   })
 })
