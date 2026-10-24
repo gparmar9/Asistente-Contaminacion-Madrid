@@ -12,6 +12,7 @@
 #   api-usuario  → versión activa en SSM (/jupiter/versiones/<componente>) → si la EC2 está
 #   agente       encendida, actualiza solo ese contenedor por SSM Run Command y espera a que
 #   rag          esté sano. Si está apagada, usará esta versión al encenderse.
+#   prediccion
 #   phoenix      usa la imagen pública fijada en deploy/ec2/compose.yml, sin tests ni build.
 #                Sube los ficheros de arranque a S3 y actualiza Phoenix si la EC2 está encendida.
 # Para añadir uno nuevo: sumarlo a `options` y a un job con `if:` (y lo mismo en rollback.yml).
@@ -37,6 +38,7 @@ on:
           - api-usuario
           - agente
           - rag
+          - prediccion
           - phoenix
 
 permissions:
@@ -173,6 +175,7 @@ jobs:
             api-usuario) CONTEXTO=ApiUsuario DOCKERFILE=ApiUsuario/Dockerfile ;;
             agente)      CONTEXTO=Agente     DOCKERFILE=Agente/Dockerfile     ;;
             rag)         CONTEXTO=.          DOCKERFILE=deploy/Dockerfile.rag ;;
+            prediccion)  CONTEXTO=.          DOCKERFILE=deploy/Dockerfile.prediccion ;;
             *) echo "::error::Componente desconocido: $COMPONENTE"; exit 1 ;;
           esac
           {

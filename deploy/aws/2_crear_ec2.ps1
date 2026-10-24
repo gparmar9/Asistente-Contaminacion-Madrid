@@ -2,8 +2,8 @@
 #
 #   pwsh deploy/aws/2_crear_ec2.ps1
 #
-# Antes: 1_recursos_ec2.ps1 y desplegar desde GitHub web, api-usuario, agente y rag. Al crearse,
-# la máquina instala Docker (user-data.sh) y levanta los 4 contenedores con las versiones de SSM.
+# Antes: 1_recursos_ec2.ps1 y desplegar desde GitHub web, api-usuario, agente, rag y prediccion. Al
+# crearse, la máquina instala Docker (user-data.sh) y levanta los contenedores con las versiones de SSM.
 # Desde ese momento cuesta ~0,045 $/hora mientras esté encendida [estimación]; se apaga sola a la
 # 01:30 o con el workflow «Apagar entorno».
 $ErrorActionPreference = "Stop"
@@ -21,7 +21,7 @@ if (-not (Test-Path deploy/ec2/user-data.sh)) { throw "Ejecútalo desde la raíz
 aws sts get-caller-identity --query Arn --output text
 
 Paso "0. Comprobaciones"
-foreach ($s in "web", "api-usuario", "agente", "rag") {
+foreach ($s in "web", "api-usuario", "agente", "rag", "prediccion") {
     if (-not (Existe { aws ssm get-parameter --name "/jupiter/versiones/$s" })) {
         throw "Falta desplegar '$s' desde GitHub (no hay /jupiter/versiones/$s): la máquina no podría arrancar"
     }
@@ -30,7 +30,7 @@ $Existente = aws ec2 describe-instances --filters "Name=tag:Name,Values=jupiter-
     "Name=instance-state-name,Values=pending,running,stopping,stopped" `
     --query "Reservations[].Instances[].InstanceId" --output text
 if ($Existente) { throw "Ya existe una EC2 jupiter-api ($Existente): no se crea otra" }
-Write-Host "Las 4 versiones están en SSM y no hay ninguna EC2 jupiter-api"
+Write-Host "Las 5 versiones están en SSM y no hay ninguna EC2 jupiter-api"
 
 Paso "1. Crear la EC2"
 $Vpc = aws ec2 describe-vpcs --filters "Name=is-default,Values=true" --query "Vpcs[0].VpcId" --output text

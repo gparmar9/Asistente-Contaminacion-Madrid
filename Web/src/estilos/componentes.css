@@ -1030,6 +1030,12 @@ th[aria-sort] .tabla-orden {
   border-left: 3px solid var(--dato);
 }
 
+/* Una estimación, no una medición: borde discontinuo */
+.fuente-prediccion {
+  background: var(--superficie);
+  border-left: 3px dashed var(--tinta-2);
+}
+
 .fuente-id {
   font-family: var(--fuente-mono);
   font-size: var(--t-xs);

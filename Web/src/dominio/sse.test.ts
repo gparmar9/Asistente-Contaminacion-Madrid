@@ -63,7 +63,12 @@ describe('interpretarEventoChat', () => {
       session_id: 'abc',
       traza_id: 't1',
       span_id: 's1',
-      fuentes: [{ tipo: 'sql', referencia: 'mediciones' }, { tipo: 'otro', referencia: 'x' }, 'basura'],
+      fuentes: [
+        { tipo: 'sql', referencia: 'mediciones' },
+        { tipo: 'prediccion', referencia: 'Predicción para el 2026-10-25' },
+        { tipo: 'otro', referencia: 'x' },
+        'basura',
+      ],
       advertencia: null,
     })
     expect(interpretarEventoChat({ evento: 'done', datos })).toEqual({
@@ -71,7 +76,10 @@ describe('interpretarEventoChat', () => {
       sessionId: 'abc',
       trazaId: 't1',
       spanId: 's1',
-      fuentes: [{ tipo: 'sql', referencia: 'mediciones' }],
+      fuentes: [
+        { tipo: 'sql', referencia: 'mediciones' },
+        { tipo: 'prediccion', referencia: 'Predicción para el 2026-10-25' },
+      ],
       advertencia: null,
     })
     expect(interpretarEventoChat({ evento: 'done', datos: '{}' })).toEqual({

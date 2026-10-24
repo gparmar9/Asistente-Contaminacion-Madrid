@@ -13,6 +13,8 @@
 #   SSM /jupiter/agente/<variable>                    configuración del agente (opcional): cada
 #                                                     parámetro es una variable de entorno, p. ej.
 #                                                     /jupiter/agente/llm_modelo -> LLM_MODELO
+#                                                     (database_url, de solo lectura, también la
+#                                                     usa la predicción)
 #   SSM /jupiter/web/contrasena                       contraseña de la web, usuario "demo"
 #                                                     (opcional, cifrado); también protege /phoenix/
 #
@@ -23,7 +25,7 @@ REGION=eu-west-1
 BUCKET=jupiter-calidad-aire-madrid
 DIR="${JUPITER_DIR:-/opt/jupiter}"   # variable solo para probarlo fuera de la EC2
 CWAGENT_CTL="${CWAGENT_CTL:-/opt/aws/amazon-cloudwatch-agent/bin/amazon-cloudwatch-agent-ctl}"
-SERVICIOS=(web api-usuario agente rag phoenix)
+SERVICIOS=(web api-usuario agente rag prediccion phoenix)
 export AWS_DEFAULT_REGION="$REGION"
 
 # A stderr: varios pasos redirigen stdout a ficheros .env y el mensaje acabaría dentro.
@@ -126,6 +128,11 @@ if ! grep -q '^LLM_MODELO=' config-agente.env; then
 fi
 if ! grep -q '^DATABASE_URL=' config-agente.env; then
     log "Falta /jupiter/agente/database_url en SSM: el agente no responderá preguntas de datos"
+fi
+# La predicción solo lee la vista mediciones_bloques: usa el mismo usuario de solo lectura que el
+# agente, no el de la API. Sin él, /salud responde 503 y el agente no ofrece la herramienta.
+if ! grep '^DATABASE_URL=' config-agente.env > secretos-prediccion.env; then
+    log "Sin /jupiter/agente/database_url, la predicción no tiene base de datos"
 fi
 
 # La web pide usuario demo y la contraseña de SSM, salvo al healthcheck de 127.0.0.1.
