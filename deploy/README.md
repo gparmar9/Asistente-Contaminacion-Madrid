@@ -351,8 +351,8 @@ Los ficheros de `ec2/` llevan finales de línea LF aunque se trabaje en Windows
 
 Para la corrección del TFM, la web está **abierta a todo internet sin contraseña** en una
 **IP elástica** (fija): el tribunal entra con un enlace que no cambia aunque se apague la EC2.
-`/phoenix/` responde **403** a todo el mundo, porque guarda las preguntas de los usuarios. Lo deja
-así [`aws/3_web_publica.ps1`](aws/3_web_publica.ps1), seguido de **Desplegar → `web`**:
+`/phoenix/` también queda abierto: las trazas, con las preguntas y respuestas de los usuarios, las
+ve cualquiera. Lo deja así [`aws/3_web_publica.ps1`](aws/3_web_publica.ps1), seguido de **Desplegar → `web`**:
 
 **Dirección: http://madrid-respira.duckdns.org/** (o http://108.132.195.84/). El subdominio es de
 [DuckDNS](https://www.duckdns.org), gratuito: un registro DNS que apunta a la IP elástica, dado de
@@ -385,9 +385,9 @@ El mecanismo sigue en `arrancar.sh` para volver a cerrar la web sin tocar códig
   escribe `web-acceso.conf`, `web.htpasswd` y `phoenix-acceso.conf`, que `compose.yml` monta en el
   contenedor `web`. En el disco solo queda el hash. nginx pide usuario (`demo`) y contraseña en toda
   la web, también en `/api/*`, salvo a la propia máquina (el healthcheck entra por 127.0.0.1). En
-  `/phoenix/` la pide siempre, también desde la propia máquina. No hace falta reconstruir la imagen.
-- Sin el parámetro, los ficheros de la web quedan vacíos y la web funciona como antes; `/phoenix/`
-  responde **403**. Si el parámetro existe pero no se puede leer (permisos), el arranque **se
+  `/phoenix/` la pide también desde la propia máquina. No hace falta reconstruir la imagen.
+- Sin el parámetro, los tres ficheros quedan vacíos: ni la web ni `/phoenix/` piden contraseña.
+  Si el parámetro existe pero no se puede leer (permisos), el arranque **se
   detiene**: mejor sin web que abierta sin contraseña.
 - **La web va por HTTP**: la contraseña viaja sin cifrar. Usa una contraseña exclusiva para esto,
   nunca una que se use en otro sitio. **Nunca en el repositorio**: es público.
@@ -413,10 +413,10 @@ delante de la IP.
 cada turno: clasificación, llamadas al LLM, RAG y SQL, con tiempos, tokens y errores) y las enseña
 en `http://<ip>/phoenix/`.
 
-- **Acceso**: usuario `demo` y la contraseña de la web, **siempre**. Sin `/jupiter/web/contrasena`
-  responde 403, aunque la web esté abierta: guarda las preguntas y respuestas de los usuarios y no
-  tiene autenticación propia. **Con la web pública no hay contraseña, así que hoy responde 403**:
-  para consultarlo, poner la contraseña un rato y desplegar `web` (la web vuelve a pedirla).
+- **Acceso**: el mismo que la web. Con `/jupiter/web/contrasena`, usuario `demo` y esa contraseña,
+  también desde la propia máquina; sin ella, abierto. **Con la web pública, hoy está abierto a todo
+  el mundo**: cualquiera puede leer las preguntas y respuestas de los usuarios. Para cerrarlo, poner
+  la contraseña y desplegar `web` (la web vuelve a pedirla).
 - **Envío**: el agente manda las trazas a `http://phoenix:6006/v1/traces` por la red interna, sin
   pasar por nginx ni por el prefijo. La dirección está fija en `compose.yml` (`PHOENIX_ENDPOINT`),
   sin parámetro de SSM. El agente no depende de Phoenix para arrancar: si no está, pierde las trazas

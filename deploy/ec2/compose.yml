@@ -7,7 +7,7 @@
 #   config-agente.env   un VAR=valor por cada parámetro de /jupiter/agente/ en SSM (puede estar vacío)
 #   secretos-prediccion.env  DATABASE_URL de solo lectura del agente, para la predicción
 #   web-acceso.conf     y web.htpasswd: usuario y contraseña de la web (vacíos si no hay)
-#   phoenix-acceso.conf acceso a /phoenix/: la misma contraseña, o 403 si no hay
+#   phoenix-acceso.conf acceso a /phoenix/: la misma contraseña (vacío si no hay)
 #
 # Solo web expone el puerto 80: sirve la SPA y dirige /api/* a api-usuario y /phoenix/* a Phoenix.
 # Los demás servicios quedan en la red interna de Docker, accesibles por nombre (http://rag:8010).
@@ -103,7 +103,7 @@ services:
     volumes:
       - ./web-acceso.conf:/etc/nginx/conf.d/zz-acceso.conf:ro
       - ./web.htpasswd:/etc/nginx/web.htpasswd:ro
-      # Exige contraseña en /phoenix/; devuelve 403 si no hay ninguna configurada.
+      # Exige la contraseña de la web también en /phoenix/. Vacío, /phoenix/ queda abierto.
       - ./phoenix-acceso.conf:/etc/nginx/phoenix-acceso.conf:ro
     <<: *logs-cloudwatch
 
