@@ -137,10 +137,10 @@ Hilo conductor de la memoria: cómo y por qué cambió el diseño.
 | 2026-10-23 | Dirección de la web | IP elástica (`http://<ip>/`) → **subdominio gratuito de DuckDNS** (`madrid-respira.duckdns.org`) que apunta a esa IP | Un nombre se recuerda y queda mejor en la memoria y en el enlace al tribunal. La IP es fija, así que basta un registro DNS dado de alta a mano: nada en la EC2 ni en el código. Descartados: un dominio propio (5-15 €/año `[estimación]`), aunque con el proxy de Cloudflare habría dado HTTPS sin tocar el servidor; HTTPS con Let's Encrypt en la EC2 (abrir el 443, renovar cada 90 días y cambiar nginx y el compose a días de la entrega); `sslip.io`/`nip.io` (gratis y sin alta, pero el nombre lleva la IP) y Route 53 en la cuenta del máster (de pago y el dominio quedaría en una cuenta ajena) |
 | 2026-10-24 | Acceso a las trazas (Phoenix) | `/phoenix/` cerrado (403) cuando la web no tiene contraseña → **`/phoenix/` abierto como la web**; si se vuelve a poner la contraseña, la sigue exigiendo | Con la web pública no había forma de consultar las trazas sin poner la contraseña, desplegar `web` y cerrar la web al tribunal mientras tanto. Riesgo asumido: cualquiera que llegue a la web lee las preguntas y respuestas de los usuarios y puede borrar trazas desde la interfaz. Descartados: una contraseña solo para Phoenix (otro parámetro de SSM y otro fichero montado, y separar las dos contraseñas en `arrancar.sh`) y la autenticación propia de Phoenix (un secreto más, usuarios y una API key para que el agente envíe las trazas) |
 
-**Decisiones abiertas que alimentarán esta tabla:** modelo del agente en Bedrock (Ministral 14B,
-gpt-oss-120b, Qwen3 Next 80B (2026-10-16) o Nemotron 3 Super 120B (2026-10-18); Claude Haiku 5.5 no está
-disponible en la cuenta;
-aplazado hasta poder evaluar las herramientas SQL y de ML, §13) El RAG irá en la EC2 (§8.9). La opción de red en AWS ya está decidida y aplicada (opción A, §8.4).
+| 2026-10-25 | Modelo del agente en producción | **Ministral 14B** (conversación y SQL) + gpt-oss-120b (clasificador), todas las comprobaciones solo observan → **Nemotron 3 Super 120B** (`nvidia.nemotron-super-3-120b`, conversación y SQL) + gpt-oss-120b (clasificador), con **`fuga` en bloqueo**. Preparado en el repositorio (`deploy/aws/5_modelo_agente.ps1`); aplicado en AWS `[por confirmar]` | Decisión del equipo tras las baterías (§7.3.1): el mejor resultado global en una pasada (16/20 en datos no vistos con SQL libre y 14/20 con el catálogo, frente a 10 y 9 de Ministral; 7/8 en predicción descontando el entorno) y el más rápido de los que aciertan (turno documental 4,9 s; gpt-oss 7,5 s), a coste parecido (~0,14 $ por pasada completa `[estimación]`). Copia el prompt de sistema si se lo piden: por eso `fuga` bloquea, a cambio de que las respuestas libres salgan enteras al final y no como tokens. Descartados: gpt-oss-120b (el más fiable en predicción, 8/8, pero el más lento y caro), Qwen3 Next (peor selector del catálogo y misma fuga), seguir con Ministral (el más flojo en SQL y nunca llama a la predicción en pre-01), Claude Haiku 5.5 (no disponible en la cuenta) y Nemotron también como clasificador (29/31 el 2026-10-24, dos `PREDICCION → DESCONOCIDA`; gpt-oss, 31/31 en las dos campañas) |
+
+**Decisiones abiertas que alimentarán esta tabla:** el modelo del agente ya está elegido (fila del
+2026-10-25). El RAG irá en la EC2 (§8.9). La opción de red en AWS ya está decidida y aplicada (opción A, §8.4).
 
 ---
 
@@ -1471,7 +1471,15 @@ respuesta fue «No puedo responder» por la ruta documental en vez de `sin_evide
   tendría que bloquear si se elige. Mismas cautelas: una pasada y veredictos en borrador. Detalle:
   `resultados/revision_nemotron_20261018.md`.
 
-**Pendiente:** decidir entre SQL libre, catálogo o híbrido (catálogo como paso previo de comprobación de lugar y contaminante) con la comparación de arriba, elegir qué
+**Elección (2026-10-25): Nemotron 3 Super en producción** para la conversación y el SQL; el
+clasificador sigue en gpt-oss-120b y `fuga` pasa a bloquear (§2). La batería de predicción del
+2026-10-24 (`resultados/revision_prediccion_4modelos_20261024.md`) lo confirma como el mejor
+equilibrio: 7/8 con SQL descontando el entorno (gpt-oss 8/8), mediana de 3,9 s (gpt-oss 6,2 s) y
+0,0106 $ el lote (gpt-oss 0,0140 $). Como clasificador falla justo en `PREDICCION` (2 de 31), por eso
+no sustituye a gpt-oss en ese papel. No hizo falta cambiar código: las baterías ya usaban el mismo
+camino en streaming que la web, y el rol de la EC2 ya invoca cualquier modelo de la región.
+
+**Pendiente:** con el modelo ya elegido, decidir entre SQL libre, catálogo o híbrido (catálogo como paso previo de comprobación de lugar y contaminante) con la comparación de arriba, elegir qué
 comprobaciones bloquean respuestas e incorporar las herramientas de ML. Otro miembro del equipo
 se encarga del contenedor y el despliegue en EC2 con Bedrock.
 
@@ -2018,7 +2026,10 @@ equipo la encendía a mano para trabajar o hacer una demo.
 - **LLM sin claves:** el agente usa Bedrock con el rol de la máquina (`bedrock:InvokeModel` y
   `InvokeModelWithResponseStream` en `eu-west-1`). Su configuración sale de todos los parámetros de
   `/jupiter/agente/` (`llm_modelo` → `LLM_MODELO`): una variable nueva se da de alta en SSM, sin
-  tocar scripts. Sin `llm_modelo`, todo funciona salvo `/chat`, que responde 503.
+  tocar scripts. Sin `llm_modelo`, todo funciona salvo `/chat`, que responde 503. Modelos:
+  **Nemotron 3 Super 120B** para la conversación y el SQL y gpt-oss-120b para el clasificador, con
+  `comprobaciones_bloquean=fuga` (desde el 2026-10-25, §2; antes, Ministral 14B). Se cambian con
+  `deploy/aws/5_modelo_agente.ps1` y «Desplegar → `agente`», sin tocar código.
 - **CI/CD solo por GitHub Actions:** «Desplegar» y «Rollback» suman `web`, `api-usuario`, `agente`
   y `rag` («Desplegar» también `phoenix`, sin tests ni build: publica el compose y recrea el
   contenedor; su vuelta atrás es revertir el commit); si la EC2 está encendida actualizan solo ese contenedor por *SSM Run Command* y esperan
@@ -2625,13 +2636,15 @@ equipo la encendía a mano para trabajar o hacer una demo.
 | 2026-10-23 | **Subdominio de la web** (Guille con Claude Code, rama `feature/readme-simplificado`): `madrid-respira.duckdns.org`, gratuito, apuntando a la IP elástica de la EC2, dado de alta a mano en DuckDNS. Comprobado desde fuera: resuelve a la IP elástica, la web y `/api/estaciones` responden 200 sin contraseña y `/phoenix/` 403. URL en el README y en la guía de despliegue |
 | 2026-10-24 | **Predicción preparada para producción** (Guille con Claude Code, rama `feature/prediccion-produccion`): contenedor `prediccion` en el compose de la EC2, `arrancar.sh` (le pasa la conexión de solo lectura del agente), «Desplegar» y «Rollback» con el componente `prediccion`, el repositorio `jupiter-prediccion` en los permisos de GitHub y de la EC2 y el script `deploy/aws/4_prediccion.ps1`. Hallazgo: `api-usuario` solo aceptaba fuentes `sql` y `documento`, así que `/chat` habría respondido 502 a toda pregunta de predicción y la web habría descartado su fuente; corregido el contrato (OpenAPI y tipos regenerados) y la web muestra el grupo «Estimación del modelo de predicción». Tests: ApiUsuario 35, web 61 (lint y build), raíz 178, agente 207. Motor probado contra la RDS (ver §8.9). `[por confirmar: aplicado en AWS]` |
 | 2026-10-24 | **Phoenix abierto en la web pública** (Carlos con Claude Code, rama `feature/phoenix-abierto`): sin `/jupiter/web/contrasena`, `arrancar.sh` deja vacío `phoenix-acceso.conf` en lugar de escribir `return 403;`, y `/phoenix/` queda abierto como la web; con contraseña la sigue exigiendo. Solo cambian el script y los comentarios: no hay que reconstruir imágenes, basta con «Desplegar → `web`» para que la EC2 reciba el `arrancar.sh` nuevo. Probado en local con el nginx de la imagen: sin contraseña, `/phoenix/` supera el control de acceso (502 sin Phoenix detrás, en lugar de 403) y la web responde 200; con los ficheros de contraseña, `/phoenix/` responde 401. `[por confirmar: 200 en /phoenix/ desde fuera tras desplegar]` |
+| 2026-10-25 | **Nemotron 3 Super como modelo del agente en producción** (Guille con Claude Code, rama `feature/modelo-nemotron`): decisión del equipo tras las baterías del 18 y el 24-10. Script `deploy/aws/5_modelo_agente.ps1` que comprueba en Bedrock que el modelo está activo bajo demanda en `eu-west-1` y escribe en SSM `llm_modelo=nvidia.nemotron-super-3-120b` y `comprobaciones_bloquean=fuga` (el clasificador sigue en gpt-oss-120b); `1_recursos_ec2.ps1` con los mismos valores para que repetirlo no vuelva a Ministral. Comprobado en AWS con consultas de solo lectura: producción tenía Ministral 14B + gpt-oss-120b y ninguna regla en bloqueo; Nemotron, `ACTIVE` y `ON_DEMAND`, dentro de la política del rol de la EC2. Sin cambios de código. Pendiente: ejecutar el script y «Desplegar → `agente`» |
 
 ---
 
 ## 13. Preguntas abiertas
 
 - [ ] ¿Qué límite de gasto o créditos tiene la cuenta AWS del máster?
-- [ ] Agente nuevo: ¿Ministral 14B 3.0 o gpt-oss-120b en Bedrock? Empatan en clasificador y uso de
+- [x] Agente nuevo: ¿Ministral 14B 3.0 o gpt-oss-120b en Bedrock? → **Nemotron 3 Super 120B**
+  (conversación y SQL) con gpt-oss-120b de clasificador, elegido el 2026-10-25 (§2). Historia: Empatan en clasificador y uso de
   herramientas. Ruta documental (2026-10-05): Ministral 18/18 a la primera; gpt-oss 4 fallos de 18
   por el límite de 512 tokens de salida. Con `LLM_MAX_TOKENS`=2048 (lote del 2026-10-06): empate,
   6/6 válidas a la primera con los dos (12/12 gpt-oss y 11/12 Ministral con el caso del polen

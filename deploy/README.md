@@ -328,8 +328,9 @@ Parámetros del agente que hacen falta (los demás, como en [`Agente/.env.exampl
 
 | Parámetro | Ejemplo | Sin él |
 |---|---|---|
-| `/jupiter/agente/llm_modelo` | `mistral.ministral-3-14b-instruct` | `/chat` responde 503 |
+| `/jupiter/agente/llm_modelo` | `nvidia.nemotron-super-3-120b` | `/chat` responde 503 |
 | `/jupiter/agente/llm_modelo_clasificador` | `openai.gpt-oss-120b-1:0` | El clasificador usa `llm_modelo` |
+| `/jupiter/agente/comprobaciones_bloquean` | `fuga` | Todas las comprobaciones solo observan: si Nemotron copia el prompt de sistema, la respuesta sale |
 | `/jupiter/agente/database_url` (SecureString) | `postgresql://agente_lectura:…@<RDS>:5432/postgres` | Las preguntas de datos reciben la frase de datos no disponibles y la predicción no arranca sana (también la usa `prediccion`) |
 
 El proveedor (`LLM_PROVEEDOR=bedrock`), la región y las URL internas del RAG y de Phoenix están
@@ -540,8 +541,21 @@ La EC2 de producción se creó antes de que existiera el servicio `prediccion`. 
 3. Comprobar en el chat de la web una pregunta como «¿Cómo estará el NO₂ mañana en Plaza de
    España?»: responde con cifras por bloque y la fuente «Estimación del modelo de predicción».
 
-Para cambiar de modelo: `aws ssm put-parameter --name /jupiter/agente/llm_modelo --overwrite --value <id>`
-y reiniciar el agente (Desplegar → `agente`, o apagar y encender).
+### Cambiar el modelo del agente
+
+En producción, **Nemotron 3 Super 120B** (`nvidia.nemotron-super-3-120b`) para la conversación y
+el SQL, y gpt-oss-120b para el clasificador. Para cambiarlo:
+
+1. **`pwsh deploy/aws/5_modelo_agente.ps1`**: comprueba que el modelo está activo bajo demanda en
+   `eu-west-1`, escribe `/jupiter/agente/llm_modelo` y `/jupiter/agente/comprobaciones_bloquean`
+   (`fuga`: Nemotron copia el prompt de sistema si se lo piden). El clasificador no se toca.
+2. **Desplegar → `agente`** desde `main`: el agente lee SSM al arrancar.
+3. Hacer una pregunta en el chat y comprobar en `/phoenix/` (o en `/admin/uso`, tabla de coste)
+   que los spans nuevos llevan el modelo nuevo.
+
+Volver al anterior: `pwsh deploy/aws/5_modelo_agente.ps1 -Modelo mistral.ministral-3-14b-instruct -Bloquean ""`
+y otra vez **Desplegar → `agente`**. Solo valen modelos de la región sin perfil de inferencia
+(`eu.`, `global.`): el rol de la EC2 solo invoca `foundation-model/*` de `eu-west-1`.
 
 ## Probar en local antes de desplegar
 
