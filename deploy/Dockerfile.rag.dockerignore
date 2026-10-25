@@ -5,6 +5,7 @@
 !pyproject.toml
 !requirements-rag.txt
 !src/rag/
+!src/prediccion/
 !data/rag/
 **/__pycache__
 **/*.pyc

@@ -9,9 +9,12 @@
 #   docker compose down       # parar (los datos siguen en el volumen)
 #   docker compose down -v    # parar Y BORRAR los datos (cuidado)
 #
-# Con el perfil "api" levanta además la API completa y la web, cada servicio en su
-# contenedor, igual que irá en la EC2 (ver la sección "La API en contenedores" del README).
-# La web es el único punto de entrada pensado para personas: http://localhost:${WEB_PORT:-8080}
+# Con el perfil "api" levanta además el resto del sistema, con los mismos servicios y la misma
+# configuración que la EC2 (deploy/ec2/compose.yml): RAG, predicción, el Agente con los modelos
+# de producción, ApiUsuario, la web y Phoenix. Diferencias: aquí se construyen las imágenes, la base
+# de datos es el contenedor `db` en lugar de RDS y Bedrock usa tus credenciales de AWS en lugar del
+# rol de la máquina (AWS_* en el .env o en el terminal). La web es el único punto de entrada
+# pensado para personas: http://localhost:${WEB_PORT:-8080} (trazas en /phoenix/).
 #
 #   docker compose --profile api up -d --build
 #   docker compose --profile api down
@@ -40,6 +43,37 @@ services:
       timeout: 5s
       retries: 5
 
+  # Crea en `db` la vista mediciones_bloques y el rol de solo lectura agente_lectura, que usan el
+  # agente y la predicción, como en RDS (deploy/sql/). Se ejecuta en cada `up` y termina: los dos
+  # scripts son idempotentes. Si aún no se han cargado los datos, avisa y no hace nada; tras
+  # cargarlos: docker compose --profile api up -d (o run --rm db-init).
+  db-init:
+    profiles: ["api"]
+    image: postgres:18
+    restart: "no"
+    environment:
+      PGHOST: db
+      PGUSER: ${POSTGRES_USER:-postgres}
+      PGPASSWORD: ${POSTGRES_PASSWORD:-postgres}
+      PGDATABASE: ${POSTGRES_DB:-postgres}
+      AGENTE_LECTURA_CLAVE: ${AGENTE_LECTURA_CLAVE:-agente_lectura}
+    volumes:
+      - ./deploy/sql:/sql:ro
+    entrypoint: ["sh", "-c"]
+    command:
+      - |
+        hay_datos=$$(psql -tAc "SELECT to_regclass('resumen_datos_ml') IS NOT NULL AND to_regclass('estaciones') IS NOT NULL")
+        if [ "$$hay_datos" != t ]; then
+          echo "Sin datos cargados: la vista y el rol del agente se crearán al repetir el up (ver README)."
+          exit 0
+        fi
+        psql -q -f /sql/vista_mediciones_bloques.sql &&
+        psql -q -v clave="$$AGENTE_LECTURA_CLAVE" -f /sql/rol_agente_lectura.sql &&
+        echo "Vista mediciones_bloques y rol agente_lectura listos."
+    depends_on:
+      db:
+        condition: service_healthy
+
   # Servicio de evidencias (src/rag). La imagen lleva el modelo y el índice dentro: el
   # primer build tarda (descarga torch de CPU y el modelo, ~2,5-3 GB en total).
   rag:
@@ -55,8 +89,8 @@ services:
       - "127.0.0.1:8010:8010"
 
   # Servicio de predicción (src/prediccion, ml.api). Lleva los bundles dentro y lee la vista
-  # mediciones_bloques de PostgreSQL (solo lectura). Imagen ligera (sin torch). El agente lo
-  # consume por HTTP con PREDICCION_URL=http://prediccion:8011 (ver la nota del orquestador).
+  # mediciones_bloques con el mismo usuario de solo lectura que el agente, como en la EC2.
+  # Imagen ligera (sin torch).
   prediccion:
     profiles: ["api"]
     build:
@@ -65,58 +99,74 @@ services:
     image: jupiter-prediccion:local
     restart: unless-stopped
     environment:
-      DATABASE_URL: ${DATABASE_URL_API:-postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@db:5432/${POSTGRES_DB:-postgres}}
+      DATABASE_URL: ${DATABASE_URL_AGENTE:-postgresql://agente_lectura:${AGENTE_LECTURA_CLAVE:-agente_lectura}@db:5432/${POSTGRES_DB:-postgres}}
     depends_on:
-      db:
-        condition: service_healthy
+      db-init:
+        condition: service_completed_successfully
     ports:
       - "127.0.0.1:8011:8011"
 
-  # Agente: LLM + tools. Las claves del LLM salen de LLMOrchestrator/.env (LLM_BASE_URL,
-  # LLM_API_KEY, LLM_MODEL); lo de `environment` tiene prioridad sobre ese fichero.
-  # NOTA: la herramienta de predicción (predecir_calidad_aire) vive en el agente `Agente/`. Cuando
-  # ese sea el servicio del orquestador, añadir aquí PREDICCION_URL: http://prediccion:8011 y el
-  # depends_on de `prediccion` (hoy este servicio se construye desde ./LLMOrchestrator).
-  orquestador:
+  # Agente (Agente/): el asistente de producción. Modelos y comprobaciones por defecto, los de la
+  # EC2 (deploy/aws/1_recursos_ec2.ps1 y 5_modelo_agente.ps1): Nemotron 3 Super para la conversación
+  # y el SQL, gpt-oss-120b para el clasificador y la regla `fuga` en bloqueo. Cada valor se puede
+  # cambiar en el .env de la raíz. Bedrock usa las credenciales AWS_* del .env o del terminal (en
+  # la EC2, el rol de la máquina); sin ellas el agente arranca y /chat responde con un error.
+  agente:
     profiles: ["api"]
-    build: ./LLMOrchestrator
-    image: jupiter-orquestador:local
+    build: ./Agente
+    image: jupiter-agente:local
     restart: unless-stopped
-    env_file:
-      - path: LLMOrchestrator/.env
-        required: false
     environment:
+      LLM_PROVEEDOR: ${LLM_PROVEEDOR:-bedrock}
+      LLM_MODELO: ${LLM_MODELO:-nvidia.nemotron-super-3-120b}
+      LLM_MODELO_CLASIFICADOR: ${LLM_MODELO_CLASIFICADOR:-openai.gpt-oss-120b-1:0}
+      # Sin dos puntos: COMPROBACIONES_BLOQUEAN= (vacía) en el .env deja todas las reglas observando.
+      COMPROBACIONES_BLOQUEAN: ${COMPROBACIONES_BLOQUEAN-fuga}
+      AWS_REGION: eu-west-1
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-}
+      AWS_SESSION_TOKEN: ${AWS_SESSION_TOKEN:-}
+      # Solo con LLM_PROVEEDOR=openai_compatible (Mistral API, Groq, Ollama...).
+      LLM_BASE_URL: ${LLM_BASE_URL:-}
+      LLM_API_KEY: ${LLM_API_KEY:-}
       RAG_URL: http://rag:8010
-      # Por defecto, la base de datos del contenedor `db`. Para usar otra (p. ej. RDS con
-      # los datos reales), define DATABASE_URL_API en el .env de la raíz.
-      DATABASE_URL: ${DATABASE_URL_API:-postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@db:5432/${POSTGRES_DB:-postgres}}
+      PREDICCION_URL: http://prediccion:8011
+      PHOENIX_ENDPOINT: http://phoenix:6006/v1/traces
+      # Siempre con el rol de solo lectura. Para consultar otra base (p. ej. RDS con los datos
+      # reales), DATABASE_URL_AGENTE en el .env, también con agente_lectura.
+      DATABASE_URL: ${DATABASE_URL_AGENTE:-postgresql://agente_lectura:${AGENTE_LECTURA_CLAVE:-agente_lectura}@db:5432/${POSTGRES_DB:-postgres}}
     depends_on:
-      db:
-        condition: service_healthy
+      db-init:
+        condition: service_completed_successfully
       rag:
         condition: service_healthy
+      # Sin esperar a que esté sano, como en la EC2: si la predicción falla, el agente responde lo
+      # demás y deja de ofrecer la herramienta hasta que vuelva.
+      prediccion:
+        condition: service_started
     ports:
-      - "127.0.0.1:8100:8100"
+      - "127.0.0.1:8200:8200"
 
-  # La API que consume la web: estaciones, series y /chat (proxy al orquestador).
+  # La API que consume la web: estaciones, series, /chat (proxy al agente) y KPIs de uso.
   api-usuario:
     profiles: ["api"]
     build: ./ApiUsuario
     image: jupiter-api-usuario:local
     restart: unless-stopped
     environment:
-      ORCHESTRATOR_URL: http://orquestador:8100
+      AGENTE_URL: http://agente:8200
+      # Por defecto, la base de datos del contenedor `db`. Para usar otra (p. ej. RDS con
+      # los datos reales), define DATABASE_URL_API en el .env de la raíz.
       DATABASE_URL: ${DATABASE_URL_API:-postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@db:5432/${POSTGRES_DB:-postgres}}
     depends_on:
       db:
         condition: service_healthy
-      orquestador:
+      agente:
         condition: service_healthy
     ports:
       - "127.0.0.1:8000:8000"
 
   # Web y proxy de /api/* y /phoenix/*: http://localhost:${WEB_PORT:-8080}
-  # /phoenix/* devuelve 502 si no se activa el perfil "observabilidad".
   web:
     profiles: ["api"]
     build: ./Web
@@ -126,28 +176,33 @@ services:
     ports:
       - "127.0.0.1:${WEB_PORT:-8080}:80"
     depends_on:
-      - api-usuario
+      api-usuario:
+        condition: service_healthy
 
-  # Phoenix: cascada de los turnos del agente (spans OpenTelemetry). Solo con el perfil
-  # "observabilidad". El agente le envía las trazas si PHOENIX_ENDPOINT apunta aquí
-  # (http://localhost:6006/v1/traces desde el equipo). UI en http://localhost:6006.
+  # Phoenix: cascada de los turnos del agente (spans OpenTelemetry). Con el perfil "api", como en
+  # la EC2: el agente le envía las trazas por la red interna y la interfaz se abre en
+  # http://localhost:${WEB_PORT:-8080}/phoenix/ a través de la web.
   #
-  #   docker compose --profile observabilidad up -d phoenix
-  #
-  # UI bajo /phoenix/, como en EC2. El envío de trazas sigue en localhost:6006/v1/traces:
-  #
-  #   PHOENIX_HOST_ROOT_PATH=/phoenix docker compose --profile api --profile observabilidad up -d --build
-  #   -> http://localhost:${WEB_PORT:-8080}/phoenix/
+  # Con el perfil "observabilidad" se levanta solo, para `make dev` (scripts/local.py): este fija
+  # PHOENIX_HOST_ROOT_PATH vacía y la interfaz queda en http://localhost:6006.
   phoenix:
-    profiles: ["observabilidad"]
+    profiles: ["api", "observabilidad"]
     image: arizephoenix/phoenix:version-20.19.0
     restart: unless-stopped
     environment:
       PHOENIX_WORKING_DIR: /mnt/data   # SQLite de Phoenix, en el volumen
-      # Prefijo de la interfaz; vacío para servirla en la raíz.
-      PHOENIX_HOST_ROOT_PATH: ${PHOENIX_HOST_ROOT_PATH:-}
+      # Prefijo de la interfaz, el de nginx. Sin dos puntos: vacía (definida) la sirve en la raíz.
+      PHOENIX_HOST_ROOT_PATH: ${PHOENIX_HOST_ROOT_PATH-/phoenix}
+      PHOENIX_DEFAULT_RETENTION_POLICY_DAYS: "30"
     volumes:
       - phoenix_data:/mnt/data
+    # La imagen no trae healthcheck ni curl/wget: se usa su Python.
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:6006/healthz', timeout=3)"]
+      interval: 30s
+      timeout: 5s
+      start_period: 60s
+      retries: 3
     ports:
       - "127.0.0.1:6006:6006"
 

@@ -43,23 +43,36 @@ Requisitos: **git** y **Docker Desktop**.
 git clone https://github.com/gparmar9/Asistente-Contaminacion-Madrid.git
 cd Asistente-Contaminacion-Madrid
 
-cp .env.example .env                                   # pon una contraseña de PostgreSQL
-cp LLMOrchestrator/.env.example LLMOrchestrator/.env   # claves del LLM
+cp .env.example .env          # contraseñas de PostgreSQL y credenciales de AWS para Bedrock
 
-docker compose --profile api up -d --build             # la primera vez tarda (imagen del RAG ~3 GB)
+docker compose --profile api up -d --build    # la primera vez tarda (imagen del RAG ~3 GB)
 ```
 
-La web queda en **http://localhost:8080**. Para pararlo todo: `docker compose --profile api down`.
+Se levantan los mismos servicios y con la misma configuración que en AWS
+([`deploy/ec2/compose.yml`](deploy/ec2/compose.yml)): RAG, predicción, el agente con los modelos
+de producción (Nemotron 3 Super y gpt-oss-120b en Amazon Bedrock), la API, la web y Phoenix. Las
+diferencias son tres: la base de datos es un PostgreSQL en Docker en lugar de RDS, las imágenes se
+construyen en tu equipo y Bedrock usa tus credenciales de AWS (en el `.env` o exportadas en el
+terminal) en lugar del rol de la máquina.
 
-La base de datos local arranca vacía. Para cargar el histórico (necesita acceso a la cuenta de AWS
-del proyecto):
+La web queda en **http://localhost:8080** y las trazas del agente, en
+**http://localhost:8080/phoenix/**. Para pararlo todo: `docker compose --profile api down`.
+
+La base de datos local arranca vacía. Para cargar el histórico de bloques (2018 a abril de 2026;
+necesita acceso a la cuenta de AWS del proyecto):
 
 ```bash
 pip install -r requirements.txt
-aws s3 cp s3://jupiter-calidad-aire-madrid/data/raw/datos_completos_2018_2026.csv data/raw/
+aws s3 cp s3://jupiter-calidad-aire-madrid/data/processed/resumen_datos_ml.parquet data/processed/
 python src/etl/cargar_resumen_ml.py
 python src/etl/cargar_estaciones.py
+
+docker compose --profile api up -d    # crea la vista y el rol de solo lectura del agente
 ```
+
+En local no corre la ingesta en tiempo real (en AWS la hace la Lambda): los datos acaban donde
+acaba el histórico, así que las preguntas sobre hoy, la semana pasada o mañana no tienen datos.
+Para probar el sistema completo, con datos al día, usa la web desplegada.
 
 ### Imágenes Docker
 
@@ -69,6 +82,8 @@ python src/etl/cargar_estaciones.py
 | `api-usuario` | [`ApiUsuario/Dockerfile`](ApiUsuario/Dockerfile) | API FastAPI: estaciones, series y chat |
 | `agente` | [`Agente/Dockerfile`](Agente/Dockerfile) | Agente LLM con herramientas |
 | `rag` | [`deploy/Dockerfile.rag`](deploy/Dockerfile.rag) | Búsqueda en la base vectorial (modelo e índice dentro) |
+| `prediccion` | [`deploy/Dockerfile.prediccion`](deploy/Dockerfile.prediccion) | Predicción a uno y dos días (modelos dentro) |
+| `phoenix` | imagen pública `arizephoenix/phoenix` | Trazas del agente |
 | `pipeline` | [`deploy/Dockerfile.lambda`](deploy/Dockerfile.lambda) | Ingesta y detección de anomalías (AWS Lambda) |
 
 En AWS las imágenes se construyen y publican en ECR con el workflow
