@@ -32,6 +32,9 @@ RUN pip install torch==2.14.0 --index-url https://download.pytorch.org/whl/cpu
 
 COPY requirements-rag.txt pyproject.toml ./
 COPY src/rag/ src/rag/
+# pyproject.toml declara los paquetes rag y prediccion: sin este, `pip install -e .` falla.
+# Solo se instala, no se usa en esta imagen (son unos KB).
+COPY src/prediccion/ src/prediccion/
 RUN pip install -r requirements-rag.txt
 
 USER app

@@ -221,7 +221,9 @@ sesiones. La raíz de Phoenix para anotar la valoración y leer los KPIs se dedu
 Phoenix en local (imagen fijada, datos en el volumen `phoenix_data`):
 
 ```bash
-docker compose --profile observabilidad up -d phoenix     # desde la raíz del repo
+make phoenix     # desde la raíz del repo; interfaz en http://localhost:6006
+# con compose directamente, sin el prefijo /phoenix que usa la pila completa detrás de nginx:
+#   PHOENIX_HOST_ROOT_PATH= docker compose --profile observabilidad up -d phoenix
 # sin compose: docker run -p 127.0.0.1:6006:6006 -e PHOENIX_WORKING_DIR=/mnt/data \
 #   -v phoenix_data:/mnt/data arizephoenix/phoenix:version-20.19.0
 ```

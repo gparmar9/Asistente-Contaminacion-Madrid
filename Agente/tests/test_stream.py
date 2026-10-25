@@ -88,7 +88,9 @@ async def test_el_primer_token_deja_un_evento_en_el_span_turno(spans):
     bucle = next(s for s in terminados if s.name == "bucle")
     marcas = [e for e in turno.events if e.name == "primer_token"]
     assert len(marcas) == 1  # uno por turno, no uno por token
-    assert bucle.start_time < marcas[0].timestamp < turno.end_time  # tras clasificar, dentro del turno
+    # Tras clasificar, dentro del turno. <= porque en Windows el reloj tiene menos resolución y dos
+    # marcas seguidas pueden coincidir al nanosegundo.
+    assert bucle.start_time <= marcas[0].timestamp <= turno.end_time
 
 
 async def test_sin_tokens_no_hay_evento_primer_token(spans):

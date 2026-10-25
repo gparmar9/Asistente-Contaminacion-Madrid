@@ -59,7 +59,7 @@ Los votos se resumen en `/admin/uso` («Sin valoraciones en el periodo» si no h
 
 Requisitos: Node ≥ 20.19 y la API levantada en `http://localhost:8000`
 (`uvicorn api_usuario.main:app --reload --app-dir src` desde `ApiUsuario/`; sin
-`ORCHESTRATOR_URL`, `/chat` responde un *stub* y el asistente se puede probar entero).
+`AGENTE_URL`, `/chat` responde un *stub* y el asistente se puede probar entero).
 
 ```bash
 cd Web
@@ -113,14 +113,12 @@ navegador ──► web (nginx :80)  ── /           → build estático (SPA
   imagen no tiene directivas (abierto, para local); en la EC2 se monta encima uno que exige la
   contraseña de la web incluso desde la propia máquina, o uno vacío (abierto) si la web no tiene
   contraseña.
-- `docker-compose.yml` (raíz): perfil `api` (`rag`, `orquestador`, `api-usuario`, `web`) y perfil
-  `observabilidad` (`phoenix`).
+- `docker-compose.yml` (raíz): perfil `api`, con los mismos servicios que la EC2 (`rag`,
+  `prediccion`, `agente`, `api-usuario`, `web` y `phoenix`) más `db` y `db-init`.
 
 ```bash
 docker compose --profile api up -d --build     # http://localhost:8080  (WEB_PORT en .env para cambiarlo)
-
-# Con Phoenix detrás de la web, como en la EC2: http://localhost:8080/phoenix/
-PHOENIX_HOST_ROOT_PATH=/phoenix docker compose --profile api --profile observabilidad up -d --build
+                                               # trazas en http://localhost:8080/phoenix/
 ```
 
 ## Estructura

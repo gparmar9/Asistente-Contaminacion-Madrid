@@ -178,7 +178,9 @@ def levantar_phoenix() -> None:
         fallo("Docker no responde. Abre Docker Desktop, espera a que arranque y repite.")
     aviso("Levantando Phoenix (docker compose --profile observabilidad up -d phoenix)")
     orden = ["docker", "compose", "--profile", "observabilidad", "up", "-d", "phoenix"]
-    if subprocess.run(orden, cwd=RAIZ).returncode != 0:
+    # Sin prefijo: aquí no hay nginx delante y la interfaz se abre directamente en :6006.
+    env = {**os.environ, "PHOENIX_HOST_ROOT_PATH": ""}
+    if subprocess.run(orden, cwd=RAIZ, env=env).returncode != 0:
         fallo("no se pudo levantar Phoenix (ver el mensaje de docker de arriba)")
     limite = time.monotonic() + 60
     while not responde(URL_PHOENIX):
