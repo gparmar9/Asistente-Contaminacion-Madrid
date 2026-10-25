@@ -11,7 +11,8 @@
 #   2. El rol de la EC2 (jupiter-ec2-api) y su perfil de instancia
 #   3. Los permisos nuevos de los roles de GitHub Actions (despliegue y entorno)
 #   4. El grupo de seguridad jupiter-api-sg: puerto 80 abierto solo a tu IP
-#   5. Los parámetros del agente en SSM (/jupiter/agente/llm_modelo y llm_modelo_clasificador)
+#   5. Los parámetros del agente en SSM (/jupiter/agente/llm_modelo, llm_modelo_clasificador y
+#      comprobaciones_bloquean)
 #   6. Los ficheros de arranque en s3://jupiter-calidad-aire-madrid/ec2/
 # No crea la EC2: eso es 2_crear_ec2.ps1, después de desplegar las 5 imágenes.
 param(
@@ -23,8 +24,10 @@ $Env:AWS_DEFAULT_REGION = "eu-west-1"
 
 $Bucket = "jupiter-calidad-aire-madrid"
 $Servicios = "web", "api-usuario", "agente", "rag", "prediccion"
-$ModeloAgente = "mistral.ministral-3-14b-instruct"
+# Los mismos que deja 5_modelo_agente.ps1: repetir este script no devuelve el agente al modelo anterior.
+$ModeloAgente = "nvidia.nemotron-super-3-120b"
 $ModeloClasificador = "openai.gpt-oss-120b-1:0"
+$ComprobacionesBloquean = "fuga"
 
 function Paso($texto) { Write-Host "`n== $texto" -ForegroundColor Cyan }
 
@@ -117,8 +120,11 @@ aws ssm put-parameter --name /jupiter/agente/llm_modelo --type String --overwrit
     --value $ModeloAgente --description "Modelo de Bedrock del agente" --query Version --output text | Out-Null
 aws ssm put-parameter --name /jupiter/agente/llm_modelo_clasificador --type String --overwrite `
     --value $ModeloClasificador --description "Modelo de Bedrock del clasificador de intencion" --query Version --output text | Out-Null
+aws ssm put-parameter --name /jupiter/agente/comprobaciones_bloquean --type String --overwrite `
+    --value $ComprobacionesBloquean --description "Reglas que sustituyen la respuesta (cifras, fuga, internos)" --query Version --output text | Out-Null
 Write-Host "llm_modelo = $ModeloAgente"
 Write-Host "llm_modelo_clasificador = $ModeloClasificador"
+Write-Host "comprobaciones_bloquean = $ComprobacionesBloquean"
 
 # --- 6. Ficheros de arranque ------------------------------------------------------------------
 Paso "6. Ficheros de arranque en S3"
