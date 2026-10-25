@@ -1,6 +1,6 @@
 # La aplicación en la EC2: los mismos servicios que el perfil "api" del docker-compose.yml de la
 # raíz, pero con las imágenes de ECR (no se construye nada en la máquina), sin base de datos propia
-# (usa RDS) y con el Agente en lugar del orquestador. Lo lanza arrancar.sh, que genera antes los
+# (usa RDS) y con Bedrock a través del rol de la máquina. Lo lanza arrancar.sh, que genera antes los
 # ficheros que se leen aquí:
 #   versiones.env       REGISTRO y VERSION_* (qué imagen de cada servicio está activa, desde SSM)
 #   secretos-bd.env     DATABASE_URL de la API (desde SSM, cifrado)
